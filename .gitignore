@@ -1,0 +1,8 @@
+# temp parts and logs
+tesla_parts*/
+*.log
+.DS_Store
+
+# large outputs
+*.mp4
+*.mov
