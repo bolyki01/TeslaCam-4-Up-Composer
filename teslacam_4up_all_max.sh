@@ -10,6 +10,89 @@ PRESET="${PRESET:-HEVC_MAX}"
 WORKDIR="${WORKDIR:-}"
 FFLOGLEVEL="${FFLOGLEVEL:-info}"
 LIMIT_SETS="${LIMIT_SETS:-0}"
+HARDWARE="${HARDWARE:-}"
+
+normalize_hw(){
+  local v="${1:-}"
+  [[ -z "$v" ]] && return
+  v="${v:l}"
+  case "$v" in
+    3|hw3) printf '3' ;;
+    4|hw4) printf '4' ;;
+  esac
+}
+
+select_hw(){
+  local ans norm
+  norm="$(normalize_hw "$HARDWARE")"
+  if [[ -n "$norm" ]]; then
+    HW_GEN="$norm"
+    HARDWARE="HW$norm"
+    return
+  fi
+  if [[ -t 0 && -t 2 ]]; then
+    while :; do
+      read -r "?Tesla hardware generation (3=HW3, 4=HW4) [3]: " ans || ans=""
+      ans="${ans:-3}"
+      norm="$(normalize_hw "$ans")"
+      if [[ -n "$norm" ]]; then
+        HW_GEN="$norm"
+        HARDWARE="HW$norm"
+        return
+      fi
+      print -u2 "Please enter 3 or 4."
+    done
+  else
+    HW_GEN=3
+    HARDWARE="HW3"
+    print -u2 "WARN: HARDWARE not set and no TTY detected; defaulting to HW3."
+  fi
+}
+
+typeset HW_GEN
+select_hw
+print -u2 "Hardware generation: $HARDWARE"
+
+typeset -a CAM_ORDER
+typeset -A CAM_LABEL CAM_FILTER CAM_COLOR
+CAM_ORDER=(front back left_repeater right_repeater)
+CAM_LABEL=([front]=vf [back]=vb [left_repeater]=vl [right_repeater]=vr)
+for C in "${CAM_ORDER[@]}"; do
+  CAM_FILTER[$C]="setsar=1"
+done
+
+typeset TILE_W TILE_H FILTER_COMPLEX
+case "$HW_GEN" in
+  3)
+    TILE_W=1280
+    TILE_H=960
+    ;;
+  4)
+    TILE_W=2896
+    TILE_H=1876
+    CAM_FILTER[left_repeater]="setsar=1,scale=${TILE_W}:${TILE_H}:flags=lanczos"
+    CAM_FILTER[right_repeater]="setsar=1,scale=${TILE_W}:${TILE_H}:flags=lanczos"
+    ;;
+  *)
+    print -u2 "Unsupported hardware generation: $HW_GEN"
+    exit 5
+    ;;
+esac
+for C in "${CAM_ORDER[@]}"; do
+  CAM_COLOR[$C]="${TILE_W}x${TILE_H}"
+done
+print -u2 "Tile size: ${TILE_W}x${TILE_H}"
+
+typeset -a FILTER_STEPS
+integer idx in_idx
+for idx in {1..4}; do
+  CAM="${CAM_ORDER[idx]}"
+  LABEL="${CAM_LABEL[$CAM]}"
+  FILTER="${CAM_FILTER[$CAM]}"
+  (( in_idx = idx - 1 ))
+  FILTER_STEPS+=("[${in_idx}:v]${FILTER}[${LABEL}]")
+done
+FILTER_COMPLEX="${(j:;:)FILTER_STEPS};[${CAM_LABEL[front]}][${CAM_LABEL[back]}][${CAM_LABEL[left_repeater]}][${CAM_LABEL[right_repeater]}]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0,setsar=1[v]"
 
 req() { command -v "$1" >/dev/null || { print -u2 "$1 required"; exit 1; }; }
 req ffmpeg; req ffprobe; req awk; req sed; req sort
@@ -94,14 +177,20 @@ while IFS='|' read -r TS FP BP LP RP; do
   DUR="$(dur_of "${ANY:-$first_real}")"
 
   INARGS=()
-  add_in(){ local p="$1"; if [[ -n "$p" && -f "$p" ]]; then INARGS+=(-r "$FPS" -i "$p"); else INARGS+=(-f lavfi -t "$DUR" -r "$FPS" -i "color=size=1280x960:rate=${FPS}:color=black"); fi; }
-  add_in "$FP"; add_in "$BP"; add_in "$LP"; add_in "$RP"
+  add_in(){
+    local p="$1" cam="$2" size
+    size="${CAM_COLOR[$cam]:-${TILE_W}x${TILE_H}}"
+    if [[ -n "$p" && -f "$p" ]]; then
+      INARGS+=(-r "$FPS" -i "$p")
+    else
+      INARGS+=(-f lavfi -t "$DUR" -r "$FPS" -i "color=size=${size}:rate=${FPS}:color=black")
+    fi
+  }
+  add_in "$FP" front; add_in "$BP" back; add_in "$LP" left_repeater; add_in "$RP" right_repeater
 
   if ffmpeg -hide_banner -loglevel "$FFLOGLEVEL" -stats -y \
       "${INARGS[@]}" \
-      -filter_complex "\
-        [0:v]setsar=1[vf];[1:v]setsar=1[vb];[2:v]setsar=1[vl];[3:v]setsar=1[vr];\
-        [vf][vb][vl][vr]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0,setsar=1[v]" \
+      -filter_complex "$FILTER_COMPLEX" \
       -map "[v]" -an \
       -r "$FPS" "${VENC[@]}" "${MOV[@]}" "$PART"; then
     printf "file '%s'\n" "$PART" >> "$PLIST"

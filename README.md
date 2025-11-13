@@ -4,7 +4,7 @@ Compose Tesla Sentry/Dashcam minutes into a single 2×2 “CCTV” stream per mi
 
 ## Features
 - 2×2 grid: **Front | Back / Left | Right**
-- Native tile **1280×960** ⇒ frame **2560×1920**, fps preserved (~36.027), SAR 1:1
+- Native tile **1280×960** (HW3) or **2896×1876** (HW4) ⇒ frame doubles accordingly, fps preserved (~36.027), SAR 1:1
 - Hardware HEVC on Apple Silicon; optional DNxHR, ProRes, or x265 lossless
 - Resume‑safe, continues after errors, keeps temp parts for inspection
 - No upscaling; optional 4K pad for delivery
@@ -48,6 +48,12 @@ env PRESET=HEVC_MAX VT_Q=16 GOP=36 FFLOGLEVEL=info LIMIT_SETS=0 \
   ./teslacam_4up_all_max.sh ~/Downloads/TeslaCam cctv_4up_all_hevc_max.mp4
 ```
 
+## Hardware generations
+- The script now asks whether the footage comes from **HW3** or **HW4** Teslas.
+- You can skip the prompt by exporting `HARDWARE=HW3` or `HARDWARE=HW4` before running the script.
+- HW3 minute files are already 1280×960 per camera.
+- HW4 minutes keep the native 2896×1876 fronts/backs, while the 1448×938 repeaters are doubled with high-quality scaling so that all four tiles align cleanly in the 2×2 grid.
+
 ## Presets
 | PRESET         | Codec            | Bit depth | Use case                         |
 |----------------|------------------|-----------|----------------------------------|
@@ -68,6 +74,7 @@ GOP=36              # HEVC GOP length
 FFLOGLEVEL=info     # info|warning|error|debug
 LIMIT_SETS=0        # 0=all minutes; N=first N only
 WORKDIR=/path/parts # keep parts in a fixed folder (resume across runs)
+HARDWARE=HW3        # HW3 (1280×960) or HW4 (2896×1876 + scaled repeaters)
 ```
 
 ## Verify
