@@ -11,6 +11,7 @@ WORKDIR="${WORKDIR:-}"
 FFLOGLEVEL="${FFLOGLEVEL:-info}"
 LIMIT_SETS="${LIMIT_SETS:-0}"
 HARDWARE="${HARDWARE:-}"
+typeset HW_GEN
 
 normalize_hw(){
   local v="${1:-}"
@@ -20,6 +21,19 @@ normalize_hw(){
     3|hw3) printf '3' ;;
     4|hw4) printf '4' ;;
   esac
+}
+
+detect_hw_from_clip(){
+  local clip="$1" dims w h
+  [[ -z "$clip" || ! -f "$clip" ]] && return
+  dims="$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$clip" 2>/dev/null || true)"
+  [[ "$dims" == *,* ]] || return
+  w="${dims%%,*}"; h="${dims#*,}"
+  if [[ ("$w" == "1280" && "$h" == "960") || ("$w" == "960" && "$h" == "1280") ]]; then
+    print -r -- "HW3|${w}x${h}"
+  elif [[ ("$w" == "2896" && "$h" == "1876") || ("$w" == "1876" && "$h" == "2896") || ("$w" == "1448" && "$h" == "938") || ("$w" == "938" && "$h" == "1448") ]]; then
+    print -r -- "HW4|${w}x${h}"
+  fi
 }
 
 select_hw(){
@@ -49,7 +63,49 @@ select_hw(){
   fi
 }
 
-typeset HW_GEN
+req() { command -v "$1" >/dev/null || { print -u2 "$1 required"; exit 1; }; }
+req ffmpeg; req ffprobe; req awk; req sed; req sort
+
+print -u2 "Scanning: $INDIR"
+IDX="$(mktemp -t tesla_idx)"
+JOBS="$(mktemp -t tesla_jobs)"
+cleanup_tmp(){ rm -f "$IDX" "$JOBS"; }
+trap cleanup_tmp EXIT
+
+: > "$IDX"
+LC_ALL=C find "$INDIR" -type f \( -iname '*.mp4' -o -iname '*.mov' \) -print \
+| LC_ALL=C sort \
+| while IFS= read -r f; do
+  bn="${f##*/}"; core="${bn%.*}"; cam="${core##*-}"; ts="${core%-*}"
+  [[ "$cam" == "rear" ]] && cam="back"
+  case "$cam" in
+    front|back|left_repeater|right_repeater) printf '%s|%s|%s\n' "$ts" "$cam" "$f" >> "$IDX" ;;
+  esac
+done
+
+awk -F'|' '{M[$1]=1; P[$1 "," $2]=$3}
+  END{for(ts in M) print ts "|" P[ts ",front"] "|" P[ts ",back"] "|" P[ts ",left_repeater"] "|" P[ts ",right_repeater"]}' \
+  "$IDX" | LC_ALL=C sort > "$JOBS"
+
+TOTAL=$(wc -l < "$JOBS" | tr -d ' ')
+(( TOTAL > 0 )) || { print -u2 "No timestamps."; exit 2; }
+(( LIMIT_SETS > 0 )) && { head -n "$LIMIT_SETS" "$JOBS" > "$JOBS.tmp" && mv "$JOBS.tmp" "$JOBS"; TOTAL=$(wc -l < "$JOBS" | tr -d ' '); }
+print -u2 "4-cam sets: $TOTAL"
+
+first_real="$(awk -F'|' '{for(i=2;i<=5;i++) if($i!=""){print $i; exit}}' "$JOBS")"
+detected_hw="$(detect_hw_from_clip "$first_real")"
+if [[ -n "$detected_hw" ]]; then
+  DETECTED_HW="${detected_hw%%|*}"
+  DETECTED_DIMS="${detected_hw#*|}"
+  if [[ -z "$HARDWARE" ]]; then
+    HARDWARE="$DETECTED_HW"
+    print -u2 "Auto-detected hardware: $HARDWARE (${DETECTED_DIMS})"
+  else
+    print -u2 "HARDWARE preset to $HARDWARE; auto-detected ${DETECTED_HW} (${DETECTED_DIMS})"
+  fi
+else
+  print -u2 "Hardware auto-detect: inconclusive; falling back to prompt/default."
+fi
 select_hw
 print -u2 "Hardware generation: $HARDWARE"
 
@@ -94,36 +150,6 @@ for idx in {1..4}; do
 done
 FILTER_COMPLEX="${(j:;:)FILTER_STEPS};[${CAM_LABEL[front]}][${CAM_LABEL[back]}][${CAM_LABEL[left_repeater]}][${CAM_LABEL[right_repeater]}]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0,setsar=1[v]"
 
-req() { command -v "$1" >/dev/null || { print -u2 "$1 required"; exit 1; }; }
-req ffmpeg; req ffprobe; req awk; req sed; req sort
-
-print -u2 "Scanning: $INDIR"
-IDX="$(mktemp -t tesla_idx)"
-JOBS="$(mktemp -t tesla_jobs)"
-cleanup_tmp(){ rm -f "$IDX" "$JOBS"; }
-trap cleanup_tmp EXIT
-
-: > "$IDX"
-LC_ALL=C find "$INDIR" -type f \( -iname '*.mp4' -o -iname '*.mov' \) -print \
-| LC_ALL=C sort \
-| while IFS= read -r f; do
-  bn="${f##*/}"; core="${bn%.*}"; cam="${core##*-}"; ts="${core%-*}"
-  [[ "$cam" == "rear" ]] && cam="back"
-  case "$cam" in
-    front|back|left_repeater|right_repeater) printf '%s|%s|%s\n' "$ts" "$cam" "$f" >> "$IDX" ;;
-  esac
-done
-
-awk -F'|' '{M[$1]=1; P[$1 "," $2]=$3}
-  END{for(ts in M) print ts "|" P[ts ",front"] "|" P[ts ",back"] "|" P[ts ",left_repeater"] "|" P[ts ",right_repeater"]}' \
-  "$IDX" | LC_ALL=C sort > "$JOBS"
-
-TOTAL=$(wc -l < "$JOBS" | tr -d ' ')
-(( TOTAL > 0 )) || { print -u2 "No timestamps."; exit 2; }
-(( LIMIT_SETS > 0 )) && { head -n "$LIMIT_SETS" "$JOBS" > "$JOBS.tmp" && mv "$JOBS.tmp" "$JOBS"; TOTAL=$(wc -l < "$JOBS" | tr -d ' '); }
-print -u2 "4-cam sets: $TOTAL"
-
-first_real="$(awk -F'|' '{for(i=2;i<=5;i++) if($i!=""){print $i; exit}}' "$JOBS")"
 FPS_R="$(ffprobe -v error -select_streams v:0 -show_entries stream=avg_frame_rate -of csv=p=0 "$first_real" || true)"
 FPS="$(awk -v r="$FPS_R" 'BEGIN{n=split(r,a,"/"); if(n==2&&a[2]>0){printf("%.3f",a[1]/a[2]);} else if(r+0>0){printf("%.3f",r);} else{printf("36.027");}}')"
 print -u2 "Using FPS=$FPS"

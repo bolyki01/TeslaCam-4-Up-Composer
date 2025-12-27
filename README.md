@@ -49,8 +49,9 @@ env PRESET=HEVC_MAX VT_Q=16 GOP=36 FFLOGLEVEL=info LIMIT_SETS=0 \
 ```
 
 ## Hardware generations
-- The script now asks whether the footage comes from **HW3** or **HW4** Teslas.
-- You can skip the prompt by exporting `HARDWARE=HW3` or `HARDWARE=HW4` before running the script.
+- The script auto-detects hardware from the first real clip it finds (resolutions like **1280×960** → HW3, **2896×1876** or **1448×938** → HW4).
+- If detection is ambiguous, it will prompt whether the footage comes from **HW3** or **HW4** Teslas.
+- You can override detection/prompting by exporting `HARDWARE=HW3` or `HARDWARE=HW4` before running the script.
 - HW3 minute files are already 1280×960 per camera.
 - HW4 minutes keep the native 2896×1876 fronts/backs, while the 1448×938 repeaters are doubled with high-quality scaling so that all four tiles align cleanly in the 2×2 grid.
 
@@ -74,7 +75,7 @@ GOP=36              # HEVC GOP length
 FFLOGLEVEL=info     # info|warning|error|debug
 LIMIT_SETS=0        # 0=all minutes; N=first N only
 WORKDIR=/path/parts # keep parts in a fixed folder (resume across runs)
-HARDWARE=HW3        # HW3 (1280×960) or HW4 (2896×1876 + scaled repeaters)
+HARDWARE=HW3        # Force HW3 (1280×960) or HW4 (2896×1876 + scaled repeaters); overrides auto-detect/prompt
 ```
 
 ## Verify
