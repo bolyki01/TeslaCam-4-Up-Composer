@@ -39,14 +39,20 @@ chmod +x teslacam_4up_all_max.sh
 ```zsh
 # Put TeslaCam minutes here:
 mkdir -p ~/Downloads/TeslaCam && cd ~/Downloads/TeslaCam
-# …move all *.mp4 here …
+# …move all *.mp4 or *.mov here …
 
 # Run max practical quality (hardware HEVC 8‑bit):
 cd ~/code/teslacam-4up
 env PRESET=HEVC_MAX VT_Q=16 GOP=36 FFLOGLEVEL=info LIMIT_SETS=0 \
   caffeinate -dimsu \
   ./teslacam_4up_all_max.sh ~/Downloads/TeslaCam cctv_4up_all_hevc_max.mp4
+
+# Need a reminder of args and env vars:
+./teslacam_4up_all_max.sh --help
 ```
+
+The script stops early with clear errors if the input directory is missing or
+has no video minutes, or if the output path cannot be written.
 
 ## Hardware generations
 - The script now asks whether the footage comes from **HW3** or **HW4** Teslas.

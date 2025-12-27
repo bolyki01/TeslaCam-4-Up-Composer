@@ -3,14 +3,92 @@ emulate -L zsh
 set -u
 setopt PIPE_FAIL NONOMATCH
 
-# Usage: PRESET={HEVC_MAX|X265_LOSSLESS|DNXHR_HQ|PRORES_HQ} WORKDIR=<dir> ./teslacam_4up_all_max.sh <INPUT_DIR> [OUTPUT_FILE]
-INDIR="${1:-.}"
+usage(){
+  cat <<'USAGE' >&2
+Usage:
+  PRESET={HEVC_MAX|X265_LOSSLESS|DNXHR_HQ|PRORES_HQ} WORKDIR=<dir> \
+    ./teslacam_4up_all_max.sh INPUT_DIR [OUTPUT_FILE]
+
+Arguments:
+  INPUT_DIR     Directory containing TeslaCam minute files (.mp4/.mov).
+  OUTPUT_FILE   Optional output name (default: cctv_4up_all.mp4). The final
+                extension is chosen by PRESET.
+
+Options:
+  -h, --help    Show this help and exit.
+
+Environment:
+  PRESET        Output codec preset (default: HEVC_MAX)
+  HARDWARE      HW3 or HW4; if unset the script prompts (defaults to HW3 when
+                no TTY is available)
+  VT_Q          HEVC_MAX quality (lower is higher quality, default: 16)
+  GOP           HEVC_MAX GOP length (default: 36)
+  FFLOGLEVEL    ffmpeg log level (default: info)
+  LIMIT_SETS    Process only the first N 4-cam sets (default: 0 = all)
+  WORKDIR       Directory to reuse intermediate parts (default: temporary)
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      print -u2 "Unknown option: $1"
+      usage
+      exit 64
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+[[ $# -ge 1 ]] || { print -u2 "ERROR: INPUT_DIR is required."; usage; exit 64; }
+[[ $# -le 2 ]] || { print -u2 "ERROR: Too many arguments."; usage; exit 64; }
+
+INDIR="${1:-}"
 OUT="${2:-cctv_4up_all.mp4}"
 PRESET="${PRESET:-HEVC_MAX}"
 WORKDIR="${WORKDIR:-}"
 FFLOGLEVEL="${FFLOGLEVEL:-info}"
 LIMIT_SETS="${LIMIT_SETS:-0}"
 HARDWARE="${HARDWARE:-}"
+
+validate_input_dir(){
+  local dir="$1"
+  if [[ ! -d "$dir" ]]; then
+    print -u2 "ERROR: INPUT_DIR must be an existing directory: $dir"
+    exit 1
+  fi
+  if ! find "$dir" -type f \( -iname '*.mp4' -o -iname '*.mov' \) -print -quit | grep -q .; then
+    print -u2 "ERROR: INPUT_DIR contains no .mp4 or .mov files: $dir"
+    exit 2
+  fi
+}
+
+validate_output_path(){
+  local path="$1" dir
+  dir="$(dirname "$path")"
+  if [[ ! -d "$dir" ]]; then
+    if ! mkdir -p "$dir"; then
+      print -u2 "ERROR: Failed to create output directory: $dir"
+      exit 3
+    fi
+  fi
+  if [[ ! -w "$dir" ]]; then
+    print -u2 "ERROR: Output directory is not writable: $dir"
+    exit 3
+  fi
+}
+
+validate_input_dir "$INDIR"
 
 normalize_hw(){
   local v="${1:-}"
@@ -148,6 +226,7 @@ case "$PRESET" in
     print -u2 "Unknown PRESET: $PRESET"; exit 3 ;;
 esac
 OUTDIR="$(dirname "$OUT")"; OUTBASE="$(basename "$OUT")"; OUT="${OUTDIR%/}/${OUTBASE%.*}.${EXT}"
+validate_output_path "$OUT"
 
 if [[ -z "$WORKDIR" ]]; then
   PARTDIR="$(mktemp -d -t tesla_parts)"
