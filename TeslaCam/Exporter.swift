@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import AppKit
+import Darwin
 
 final class ExportController: ObservableObject {
   @Published var isExporting: Bool = false
@@ -12,6 +13,9 @@ final class ExportController: ObservableObject {
 
   private let fm = FileManager.default
   private var progressTimer: DispatchSourceTimer?
+  private let processLock = NSLock()
+  private var runningProcess: Process?
+  private var runningReadHandle: FileHandle?
   private lazy var logFileURL: URL = {
     let base = fm.urls(for: .cachesDirectory, in: .userDomainMask).first
       ?? URL(fileURLWithPath: NSTemporaryDirectory())
@@ -88,6 +92,41 @@ final class ExportController: ObservableObject {
     }
   }
 
+  func cancelExport() {
+    processLock.lock()
+    let process = runningProcess
+    let handle = runningReadHandle
+    processLock.unlock()
+
+    handle?.readabilityHandler = nil
+
+    guard let process else {
+      DispatchQueue.main.async {
+        self.stopProgress()
+        self.isExporting = false
+      }
+      return
+    }
+
+    appendLog("\nCancel requested. Stopping exporter...\n")
+
+    if process.isRunning {
+      process.terminate()
+      killChildProcesses(of: process.processIdentifier, signal: "-TERM")
+
+      DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.7) { [weak self, weak process] in
+        guard let self, let process, process.isRunning else { return }
+        kill(process.processIdentifier, SIGKILL)
+        self.killChildProcesses(of: process.processIdentifier, signal: "-KILL")
+      }
+    }
+
+    DispatchQueue.main.async {
+      self.stopProgress()
+      self.isExporting = false
+    }
+  }
+
   private func populateInputFolder(sets: [ClipSet], inputDir: URL) throws {
     for set in sets {
       for (camera, src) in set.files {
@@ -116,9 +155,12 @@ final class ExportController: ObservableObject {
     process.qualityOfService = .userInitiated
 
     var env = ProcessInfo.processInfo.environment
-    env["PRESET"] = "HEVC_MAX"
-    env["VT_Q"] = "16"
+    env["PRESET"] = "HEVC_CPU_MAX"
+    env["X265_PRESET"] = "fast"
+    env["X265_CRF"] = "6"
+    env["VT_Q"] = "5"
     env["GOP"] = "36"
+    env["NO_UPSCALE"] = "1"
     env["FFLOGLEVEL"] = "info"
     env["WORKDIR"] = workDir.path
     if let paths = ffmpegPaths {
@@ -159,7 +201,15 @@ final class ExportController: ObservableObject {
 
     do {
       try process.run()
+      processLock.lock()
+      runningProcess = process
+      runningReadHandle = handle
+      processLock.unlock()
     } catch {
+      processLock.lock()
+      runningProcess = nil
+      runningReadHandle = nil
+      processLock.unlock()
       let detail = (error as NSError)
       DispatchQueue.main.async {
         self.appendLog("Process launch failed: \(detail.domain) \(detail.code) \(detail.localizedDescription)\n")
@@ -170,6 +220,10 @@ final class ExportController: ObservableObject {
 
     DispatchQueue.main.async {
       handle.readabilityHandler = nil
+      self.processLock.lock()
+      self.runningProcess = nil
+      self.runningReadHandle = nil
+      self.processLock.unlock()
       if process.terminationStatus == 0 {
         self.appendLog("\nDone: \(outputURL.path)\n")
         self.isExporting = false
@@ -277,5 +331,19 @@ final class ExportController: ObservableObject {
     progressLabel = ""
     progress = 0
     isProgressIndeterminate = true
+  }
+
+  private func killChildProcesses(of pid: Int32, signal: String) {
+    let killer = Process()
+    killer.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+    killer.arguments = [signal, "-P", "\(pid)"]
+    killer.standardOutput = nil
+    killer.standardError = nil
+    do {
+      try killer.run()
+      killer.waitUntilExit()
+    } catch {
+      // best effort
+    }
   }
 }

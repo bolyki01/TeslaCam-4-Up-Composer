@@ -79,6 +79,11 @@ final class MultiCamPlaybackController: ObservableObject {
     for player in players.values { player.pause() }
   }
 
+  func stop() {
+    pause()
+    cleanup()
+  }
+
   func seek(to seconds: Double, exact: Bool = true) {
     let time = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
     let tolerance = exact ? CMTime.zero : CMTime(seconds: 0.12, preferredTimescale: 600)

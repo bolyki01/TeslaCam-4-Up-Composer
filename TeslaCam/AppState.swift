@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 final class AppState: ObservableObject {
   @Published var rootURL: URL?
+  @Published var sourceURLs: [URL] = []
   @Published var clipSets: [ClipSet] = []
   @Published var isIndexing: Bool = false
   @Published var indexStatus: String = ""
@@ -46,18 +47,25 @@ final class AppState: ObservableObject {
   func chooseFolder() {
     NSApp.activate(ignoringOtherApps: true)
     let panel = NSOpenPanel()
-    panel.title = "Select TeslaCam Folder"
+    panel.title = "Select TeslaCam Files/Folders"
     panel.canChooseDirectories = true
-    panel.canChooseFiles = false
-    panel.allowsMultipleSelection = false
+    panel.canChooseFiles = true
+    panel.allowsMultipleSelection = true
     panel.prompt = "Choose"
 
-    if panel.runModal() == .OK, let url = panel.url {
-      indexFolder(url)
+    if panel.runModal() == .OK {
+      indexSources(panel.urls)
     }
   }
 
   func indexFolder(_ url: URL) {
+    indexSources([url])
+  }
+
+  func indexSources(_ urls: [URL]) {
+    let normalizedSources = normalizeSources(urls)
+    guard !normalizedSources.isEmpty else { return }
+
     isIndexing = true
     indexStatus = "Scanning..."
     clipSets = []
@@ -65,13 +73,14 @@ final class AppState: ObservableObject {
 
     DispatchQueue.global(qos: .userInitiated).async {
       do {
-        let index = try ClipIndexer.index(rootURL: url) { scanned in
+        let index = try ClipIndexer.index(inputURLs: normalizedSources) { scanned in
           DispatchQueue.main.async {
             self.indexStatus = "Indexed \(scanned) clips..."
           }
         }
         DispatchQueue.main.async {
-          self.rootURL = url
+          self.rootURL = normalizedSources.first
+          self.sourceURLs = normalizedSources
           self.clipSets = index.sets
           self.minDate = index.minDate
           self.maxDate = index.maxDate
@@ -84,6 +93,7 @@ final class AppState: ObservableObject {
             self.playback.load(set: first)
             self.currentSeconds = 0
             self.loadTelemetry(for: first)
+            self.updateOverlayAndTelemetry(index: 0, localSeconds: 0)
           }
           self.isIndexing = false
           self.indexStatus = "Indexed \(index.sets.count) minutes"
@@ -95,7 +105,7 @@ final class AppState: ObservableObject {
       } catch {
         DispatchQueue.main.async {
           self.isIndexing = false
-          self.errorMessage = "No clips found in this folder."
+          self.errorMessage = "No clips found in the selected files/folders."
           self.showError = true
         }
       }
@@ -116,6 +126,7 @@ final class AppState: ObservableObject {
     playback.load(set: clipSets[0])
     currentSeconds = 0
     loadTelemetry(for: clipSets[0])
+    updateOverlayAndTelemetry(index: 0, localSeconds: 0)
   }
 
   func normalizeRange() {
@@ -140,13 +151,13 @@ final class AppState: ObservableObject {
     let panel = NSSavePanel()
     panel.title = "Save Export"
     panel.allowedContentTypes = [.mpeg4Movie]
-    panel.nameFieldStringValue = "teslacam_export_hevc_max.mp4"
+    panel.nameFieldStringValue = "teslacam_export_hevc_cpu.mp4"
     panel.canCreateDirectories = true
 
     if panel.runModal() == .OK, let url = panel.url {
       var outputURL = url
       if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-        outputURL = url.appendingPathComponent("teslacam_export_hevc_max.mp4")
+        outputURL = url.appendingPathComponent("teslacam_export_hevc_cpu.mp4")
       }
       let useSix = camerasDetected.count >= 6
       exporter.export(sets: sets, outputURL: outputURL, useSixCam: useSix)
@@ -181,16 +192,9 @@ final class AppState: ObservableObject {
   private func updateCurrentSeconds(localSeconds: Double) {
     guard !isUserSeeking else { return }
     let start = startOffsets[safe: currentIndex] ?? 0
-    currentSeconds = start + max(0, localSeconds)
-    let base = clipSets[safe: currentIndex]?.date ?? Date()
-    let time = base.addingTimeInterval(max(0, localSeconds))
-    overlayText = overlayFormatter.string(from: time)
-    if let timeline = telemetryTimeline {
-      let frame = timeline.closest(to: localSeconds * 1000.0)
-      telemetryText = formatTelemetry(frame?.sei)
-    } else {
-      telemetryText = ""
-    }
+    let local = max(0, localSeconds)
+    currentSeconds = start + local
+    updateOverlayAndTelemetry(index: currentIndex, localSeconds: local)
   }
 
   private func rebuildTimeline() {
@@ -226,6 +230,7 @@ final class AppState: ObservableObject {
       playback.seek(to: local, exact: exact)
     }
     currentSeconds = clamped
+    updateOverlayAndTelemetry(index: idx, localSeconds: local)
   }
 
   private func loadTelemetry(for set: ClipSet) {
@@ -239,7 +244,21 @@ final class AppState: ObservableObject {
       DispatchQueue.main.async {
         guard self.telemetryURL == fileURL else { return }
         self.telemetryTimeline = timeline
+        let local = self.currentSeconds - (self.startOffsets[safe: self.currentIndex] ?? 0)
+        self.updateOverlayAndTelemetry(index: self.currentIndex, localSeconds: local)
       }
+    }
+  }
+
+  private func updateOverlayAndTelemetry(index: Int, localSeconds: Double) {
+    let safeLocal = max(0, localSeconds)
+    let base = clipSets[safe: index]?.date ?? Date()
+    overlayText = overlayFormatter.string(from: base.addingTimeInterval(safeLocal))
+    if let timeline = telemetryTimeline {
+      let frame = timeline.closest(to: safeLocal * 1000.0)
+      telemetryText = formatTelemetry(frame?.sei)
+    } else {
+      telemetryText = ""
     }
   }
 
@@ -267,5 +286,39 @@ final class AppState: ObservableObject {
   private func orderCameras(_ cams: [Camera]) -> [Camera] {
     let priority: [Camera] = [.front, .back, .left_repeater, .right_repeater, .left_pillar, .right_pillar]
     return priority.filter { cams.contains($0) }
+  }
+
+  func ingestDroppedURLs(_ urls: [URL]) {
+    indexSources(urls)
+  }
+
+  var sourceSummary: String {
+    guard !sourceURLs.isEmpty else { return "" }
+    if sourceURLs.count == 1 {
+      return sourceURLs[0].path
+    }
+    return "\(sourceURLs.count) inputs • \(sourceURLs[0].lastPathComponent) + \(sourceURLs.count - 1) more"
+  }
+
+  private func normalizeSources(_ urls: [URL]) -> [URL] {
+    let fm = FileManager.default
+    var seen = Set<String>()
+    var out: [URL] = []
+    out.reserveCapacity(urls.count)
+    for raw in urls {
+      let u = raw.standardizedFileURL
+      guard fm.fileExists(atPath: u.path) else { continue }
+      let key = u.path
+      if seen.contains(key) { continue }
+      seen.insert(key)
+      out.append(u)
+    }
+    return out
+  }
+
+  func shutdownForTermination() {
+    seekWorkItem?.cancel()
+    playback.stop()
+    exporter.cancelExport()
   }
 }

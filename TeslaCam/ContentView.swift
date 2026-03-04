@@ -1,9 +1,11 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
   @EnvironmentObject var state: AppState
   @State private var showRangeSheet = false
   @State private var showLogSheet = false
+  @State private var isDropTarget = false
 
   var body: some View {
     ZStack {
@@ -37,8 +39,9 @@ struct ContentView: View {
         .environmentObject(state)
     }
     .sheet(isPresented: $showLogSheet) {
-      LogSheet(log: state.exporter.log)
+      LogSheet(exporter: state.exporter)
     }
+    .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTarget, perform: handleFileDrop(providers:))
   }
 
   private var background: some View {
@@ -68,7 +71,7 @@ struct ContentView: View {
             .font(.system(size: 11))
             .foregroundColor(.white.opacity(0.7))
         } else {
-          Text("Select a TeslaCam folder to begin")
+          Text("Select TeslaCam files/folders to begin")
             .font(.system(size: 11))
             .foregroundColor(.white.opacity(0.7))
         }
@@ -76,8 +79,8 @@ struct ContentView: View {
 
       Spacer(minLength: 12)
 
-      if let path = state.rootURL?.path {
-        Text(path)
+      if !state.sourceSummary.isEmpty {
+        Text(state.sourceSummary)
           .font(.system(size: 11, design: .monospaced))
           .foregroundColor(.white.opacity(0.75))
           .lineLimit(1)
@@ -87,14 +90,16 @@ struct ContentView: View {
 
       Spacer(minLength: 12)
 
-      Button("Choose Folder") { state.chooseFolder() }
+      Button("Choose Sources") { state.chooseFolder() }
         .buttonStyle(PrimaryButtonStyle())
 
       Button("Rescan") {
-        if let url = state.rootURL { state.indexFolder(url) }
+        if !state.sourceURLs.isEmpty {
+          state.indexSources(state.sourceURLs)
+        }
       }
       .buttonStyle(SecondaryButtonStyle())
-      .disabled(state.rootURL == nil)
+      .disabled(state.sourceURLs.isEmpty)
     }
     .padding(12)
     .background(Color.black.opacity(0.35))
@@ -146,7 +151,7 @@ struct ContentView: View {
           VStack(spacing: 10) {
             Text("No clips loaded")
               .font(.system(size: 18, weight: .semibold))
-            Text("Choose a TeslaCam folder to start playback")
+            Text("Choose or drop TeslaCam files/folders to start playback")
               .font(.system(size: 12))
               .foregroundColor(.white.opacity(0.7))
           }
@@ -229,6 +234,36 @@ struct ContentView: View {
     .padding(.bottom, 12)
     .padding(.horizontal, 24)
   }
+
+  private func handleFileDrop(providers: [NSItemProvider]) -> Bool {
+    let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+    guard !fileProviders.isEmpty else { return false }
+
+    let group = DispatchGroup()
+    let lock = NSLock()
+    var urls: [URL] = []
+
+    for provider in fileProviders {
+      group.enter()
+      provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
+        defer { group.leave() }
+        guard let data,
+              let raw = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              let url = URL(string: raw),
+              url.isFileURL else { return }
+        lock.lock()
+        urls.append(url)
+        lock.unlock()
+      }
+    }
+
+    group.notify(queue: .main) {
+      guard !urls.isEmpty else { return }
+      state.ingestDroppedURLs(urls)
+    }
+    return true
+  }
 }
 
 private struct RangeSheet: View {
@@ -269,19 +304,46 @@ private struct RangeSheet: View {
 }
 
 private struct LogSheet: View {
-  let log: String
+  @ObservedObject var exporter: ExportController
+  @State private var followTail = true
+  private let bottomAnchorID = "log-bottom-anchor"
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text("Export Log")
-        .font(.system(size: 20, weight: .bold))
-      ScrollView {
-        Text(log.isEmpty ? "No export yet." : log)
-          .font(.system(size: 11, design: .monospaced))
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .textSelection(.enabled)
+      HStack {
+        Text("Export Log")
+          .font(.system(size: 20, weight: .bold))
+        Spacer()
+        Toggle("Follow Tail", isOn: $followTail)
+          .toggleStyle(.switch)
+          .font(.system(size: 12, weight: .semibold))
       }
-      .frame(minHeight: 280)
+
+      ScrollViewReader { proxy in
+        ScrollView {
+          Text(exporter.log.isEmpty ? "No export yet." : exporter.log)
+            .font(.system(size: 11, design: .monospaced))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+          Color.clear
+            .frame(height: 1)
+            .id(bottomAnchorID)
+        }
+        .frame(minHeight: 280)
+        .onAppear {
+          if followTail {
+            proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+          }
+        }
+        .onChange(of: exporter.log) { _, _ in
+          guard followTail else { return }
+          // Keep the latest output visible during long exports.
+          withAnimation(.linear(duration: exporter.isExporting ? 0.08 : 0.02)) {
+            proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+          }
+        }
+      }
+
       Spacer()
     }
     .padding(20)

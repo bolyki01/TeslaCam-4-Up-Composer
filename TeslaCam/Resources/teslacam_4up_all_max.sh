@@ -7,7 +7,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PA
 usage(){
   cat <<'USAGE' >&2
 Usage:
-  PRESET={HEVC_MAX|X265_LOSSLESS|DNXHR_HQ|PRORES_HQ} WORKDIR=<dir> \
+  PRESET={HEVC_CPU_MAX|HEVC_MAX|X265_LOSSLESS|DNXHR_HQ|PRORES_HQ} WORKDIR=<dir> \
     ./teslacam_4up_all_max.sh INPUT_DIR [OUTPUT_FILE]
 
 Arguments:
@@ -19,9 +19,12 @@ Options:
   -h, --help    Show this help and exit.
 
 Environment:
-  PRESET        Output codec preset (default: HEVC_MAX)
+  PRESET        Output codec preset (default: HEVC_CPU_MAX)
+  X265_PRESET   HEVC_CPU_MAX x265 preset (default: fast)
+  X265_CRF      HEVC_CPU_MAX CRF quality (default: 6)
   VT_Q          HEVC_MAX quality (lower is higher quality, default: 16)
   GOP           HEVC_MAX GOP length (default: 36)
+  NO_UPSCALE    Keep per-camera pixels 1:1 and pad to tile (default: 1)
   FFLOGLEVEL    ffmpeg log level (default: info)
   LIMIT_SETS    Process only the first N 4-cam sets (default: 0 = all)
   WORKDIR       Directory to reuse intermediate parts (default: temporary)
@@ -54,8 +57,9 @@ done
 
 INDIR="${1:-}"
 OUT="${2:-cctv_4up_all.mp4}"
-PRESET="${PRESET:-HEVC_MAX}"
+PRESET="${PRESET:-HEVC_CPU_MAX}"
 WORKDIR="${WORKDIR:-}"
+NO_UPSCALE="${NO_UPSCALE:-1}"
 FFLOGLEVEL="${FFLOGLEVEL:-info}"
 LIMIT_SETS="${LIMIT_SETS:-0}"
 
@@ -106,6 +110,8 @@ req() { command -v "$1" >/dev/null || { print -u2 "$1 required"; exit 1; }; }
 req_bin ffmpeg "$FFMPEG_BIN"
 req_bin ffprobe "$FFPROBE_BIN"
 req awk; req sed; req sort
+[[ "$FFMPEG_BIN" == "ffmpeg" ]] && FFMPEG_BIN="$(command -v ffmpeg)"
+[[ "$FFPROBE_BIN" == "ffprobe" ]] && FFPROBE_BIN="$(command -v ffprobe)"
 
 ffmpeg() { "$FFMPEG_BIN" "$@"; }
 ffprobe() { "$FFPROBE_BIN" "$@"; }
@@ -120,11 +126,15 @@ trap cleanup_tmp EXIT
 LC_ALL=C find "$INDIR" -type f \( -iname '*.mp4' -o -iname '*.mov' \) -print \
 | LC_ALL=C sort \
 | while IFS= read -r f; do
-  bn="${f##*/}"; core="${bn%.*}"; cam="${core##*-}"; ts="${core%-*}"
-  [[ "$cam" == "rear" ]] && cam="back"
-  case "$cam" in
-    front|back|left_repeater|right_repeater) printf '%s|%s|%s\n' "$ts" "$cam" "$f" >> "$IDX" ;;
-  esac
+  bn="${f##*/}"; core="${bn%.*}"
+  if [[ "$core" =~ '^([0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2})-(front|back|rear|left[_-]repeater|right[_-]repeater|left[_-]pillar|right[_-]pillar)$' ]]; then
+    ts="${match[1]}"; cam="${match[2]}"
+    cam="${cam//-/_}"
+    [[ "$cam" == "rear" ]] && cam="back"
+    case "$cam" in
+      front|back|left_repeater|right_repeater) printf '%s|%s|%s\n' "$ts" "$cam" "$f" >> "$IDX" ;;
+    esac
+  fi
 done
 
 awk -F'|' '{M[$1]=1; P[$1 "," $2]=$3}
@@ -135,6 +145,8 @@ TOTAL=$(wc -l < "$JOBS" | tr -d ' ')
 (( TOTAL > 0 )) || { print -u2 "No timestamps."; exit 2; }
 (( LIMIT_SETS > 0 )) && { head -n "$LIMIT_SETS" "$JOBS" > "$JOBS.tmp" && mv "$JOBS.tmp" "$JOBS"; TOTAL=$(wc -l < "$JOBS" | tr -d ' '); }
 print -u2 "4-cam sets: $TOTAL"
+MISSING_RIGHT=$(awk -F'|' '$5==""{c++} END{print c+0}' "$JOBS")
+(( MISSING_RIGHT > 0 )) && print -u2 "WARN: right_repeater missing for $MISSING_RIGHT timestamps; black placeholder will be used."
 
 first_real="$(awk -F'|' '{for(i=2;i<=5;i++) if($i!=""){print $i; exit}}' "$JOBS")"
 
@@ -175,7 +187,11 @@ typeset TILE_W TILE_H FILTER_COMPLEX
 
 detect_tile
 for C in "${CAM_ORDER[@]}"; do
-  CAM_FILTER[$C]="setsar=1,scale=${TILE_W}:${TILE_H}:flags=lanczos"
+  if [[ "$NO_UPSCALE" == "1" ]]; then
+    CAM_FILTER[$C]="setsar=1,scale=${TILE_W}:${TILE_H}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${TILE_W}:${TILE_H}:(ow-iw)/2:(oh-ih)/2:black"
+  else
+    CAM_FILTER[$C]="setsar=1,scale=${TILE_W}:${TILE_H}:flags=lanczos"
+  fi
   CAM_COLOR[$C]="${TILE_W}x${TILE_H}"
 done
 print -u2 "Tile size: ${TILE_W}x${TILE_H}"
@@ -198,12 +214,17 @@ print -u2 "Using FPS=$FPS"
 typeset -a VENC MOV
 typeset EXT
 case "$PRESET" in
+  HEVC_CPU_MAX)
+    X265_PRESET="${X265_PRESET:-fast}"
+    X265_CRF="${X265_CRF:-6}"
+    VENC=(-c:v libx265 -preset "$X265_PRESET" -crf "$X265_CRF" -tag:v hvc1 -pix_fmt yuv420p -threads 0)
+    MOV=(-movflags +faststart); EXT="mp4" ;;
   HEVC_MAX)
     VT_Q="${VT_Q:-16}"; GOP="${GOP:-36}"
     VENC=(-c:v hevc_videotoolbox -tag:v hvc1 -pix_fmt yuv420p -q:v "$VT_Q" -allow_sw 1 -g "$GOP" -bf 0)
     MOV=(-movflags +faststart); EXT="mp4" ;;
   X265_LOSSLESS)
-    VENC=(-c:v libx265 -x265-params lossless=1:profile=main -pix_fmt yuv420p)
+    VENC=(-c:v libx265 -x265-params lossless=1 -tag:v hvc1 -pix_fmt yuv420p -threads 0)
     MOV=(-movflags +faststart); EXT="mp4" ;;
   DNXHR_HQ)
     VENC=(-c:v dnxhd -profile:v dnxhr_hq -pix_fmt yuv422p)
