@@ -16,7 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       defer: false
     )
     window.center()
-    window.title = "TeslaCam Pro"
+    window.title = "TeslaCam"
     window.contentView = NSHostingView(rootView: content)
     window.makeKeyAndOrderFront(nil)
 

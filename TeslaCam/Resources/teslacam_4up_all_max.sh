@@ -4,6 +4,10 @@ set -u
 setopt PIPE_FAIL NONOMATCH
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
+progress_event(){
+  print -u2 "TESLACAM_PROGRESS|$*"
+}
+
 usage(){
   cat <<'USAGE' >&2
 Usage:
@@ -62,6 +66,7 @@ WORKDIR="${WORKDIR:-}"
 NO_UPSCALE="${NO_UPSCALE:-1}"
 FFLOGLEVEL="${FFLOGLEVEL:-info}"
 LIMIT_SETS="${LIMIT_SETS:-0}"
+OVERLAY_DIR="${OVERLAY_DIR:-}"
 
 typeset HW_GEN
 
@@ -145,6 +150,7 @@ TOTAL=$(wc -l < "$JOBS" | tr -d ' ')
 (( TOTAL > 0 )) || { print -u2 "No timestamps."; exit 2; }
 (( LIMIT_SETS > 0 )) && { head -n "$LIMIT_SETS" "$JOBS" > "$JOBS.tmp" && mv "$JOBS.tmp" "$JOBS"; TOTAL=$(wc -l < "$JOBS" | tr -d ' '); }
 print -u2 "4-cam sets: $TOTAL"
+progress_event "TOTAL|$TOTAL"
 MISSING_RIGHT=$(awk -F'|' '$5==""{c++} END{print c+0}' "$JOBS")
 (( MISSING_RIGHT > 0 )) && print -u2 "WARN: right_repeater missing for $MISSING_RIGHT timestamps; black placeholder will be used."
 
@@ -207,6 +213,16 @@ for idx in {1..4}; do
 done
 FILTER_COMPLEX="${(j:;:)FILTER_STEPS};[${CAM_LABEL[front]}][${CAM_LABEL[back]}][${CAM_LABEL[left_repeater]}][${CAM_LABEL[right_repeater]}]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0,setsar=1[v]"
 
+overlay_filter_complex(){
+  local ts="$1"
+  local overlay="$OVERLAY_DIR/${ts}.ass"
+  if [[ -n "$OVERLAY_DIR" && -f "$overlay" ]]; then
+    print -- "${FILTER_COMPLEX};[v]subtitles='${overlay}':force_style='FontName=Menlo,Fontsize=40,Alignment=8,MarginV=48,Outline=3,Shadow=0'[vout]"
+  else
+    print -- "$FILTER_COMPLEX"
+  fi
+}
+
 FPS_R="$(ffprobe -v error -select_streams v:0 -show_entries stream=avg_frame_rate -of csv=p=0 "$first_real" || true)"
 FPS="$(awk -v r="$FPS_R" 'BEGIN{n=split(r,a,"/"); if(n==2&&a[2]>0){printf("%.3f",a[1]/a[2]);} else if(r+0>0){printf("%.3f",r);} else{printf("36.027");}}')"
 print -u2 "Using FPS=$FPS"
@@ -247,6 +263,8 @@ fi
 PLIST="$PARTDIR/parts.txt"
 : > "$PLIST"
 print -u2 "PARTDIR=$PARTDIR"
+progress_event "WORKDIR|$PARTDIR"
+progress_event "OUTPUT|$OUT"
 
 dur_of(){ ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 "$1" 2>/dev/null | awk '{if($0+0<=0){print 60}else{printf("%.3f",$0)}}'; }
 
@@ -255,10 +273,12 @@ while IFS='|' read -r TS FP BP LP RP; do
   ((++i))
   PART="$PARTDIR/$(printf '%06d' "$i").${EXT}"
   print -u2 "Render $i/$TOTAL: $TS → ${PART##*/}"
+  progress_event "RENDER_START|$i|$TOTAL|$TS|${PART##*/}"
 
   if [[ -s "$PART" ]]; then
     print -u2 "Skip existing $PART"
     printf "file '%s'\n" "$PART" >> "$PLIST"
+    progress_event "RENDER_OK|$i|$TOTAL|$TS|${PART##*/}"
     continue
   fi
 
@@ -276,20 +296,26 @@ while IFS='|' read -r TS FP BP LP RP; do
     fi
   }
   add_in "$FP" front; add_in "$BP" back; add_in "$LP" left_repeater; add_in "$RP" right_repeater
+  PART_FILTER="$(overlay_filter_complex "$TS")"
+  MAP_LABEL="[v]"
+  [[ "$PART_FILTER" == *"[vout]" ]] && MAP_LABEL="[vout]"
 
   if ffmpeg -hide_banner -loglevel "$FFLOGLEVEL" -stats -y \
       "${INARGS[@]}" \
-      -filter_complex "$FILTER_COMPLEX" \
-      -map "[v]" -an \
+      -filter_complex "$PART_FILTER" \
+      -map "$MAP_LABEL" -an \
       -r "$FPS" "${VENC[@]}" "${MOV[@]}" "$PART"; then
     printf "file '%s'\n" "$PART" >> "$PLIST"
+    progress_event "RENDER_OK|$i|$TOTAL|$TS|${PART##*/}"
   else
     print -u2 "WARN: failed $TS → continuing"
+    progress_event "RENDER_FAIL|$i|$TOTAL|$TS|${PART##*/}"
     rm -f "$PART"
   fi
 done < "$JOBS"
 
 print -u2 "Concatenating -> $OUT"
+progress_event "CONCAT_START|$OUT"
 ffmpeg -hide_banner -loglevel "$FFLOGLEVEL" -y -f concat -safe 0 -i "$PLIST" -c copy "${MOV[@]}" "$OUT" \
-  && print -u2 "Done: $OUT" \
-  || { print -u2 "Concat failed. Parts kept in $PARTDIR"; exit 4; }
+  && { progress_event "CONCAT_OK|$OUT"; progress_event "DONE|$OUT"; print -u2 "Done: $OUT"; } \
+  || { progress_event "CONCAT_FAIL|$OUT"; print -u2 "Concat failed. Parts kept in $PARTDIR"; exit 4; }

@@ -21,6 +21,9 @@ final class AppState: ObservableObject {
   @Published var errorMessage: String = ""
   @Published var showError: Bool = false
   @Published var camerasDetected: [Camera] = []
+  @Published var exportPreset: ExportPreset = .maxQualityHEVC
+  @Published var selectedExportCameras: Set<Camera> = Set(Camera.allCases)
+  @Published var healthSummary: ExportHealthSummary?
 
   let playback = MultiCamPlaybackController()
   let exporter = ExportController()
@@ -45,6 +48,7 @@ final class AppState: ObservableObject {
   }
 
   func chooseFolder() {
+    guard !exporter.isExporting else { return }
     NSApp.activate(ignoringOtherApps: true)
     let panel = NSOpenPanel()
     panel.title = "Select TeslaCam Files/Folders"
@@ -63,6 +67,7 @@ final class AppState: ObservableObject {
   }
 
   func indexSources(_ urls: [URL]) {
+    guard !exporter.isExporting else { return }
     let normalizedSources = normalizeSources(urls)
     guard !normalizedSources.isEmpty else { return }
 
@@ -70,6 +75,7 @@ final class AppState: ObservableObject {
     indexStatus = "Scanning..."
     clipSets = []
     camerasDetected = []
+    healthSummary = nil
 
     DispatchQueue.global(qos: .userInitiated).async {
       do {
@@ -88,6 +94,8 @@ final class AppState: ObservableObject {
           self.selectedEnd = index.maxDate
           self.currentIndex = 0
           self.camerasDetected = self.orderCameras(Array(index.camerasFound))
+          self.selectedExportCameras = Set(self.camerasDetected)
+          self.healthSummary = self.buildHealthSummary(from: index.sets)
           self.rebuildTimeline()
           if let first = index.sets.first {
             self.playback.load(set: first)
@@ -135,32 +143,63 @@ final class AppState: ObservableObject {
     }
   }
 
-  func exportRange() {
-    guard !clipSets.isEmpty else { return }
-    normalizeRange()
-    let start = floorToMinute(selectedStart)
-    let end = floorToMinute(selectedEnd)
-
-    let sets = clipSets.filter { $0.date >= start && $0.date <= end }
-    if sets.isEmpty {
-      errorMessage = "No clips found in the selected range."
-      showError = true
-      return
+  func setFullRange() {
+    if let minDate, let maxDate {
+      selectedStart = minDate
+      selectedEnd = maxDate
     }
+  }
+
+  func setCurrentMinuteRange() {
+    guard let set = clipSets[safe: currentIndex] else { return }
+    let minute = floorToMinute(set.date)
+    selectedStart = minute
+    selectedEnd = minute
+  }
+
+  func setRecentRange(minutes: Int) {
+    guard let maxDate else { return }
+    let end = floorToMinute(maxDate)
+    let start = max(minDate ?? end, end.addingTimeInterval(Double(-(minutes - 1) * 60)))
+    selectedStart = floorToMinute(start)
+    selectedEnd = end
+    normalizeRange()
+  }
+
+  func toggleExportCamera(_ camera: Camera, isEnabled: Bool) {
+    if isEnabled {
+      selectedExportCameras.insert(camera)
+    } else {
+      selectedExportCameras.remove(camera)
+      if selectedExportCameras.isEmpty, let first = camerasDetected.first {
+        selectedExportCameras.insert(first)
+      }
+    }
+  }
+
+  func exportRange() {
+    guard !clipSets.isEmpty, !exporter.isExporting else { return }
+    normalizeRange()
 
     let panel = NSSavePanel()
     panel.title = "Save Export"
-    panel.allowedContentTypes = [.mpeg4Movie]
-    panel.nameFieldStringValue = "teslacam_export_hevc_cpu.mp4"
+    panel.nameFieldStringValue = defaultExportFilename()
     panel.canCreateDirectories = true
+    panel.allowedContentTypes = exportPreset.defaultExtension == "mov" ? [.movie] : [.mpeg4Movie]
 
     if panel.runModal() == .OK, let url = panel.url {
-      var outputURL = url
-      if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-        outputURL = url.appendingPathComponent("teslacam_export_hevc_cpu.mp4")
+      guard let request = makeExportRequest(for: url) else {
+        errorMessage = "No clips found in the selected range."
+        showError = true
+        return
       }
-      let useSix = camerasDetected.count >= 6
-      exporter.export(sets: sets, outputURL: outputURL, useSixCam: useSix)
+      let preflight = exporter.preflightSummary(request: request)
+      if !preflight.canExport {
+        errorMessage = preflight.blockingIssues.map(\.message).joined(separator: "\n")
+        showError = true
+        return
+      }
+      exporter.export(request: request)
     }
   }
 
@@ -187,6 +226,70 @@ final class AppState: ObservableObject {
     }
     seekWorkItem = item
     DispatchQueue.main.async(execute: item)
+  }
+
+  func ingestDroppedURLs(_ urls: [URL]) {
+    guard !exporter.isExporting else { return }
+    indexSources(urls)
+  }
+
+  var sourceSummary: String {
+    guard !sourceURLs.isEmpty else { return "" }
+    if sourceURLs.count == 1 {
+      return sourceURLs[0].path
+    }
+    return "\(sourceURLs.count) inputs • \(sourceURLs[0].lastPathComponent) + \(sourceURLs.count - 1) more"
+  }
+
+  var selectedSetsForExport: [ClipSet] {
+    normalizeRange()
+    let start = floorToMinute(selectedStart)
+    let end = floorToMinute(selectedEnd)
+    return clipSets.filter { $0.date >= start && $0.date <= end }
+  }
+
+  var selectedRangeDescription: String {
+    let sets = selectedSetsForExport
+    guard let first = sets.first, let last = sets.last else { return "No clips selected" }
+    return "\(formatDateTime(first.date))  ->  \(formatDateTime(last.date))"
+  }
+
+  var partialSelectedSetCount: Int {
+    let enabled = activeExportCameras
+    guard !enabled.isEmpty else { return 0 }
+    return selectedSetsForExport.reduce(into: 0) { result, set in
+      let available = Set(set.files.keys).intersection(enabled)
+      if available.count < enabled.count {
+        result += 1
+      }
+    }
+  }
+
+  var exportWarningsPreview: [String] {
+    var warnings: [String] = []
+    if partialSelectedSetCount > 0 {
+      warnings.append("\(partialSelectedSetCount) selected minute(s) are missing one or more enabled cameras and will use black placeholders.")
+    }
+    let hidden = camerasDetected.filter { !activeExportCameras.contains($0) }
+    if !hidden.isEmpty {
+      warnings.append("Hidden cameras will export as black tiles: \(hidden.map(\.displayName).joined(separator: ", ")).")
+    }
+    return warnings
+  }
+
+  var activeExportCameras: Set<Camera> {
+    let detected = Set(camerasDetected)
+    let filtered = selectedExportCameras.intersection(detected)
+    if !filtered.isEmpty {
+      return filtered
+    }
+    return detected.isEmpty ? Set(Camera.allCases) : detected
+  }
+
+  func shutdownForTermination() {
+    seekWorkItem?.cancel()
+    playback.stop()
+    exporter.cancelExport()
   }
 
   private func updateCurrentSeconds(localSeconds: Double) {
@@ -288,18 +391,6 @@ final class AppState: ObservableObject {
     return priority.filter { cams.contains($0) }
   }
 
-  func ingestDroppedURLs(_ urls: [URL]) {
-    indexSources(urls)
-  }
-
-  var sourceSummary: String {
-    guard !sourceURLs.isEmpty else { return "" }
-    if sourceURLs.count == 1 {
-      return sourceURLs[0].path
-    }
-    return "\(sourceURLs.count) inputs • \(sourceURLs[0].lastPathComponent) + \(sourceURLs.count - 1) more"
-  }
-
   private func normalizeSources(_ urls: [URL]) -> [URL] {
     let fm = FileManager.default
     var seen = Set<String>()
@@ -316,9 +407,79 @@ final class AppState: ObservableObject {
     return out
   }
 
-  func shutdownForTermination() {
-    seekWorkItem?.cancel()
-    playback.stop()
-    exporter.cancelExport()
+  private func defaultExportFilename() -> String {
+    let sets = selectedSetsForExport
+    guard let first = sets.first, let last = sets.last else {
+      return "teslacam_\(exportPreset.outputLabel).\(exportPreset.defaultExtension)"
+    }
+    let suffix = first.timestamp == last.timestamp ? first.timestamp : "\(first.timestamp)_to_\(last.timestamp)"
+    return "teslacam_\(suffix)_\(exportPreset.outputLabel).\(exportPreset.defaultExtension)"
+  }
+
+  private func buildOutputURL(from chosenURL: URL) -> URL {
+    var outputURL = chosenURL
+    if (try? chosenURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+      outputURL = chosenURL.appendingPathComponent(defaultExportFilename())
+    }
+
+    let expectedExtension = exportPreset.defaultExtension
+    if outputURL.pathExtension.lowercased() != expectedExtension {
+      outputURL.deletePathExtension()
+      outputURL.appendPathExtension(expectedExtension)
+    }
+    return outputURL
+  }
+
+  private func makeExportRequest(for chosenURL: URL) -> ExportRequest? {
+    let sets = selectedSetsForExport
+    guard !sets.isEmpty else { return nil }
+    let useSix = camerasDetected.count >= 6
+    return ExportRequest(
+      sets: sets,
+      outputURL: buildOutputURL(from: chosenURL),
+      useSixCam: useSix,
+      preset: exportPreset,
+      enabledCameras: activeExportCameras,
+      selectedRangeText: selectedRangeDescription,
+      partialClipCount: partialSelectedSetCount
+    )
+  }
+
+  private func buildHealthSummary(from sets: [ClipSet]) -> ExportHealthSummary {
+    var gapCount = 0
+    var partialSetCount = 0
+    var four = 0
+    var six = 0
+    var missingCameraCounts: [Camera: Int] = [:]
+
+    for (index, set) in sets.enumerated() {
+      let count = set.files.count
+      if count < 6 {
+        partialSetCount += 1
+      }
+      if count >= 6 {
+        six += 1
+      } else {
+        four += 1
+      }
+      for camera in Camera.allCases where set.files[camera] == nil {
+        missingCameraCounts[camera, default: 0] += 1
+      }
+      if let next = sets[safe: index + 1] {
+        let delta = next.date.timeIntervalSince(set.date)
+        if delta > 61 {
+          gapCount += 1
+        }
+      }
+    }
+
+    return ExportHealthSummary(
+      totalMinutes: sets.count,
+      gapCount: gapCount,
+      partialSetCount: partialSetCount,
+      fourCameraSetCount: four,
+      sixCameraSetCount: six,
+      missingCameraCounts: missingCameraCounts
+    )
   }
 }

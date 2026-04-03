@@ -4,6 +4,10 @@ set -u
 setopt PIPE_FAIL NONOMATCH
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
+progress_event(){
+  print -u2 "TESLACAM_PROGRESS|$*"
+}
+
 usage(){
   cat <<'USAGE' >&2
 Usage:
@@ -62,6 +66,7 @@ WORKDIR="${WORKDIR:-}"
 NO_UPSCALE="${NO_UPSCALE:-1}"
 FFLOGLEVEL="${FFLOGLEVEL:-info}"
 LIMIT_SETS="${LIMIT_SETS:-0}"
+OVERLAY_DIR="${OVERLAY_DIR:-}"
 
 validate_input_dir(){
   local dir="$1"
@@ -143,6 +148,7 @@ TOTAL=$(wc -l < "$JOBS" | tr -d ' ')
 (( TOTAL > 0 )) || { print -u2 "No timestamps."; exit 2; }
 (( LIMIT_SETS > 0 )) && { head -n "$LIMIT_SETS" "$JOBS" > "$JOBS.tmp" && mv "$JOBS.tmp" "$JOBS"; TOTAL=$(wc -l < "$JOBS" | tr -d ' '); }
 print -u2 "6-cam sets: $TOTAL"
+progress_event "TOTAL|$TOTAL"
 MISSING_RIGHT=$(awk -F'|' '$5==""{c++} END{print c+0}' "$JOBS")
 (( MISSING_RIGHT > 0 )) && print -u2 "WARN: right_repeater missing for $MISSING_RIGHT timestamps; black placeholder will be used."
 
@@ -204,6 +210,16 @@ for idx in {1..6}; do
 done
 FILTER_COMPLEX="${(j:;:)FILTER_STEPS};[${CAM_LABEL[front]}][${CAM_LABEL[back]}][${CAM_LABEL[left_repeater]}][${CAM_LABEL[right_repeater]}][${CAM_LABEL[left_pillar]}][${CAM_LABEL[right_pillar]}]xstack=inputs=6:layout=0_0|w0_0|2*w0_0|0_h0|w0_h0|2*w0_h0,setsar=1[v]"
 
+overlay_filter_complex(){
+  local ts="$1"
+  local overlay="$OVERLAY_DIR/${ts}.ass"
+  if [[ -n "$OVERLAY_DIR" && -f "$overlay" ]]; then
+    print -- "${FILTER_COMPLEX};[v]subtitles='${overlay}':force_style='FontName=Menlo,Fontsize=40,Alignment=8,MarginV=48,Outline=3,Shadow=0'[vout]"
+  else
+    print -- "$FILTER_COMPLEX"
+  fi
+}
+
 FPS_R="$(ffprobe -v error -select_streams v:0 -show_entries stream=avg_frame_rate -of csv=p=0 "$first_real" || true)"
 FPS="$(awk -v r="$FPS_R" 'BEGIN{n=split(r,a,"/"); if(n==2&&a[2]>0){printf("%.3f",a[1]/a[2]);} else if(r+0>0){printf("%.3f",r);} else{printf("36.027");}}')"
 print -u2 "Using FPS=$FPS"
@@ -247,9 +263,11 @@ INPUT="$WORKDIR/input"
 FINAL="$WORKDIR/final"
 /bin/mkdir -p "$PARTS" "$INPUT" "$FINAL"
 print -u2 "WORKDIR: $WORKDIR"
+progress_event "WORKDIR|$WORKDIR"
 
 append_concat="$WORKDIR/concat.txt"
 : > "$append_concat"
+progress_event "OUTPUT|$OUT"
 
 build_one(){
   local ts="$1" front="$2" back="$3" left="$4" right="$5" lp="$6" rp="$7"
@@ -262,8 +280,12 @@ build_one(){
   if [[ -n "$rp" ]]; then ln -f "$rp" "$INPUT/${ts}-rp.${rp##*.}" 2>/dev/null || cp "$rp" "$INPUT/${ts}-rp.${rp##*.}"; inputs+=("-i" "$INPUT/${ts}-rp.${rp##*.}"); ((i++)); else inputs+=("-f" "lavfi" "-i" "color=c=black:s=${CAM_COLOR[right_pillar]}:r=$FPS"); fi
 
   local out="$PARTS/${ts}.${EXT}"
+  local part_filter
+  local map_label="[v]"
+  part_filter="$(overlay_filter_complex "$ts")"
+  [[ "$part_filter" == *"[vout]" ]] && map_label="[vout]"
   ffmpeg -y -loglevel "$FFLOGLEVEL" "${inputs[@]}" \
-    -filter_complex "$FILTER_COMPLEX" -map "[v]" "${VENC[@]}" "${MOV[@]}" "$out" \
+    -filter_complex "$part_filter" -map "$map_label" "${VENC[@]}" "${MOV[@]}" "$out" \
     || { print -u2 "Failed part: $ts"; return 1; }
   printf "file '%s'\n" "$out" >> "$append_concat"
 }
@@ -273,14 +295,19 @@ integer idx=0
 while IFS='|' read -r ts f b l r lp rp; do
   (( idx++ ))
   print -u2 "[$idx/$TOTAL] $ts"
-  build_one "$ts" "$f" "$b" "$l" "$r" "$lp" "$rp" || exit 4
+  progress_event "RENDER_START|$idx|$TOTAL|$ts|${ts}.${EXT}"
+  build_one "$ts" "$f" "$b" "$l" "$r" "$lp" "$rp" || { progress_event "RENDER_FAIL|$idx|$TOTAL|$ts|${ts}.${EXT}"; exit 4; }
+  progress_event "RENDER_OK|$idx|$TOTAL|$ts|${ts}.${EXT}"
 done < "$JOBS"
 
 print -u2 "Concatenating..."
+progress_event "CONCAT_START|$OUT"
 ffmpeg -y -loglevel "$FFLOGLEVEL" -f concat -safe 0 -i "$append_concat" -c copy "$FINAL/out.${EXT}" \
-  || { print -u2 "Concat failed"; exit 5; }
+  || { progress_event "CONCAT_FAIL|$OUT"; print -u2 "Concat failed"; exit 5; }
 
 /bin/mv -f "$FINAL/out.${EXT}" "$OUT"
+progress_event "CONCAT_OK|$OUT"
+progress_event "DONE|$OUT"
 print -u2 "Done: $OUT"
 
 if (( WORKDIR_EPHEMERAL == 1 )); then

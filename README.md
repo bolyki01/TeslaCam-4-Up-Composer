@@ -30,6 +30,30 @@ open /path/to/Build/Products/Debug/TeslaCam.app
 3. Set an export range via `Range`.
 4. Click `Export` to render HEVC output.
 
+## CLI Export
+You can also run a bash/zsh-friendly interactive wrapper from the repo root:
+
+```bash
+./teslacam.sh
+```
+
+The CLI flow is:
+1. Enter the folder containing TeslaCam videos.
+2. Enter export start date/time in `DD/MM/YYYY-HH:MM:SS`.
+3. Enter export end date/time in `DD/MM/YYYY-HH:MM:SS`.
+4. Enter an extraction directory, or press Enter to use `<source-folder>/output`.
+
+Example date/time:
+
+```text
+01/04/2026-18:30:00
+```
+
+Notes:
+- The CLI uses the bundled `ffmpeg`/`ffprobe`, so it can run on a bare macOS install.
+- It exports visually high-quality `ProRes HQ` output by default.
+- It currently reuses the existing 4-up / 6-up compositor scripts, so it does not yet burn telemetry overlays into the exported video.
+
 ## Export Notes
 - Output is HEVC at max quality.
 - Export log is written to:

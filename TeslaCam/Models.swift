@@ -20,6 +20,56 @@ enum Camera: String, CaseIterable, Hashable {
   }
 }
 
+enum ExportPreset: String, CaseIterable, Identifiable {
+  case maxQualityHEVC
+  case fastHEVC
+  case editFriendlyProRes
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .maxQualityHEVC:
+      return "Max Quality HEVC"
+    case .fastHEVC:
+      return "Fast HEVC"
+    case .editFriendlyProRes:
+      return "Edit-Friendly ProRes"
+    }
+  }
+
+  var scriptPreset: String {
+    switch self {
+    case .maxQualityHEVC:
+      return "HEVC_CPU_MAX"
+    case .fastHEVC:
+      return "HEVC_MAX"
+    case .editFriendlyProRes:
+      return "PRORES_HQ"
+    }
+  }
+
+  var defaultExtension: String {
+    switch self {
+    case .editFriendlyProRes:
+      return "mov"
+    case .maxQualityHEVC, .fastHEVC:
+      return "mp4"
+    }
+  }
+
+  var outputLabel: String {
+    switch self {
+    case .maxQualityHEVC:
+      return "hevc_max_quality"
+    case .fastHEVC:
+      return "hevc_fast"
+    case .editFriendlyProRes:
+      return "prores_hq"
+    }
+  }
+}
+
 struct ClipSet: Identifiable, Hashable {
   let id: String
   let timestamp: String
@@ -45,4 +95,25 @@ struct ClipIndex {
   let minDate: Date
   let maxDate: Date
   let camerasFound: Set<Camera>
+}
+
+struct ExportHealthSummary {
+  let totalMinutes: Int
+  let gapCount: Int
+  let partialSetCount: Int
+  let fourCameraSetCount: Int
+  let sixCameraSetCount: Int
+  let missingCameraCounts: [Camera: Int]
+
+  var hasMixedCoverage: Bool {
+    fourCameraSetCount > 0 && sixCameraSetCount > 0
+  }
+
+  var missingCoverageSummary: String {
+    let ordered = Camera.allCases.compactMap { camera -> String? in
+      guard let count = missingCameraCounts[camera], count > 0 else { return nil }
+      return "\(camera.displayName): \(count)"
+    }
+    return ordered.joined(separator: "  ")
+  }
 }
