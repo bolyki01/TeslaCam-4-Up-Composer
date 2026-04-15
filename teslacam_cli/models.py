@@ -12,6 +12,8 @@ class Camera(str, Enum):
     BACK = "back"
     LEFT_REPEATER = "left_repeater"
     RIGHT_REPEATER = "right_repeater"
+    LEFT = "left"
+    RIGHT = "right"
     LEFT_PILLAR = "left_pillar"
     RIGHT_PILLAR = "right_pillar"
 
@@ -22,9 +24,33 @@ class Camera(str, Enum):
             Camera.BACK: "Back",
             Camera.LEFT_REPEATER: "Left repeater",
             Camera.RIGHT_REPEATER: "Right repeater",
+            Camera.LEFT: "Left",
+            Camera.RIGHT: "Right",
             Camera.LEFT_PILLAR: "Left pillar",
             Camera.RIGHT_PILLAR: "Right pillar",
         }[self]
+
+
+HW3_CAMERA_ORDER = [
+    Camera.FRONT,
+    Camera.BACK,
+    Camera.LEFT_REPEATER,
+    Camera.RIGHT_REPEATER,
+]
+
+HW4_CAMERA_ORDER = [
+    Camera.FRONT,
+    Camera.BACK,
+    Camera.LEFT,
+    Camera.RIGHT,
+    Camera.LEFT_PILLAR,
+    Camera.RIGHT_PILLAR,
+]
+
+MIXED_CAMERA_ORDER = [
+    *HW3_CAMERA_ORDER,
+    *HW4_CAMERA_ORDER,
+]
 
 
 class LayoutKind(str, Enum):

@@ -1,41 +1,54 @@
-//
-//  TeslaCamUITests.swift
-//  TeslaCamUITests
-//
-//  Created by Bolyki György on 05/02/2026.
-//
-
 import XCTest
 
 final class TeslaCamUITests: XCTestCase {
+  override func setUpWithError() throws {
+    continueAfterFailure = false
+  }
 
-    override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
+  @MainActor
+  func testBlankLaunchShowsOnboarding() throws {
+    let app = launchApp(mode: "blank")
 
-        // In UI tests it is usually best to stop immediately when a failure occurs.
-        continueAfterFailure = false
+    XCTAssertTrue(app.buttons["Choose Folder"].waitForExistence(timeout: 5))
+  }
 
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
-    }
+  @MainActor
+  func testDefaultLaunchShowsOnboarding() throws {
+    let app = XCUIApplication()
+    app.launch()
 
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
-    }
+    XCTAssertTrue(app.buttons["Choose Folder"].waitForExistence(timeout: 5))
+  }
 
-    @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
-        let app = XCUIApplication()
-        app.launch()
+  @MainActor
+  func testSampleLaunchShowsPlaybackAndExport() throws {
+    let app = launchApp(mode: "sample")
 
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-    }
+    XCTAssertTrue(app.buttons["Export Video"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["Play"].exists || app.buttons["Pause"].exists)
+    XCTAssertTrue(app.staticTexts["Timeline"].exists)
+  }
 
-    @MainActor
-    func testLaunchPerformance() throws {
-        // This measures how long it takes to launch your application.
-        measure(metrics: [XCTApplicationLaunchMetric()]) {
-            XCUIApplication().launch()
-        }
-    }
+  @MainActor
+  func testSampleExportShowsBlockingOverlay() throws {
+    let app = XCUIApplication()
+    app.launchEnvironment["TESLACAM_UI_TEST_MODE"] = "sample"
+    app.launchEnvironment["TESLACAM_DEBUG_EXPORT_DIR"] = NSTemporaryDirectory()
+    app.launch()
+
+    XCTAssertTrue(app.buttons["Export Video"].waitForExistence(timeout: 5))
+    app.buttons["Export Video"].click()
+
+    XCTAssertTrue(
+      app.staticTexts["Exporting Video"].waitForExistence(timeout: 5) ||
+      app.staticTexts["Export Complete"].waitForExistence(timeout: 5)
+    )
+  }
+
+  private func launchApp(mode: String) -> XCUIApplication {
+    let app = XCUIApplication()
+    app.launchEnvironment["TESLACAM_UI_TEST_MODE"] = mode
+    app.launch()
+    return app
+  }
 }

@@ -1,0 +1,3 @@
+[actions.run]
+label = "Run"
+command = "./script/build_and_run.sh"

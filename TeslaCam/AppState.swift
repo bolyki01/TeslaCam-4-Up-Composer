@@ -3,48 +3,148 @@ import Combine
 import AppKit
 import UniformTypeIdentifiers
 
+struct TimelinePlaybackSegment: Equatable {
+  let clipIndex: Int?
+  let startSeconds: Double
+  let duration: Double
+
+  func matchesLoadedSegment(
+    clipIndex: Int?,
+    startSeconds: Double,
+    duration: Double,
+    tolerance: Double = 0.001
+  ) -> Bool {
+    self.clipIndex == clipIndex
+      && abs(self.startSeconds - startSeconds) <= tolerance
+      && abs(self.duration - duration) <= tolerance
+  }
+}
+
 final class AppState: ObservableObject {
+  private enum StorageKey {
+    static let lastSourceBookmarks = "TeslaCam.lastSourceBookmarks"
+  }
+
+  private enum DebugEnvironment {
+    static let source = "TESLACAM_DEBUG_SOURCE"
+    static let exportDirectory = "TESLACAM_DEBUG_EXPORT_DIR"
+    static let uiTestMode = "TESLACAM_UI_TEST_MODE"
+  }
+
+  let debugLog = DebugLogSink()
+  let playbackUI = PlaybackUIState()
+
   @Published var rootURL: URL?
   @Published var sourceURLs: [URL] = []
   @Published var clipSets: [ClipSet] = []
   @Published var isIndexing: Bool = false
   @Published var indexStatus: String = ""
+  @Published var scanStage: ScanStage = .scanningNestedFolders
+  @Published var scanDiscoveredClipCount: Int = 0
   @Published var minDate: Date?
   @Published var maxDate: Date?
   @Published var selectedStart: Date = Date()
   @Published var selectedEnd: Date = Date()
+  @Published var trimStartSeconds: Double = 0
+  @Published var trimEndSeconds: Double = 0
+  @Published var isDraggingTrim: Bool = false
   @Published var currentIndex: Int = 0
-  @Published var currentSeconds: Double = 0
   @Published var totalDuration: Double = 0
-  @Published var overlayText: String = ""
-  @Published var telemetryText: String = ""
+  @Published var timelineGapRanges: [TimelineGapRange] = []
   @Published var errorMessage: String = ""
   @Published var showError: Bool = false
   @Published var camerasDetected: [Camera] = []
   @Published var exportPreset: ExportPreset = .maxQualityHEVC
+  @Published var duplicatePolicy: DuplicateClipPolicy = .mergeByTime
   @Published var selectedExportCameras: Set<Camera> = Set(Camera.allCases)
   @Published var healthSummary: ExportHealthSummary?
+  @Published var layoutProfile: CameraLayoutProfile = .mixedUnknown
+  @Published var duplicateSummary = DuplicateResolutionSummary(
+    duplicateFileCount: 0,
+    duplicateTimestampCount: 0,
+    overlapMinuteCount: 0
+  )
+  @Published var isDuplicateResolverPresented: Bool = false
+  @Published var duplicateResolverMessage: String = ""
+  @Published var showDuplicateResolverForConflicts: Bool = false
 
   let playback = MultiCamPlaybackController()
-  let exporter = ExportController()
+  let exporter: NativeExportController
 
   private var startOffsets: [Double] = []
+  private var observers: Set<AnyCancellable> = []
+  private var timelineAnchorDate: Date?
+  private var currentSegmentStartSeconds: Double = 0
+  private var currentSegmentClipIndex: Int?
   private var isUserSeeking = false
   private var wasPlayingBeforeSeek = false
-  private var seekWorkItem: DispatchWorkItem?
   private var telemetryTimeline: TelemetryTimeline?
   private var telemetryURL: URL?
+  private var activeSecurityScopedURLs: [URL] = []
 
-  private let overlayFormatter: DateFormatter = {
-    let df = DateFormatter()
-    df.locale = Locale(identifier: "en_US_POSIX")
-    df.timeZone = TimeZone.current
-    df.dateFormat = "yyyy-MM-dd HH:mm:ss"
-    return df
-  }()
+  init() {
+    exporter = NativeExportController()
+    exporter.debugLog = debugLog
+    exporter.objectWillChange
+      .sink { [weak self] _ in
+        self?.objectWillChange.send()
+      }
+      .store(in: &observers)
+  }
+
+  var currentSeconds: Double {
+    get { playbackUI.currentSeconds }
+    set { playbackUI.currentSeconds = newValue }
+  }
+
+  var overlayText: String {
+    get { playbackUI.overlayText }
+    set { playbackUI.overlayText = newValue }
+  }
+
+  var telemetryText: String {
+    get { playbackUI.telemetryText }
+    set { playbackUI.telemetryText = newValue }
+  }
 
   func onAppear() {
-    chooseFolder()
+    configurePlaybackCallbacks()
+    debug("launch")
+    guard clipSets.isEmpty, sourceURLs.isEmpty, !isIndexing else { return }
+#if DEBUG
+    if applyDebugLaunchModeIfNeeded() {
+      return
+    }
+#endif
+  }
+
+  private func configurePlaybackCallbacks() {
+    playback.onTimeUpdate = { [weak self] seconds in
+      self?.updateCurrentSeconds(localSeconds: seconds)
+    }
+    playback.onFinished = { [weak self] in
+      self?.advanceToNextTimelineSegment()
+    }
+  }
+
+  var previewTimelineState: PreviewTimelineState {
+    PreviewTimelineState(
+      currentGlobalSeconds: currentSeconds,
+      activeClipSetIndex: currentIndex,
+      playing: playback.isPlaying
+    )
+  }
+
+  var currentGapRange: TimelineGapRange? {
+    timelineGapRanges.first { $0.contains(currentSeconds) }
+  }
+
+  var trimSelection: TimelineTrimSelection {
+    TimelineTrimSelection(
+      startSeconds: trimStartSeconds,
+      endSeconds: trimEndSeconds,
+      isDragging: isDraggingTrim
+    )
   }
 
   func chooseFolder() {
@@ -56,9 +156,10 @@ final class AppState: ObservableObject {
     panel.canChooseFiles = true
     panel.allowsMultipleSelection = true
     panel.prompt = "Choose"
+    panel.directoryURL = sourceURLs.first?.deletingLastPathComponent() ?? rootURL
 
-    if panel.runModal() == .OK {
-      indexSources(panel.urls)
+    presentOpenPanel(panel) { [weak self] urls in
+      self?.indexSources(urls)
     }
   }
 
@@ -70,54 +171,98 @@ final class AppState: ObservableObject {
     guard !exporter.isExporting else { return }
     let normalizedSources = normalizeSources(urls)
     guard !normalizedSources.isEmpty else { return }
+    debug("index start: \(normalizedSources.map { $0.lastPathComponent }.joined(separator: ", "))", category: "index")
+
+    activateSecurityScopedAccess(for: normalizedSources)
 
     isIndexing = true
     indexStatus = "Scanning..."
+    scanStage = .scanningNestedFolders
+    scanDiscoveredClipCount = 0
     clipSets = []
     camerasDetected = []
     healthSummary = nil
+    duplicateSummary = DuplicateResolutionSummary(
+      duplicateFileCount: 0,
+      duplicateTimestampCount: 0,
+      overlapMinuteCount: 0
+    )
+    layoutProfile = .mixedUnknown
+    isDuplicateResolverPresented = false
+    duplicateResolverMessage = ""
 
     DispatchQueue.global(qos: .userInitiated).async {
       do {
-        let index = try ClipIndexer.index(inputURLs: normalizedSources) { scanned in
+        let index = try ClipIndexer.index(inputURLs: normalizedSources, duplicatePolicy: self.duplicatePolicy) { scanned in
           DispatchQueue.main.async {
-            self.indexStatus = "Indexed \(scanned) clips..."
+            self.scanStage = .scanningNestedFolders
+            self.scanDiscoveredClipCount = scanned
+            self.indexStatus = "Found \(scanned) clips"
           }
         }
         DispatchQueue.main.async {
+          self.scanStage = .parsingTimestamps
           self.rootURL = normalizedSources.first
           self.sourceURLs = normalizedSources
           self.clipSets = index.sets
           self.minDate = index.minDate
           self.maxDate = index.maxDate
-          self.selectedStart = index.minDate
-          self.selectedEnd = index.maxDate
           self.currentIndex = 0
-          self.camerasDetected = self.orderCameras(Array(index.camerasFound))
+          self.layoutProfile = index.layoutProfile
+          self.camerasDetected = self.orderCameras(Array(index.camerasFound), profile: index.layoutProfile)
           self.selectedExportCameras = Set(self.camerasDetected)
           self.healthSummary = self.buildHealthSummary(from: index.sets)
+          self.duplicateSummary = index.duplicateSummary
+          self.rememberLastSources(normalizedSources)
+          self.scanStage = .mergingClips
           self.rebuildTimeline()
-          if let first = index.sets.first {
-            self.playback.load(set: first)
-            self.currentSeconds = 0
-            self.loadTelemetry(for: first)
-            self.updateOverlayAndTelemetry(index: 0, localSeconds: 0)
-          }
+          self.setTrimRange(
+            startSeconds: 0,
+            endSeconds: self.totalDuration,
+            snapToMinute: true
+          )
+          self.currentSeconds = 0
+          self.seekToGlobalTime(0, exact: true)
+          self.scanStage = .preparingTimeline
           self.isIndexing = false
-          self.indexStatus = "Indexed \(index.sets.count) minutes"
-
-          self.playback.onTimeUpdate = { [weak self] seconds in
-            self?.updateCurrentSeconds(localSeconds: seconds)
-          }
+          self.indexStatus = "Ready"
+          self.presentDuplicateResolverIfNeeded(for: index)
+          self.debug(
+            "index ready: sets=\(index.sets.count) cameras=\(self.camerasDetected.map { $0.rawValue }.joined(separator: ",")) profile=\(index.layoutProfile.rawValue) gaps=\(self.timelineGapRanges.count)",
+            category: "index"
+          )
         }
       } catch {
         DispatchQueue.main.async {
           self.isIndexing = false
           self.errorMessage = "No clips found in the selected files/folders."
           self.showError = true
+          self.debug("index failed: \(error.localizedDescription)", category: "index")
         }
       }
     }
+  }
+
+  func reloadSources() {
+    guard !sourceURLs.isEmpty else { return }
+    indexSources(sourceURLs)
+  }
+
+  func chooseDuplicatePolicy(_ policy: DuplicateClipPolicy) {
+    isDuplicateResolverPresented = false
+    duplicateResolverMessage = ""
+    guard duplicatePolicy != policy else { return }
+    duplicatePolicy = policy
+    reloadSources()
+  }
+
+  func dismissDuplicateResolver() {
+    isDuplicateResolverPresented = false
+    duplicateResolverMessage = ""
+  }
+
+  func updateDuplicatePolicy(_ policy: DuplicateClipPolicy) {
+    chooseDuplicatePolicy(policy)
   }
 
   func togglePlay() {
@@ -131,39 +276,46 @@ final class AppState: ObservableObject {
   func restart() {
     guard !clipSets.isEmpty else { return }
     currentIndex = 0
-    playback.load(set: clipSets[0])
-    currentSeconds = 0
-    loadTelemetry(for: clipSets[0])
-    updateOverlayAndTelemetry(index: 0, localSeconds: 0)
+    seekToGlobalTime(0, exact: true)
   }
 
   func normalizeRange() {
-    if selectedEnd < selectedStart {
-      selectedEnd = selectedStart
-    }
+    setTrimRange(startSeconds: trimStartSeconds, endSeconds: trimEndSeconds)
   }
 
   func setFullRange() {
-    if let minDate, let maxDate {
-      selectedStart = minDate
-      selectedEnd = maxDate
-    }
+    setTrimRange(startSeconds: 0, endSeconds: totalDuration, snapToMinute: true)
   }
 
   func setCurrentMinuteRange() {
-    guard let set = clipSets[safe: currentIndex] else { return }
-    let minute = floorToMinute(set.date)
-    selectedStart = minute
-    selectedEnd = minute
+    guard totalDuration > 0 else { return }
+    let start = floor(currentSeconds / 60.0) * 60.0
+    let end = min(totalDuration, start + 60.0)
+    setTrimRange(startSeconds: start, endSeconds: end, snapToMinute: true)
   }
 
   func setRecentRange(minutes: Int) {
-    guard let maxDate else { return }
-    let end = floorToMinute(maxDate)
-    let start = max(minDate ?? end, end.addingTimeInterval(Double(-(minutes - 1) * 60)))
-    selectedStart = floorToMinute(start)
-    selectedEnd = end
-    normalizeRange()
+    guard totalDuration > 0 else { return }
+    let window = Double(minutes * 60)
+    let end = totalDuration
+    let start = max(0, end - window)
+    setTrimRange(startSeconds: start, endSeconds: end, snapToMinute: true)
+  }
+
+  func setTestExportRange(minutes: Int = 3) {
+    guard totalDuration > 0 else { return }
+    let halfWindow = Double(minutes * 60) / 2
+    let center = currentSeconds
+    var start = max(0, center - halfWindow)
+    var end = min(totalDuration, center + halfWindow)
+    if end - start < Double(minutes * 60) {
+      if start == 0 {
+        end = min(totalDuration, Double(minutes * 60))
+      } else if end == totalDuration {
+        start = max(0, totalDuration - Double(minutes * 60))
+      }
+    }
+    setTrimRange(startSeconds: start, endSeconds: end, snapToMinute: true)
   }
 
   func toggleExportCamera(_ camera: Camera, isEnabled: Bool) {
@@ -180,35 +332,77 @@ final class AppState: ObservableObject {
   func exportRange() {
     guard !clipSets.isEmpty, !exporter.isExporting else { return }
     normalizeRange()
+    debug("export open save panel: \(selectedRangeDescription)", category: "export")
+
+#if DEBUG
+    if let debugOutputURL = debugOutputURL() {
+      if let request = makeExportRequest(for: debugOutputURL),
+         exporter.preflightSummary(request: request).canExport {
+        exportRange(to: debugOutputURL)
+        return
+      }
+    }
+#endif
 
     let panel = NSSavePanel()
     panel.title = "Save Export"
     panel.nameFieldStringValue = defaultExportFilename()
     panel.canCreateDirectories = true
     panel.allowedContentTypes = exportPreset.defaultExtension == "mov" ? [.movie] : [.mpeg4Movie]
+    panel.directoryURL = rootURL?.deletingLastPathComponent() ?? sourceURLs.first?.deletingLastPathComponent()
 
-    if panel.runModal() == .OK, let url = panel.url {
-      guard let request = makeExportRequest(for: url) else {
-        errorMessage = "No clips found in the selected range."
-        showError = true
-        return
-      }
-      let preflight = exporter.preflightSummary(request: request)
-      if !preflight.canExport {
-        errorMessage = preflight.blockingIssues.map(\.message).joined(separator: "\n")
-        showError = true
-        return
-      }
-      exporter.export(request: request)
+    presentSavePanel(panel) { [weak self] url in
+      self?.exportRange(to: url)
+      return
     }
+  }
+
+  func cancelExport() {
+    debug("export cancel requested", category: "export")
+    exporter.cancelExport()
+  }
+
+  func revealLastExport() {
+    exporter.revealOutput(for: exporter.exportHistory.first)
+  }
+
+  func dismissExportStatus() {
+    exporter.dismissStatus()
+  }
+
+  func beginTrimDrag() {
+    isDraggingTrim = true
+  }
+
+  func updateTrimRange(startSeconds: Double, endSeconds: Double, snapToMinute: Bool = false) {
+    setTrimRange(startSeconds: startSeconds, endSeconds: endSeconds, snapToMinute: snapToMinute)
+  }
+
+  func endTrimDrag(startSeconds: Double, endSeconds: Double) {
+    isDraggingTrim = false
+    setTrimRange(startSeconds: startSeconds, endSeconds: endSeconds, snapToMinute: true)
+  }
+
+  func updateTrimStart(from date: Date) {
+    setTrimRange(
+      startSeconds: globalSeconds(for: date),
+      endSeconds: trimEndSeconds
+    )
+  }
+
+  func updateTrimEnd(from date: Date) {
+    setTrimRange(
+      startSeconds: trimStartSeconds,
+      endSeconds: globalSeconds(for: date)
+    )
   }
 
   func beginSeek() {
     guard !isUserSeeking else { return }
     wasPlayingBeforeSeek = playback.isPlaying
     playback.pause()
-    seekWorkItem?.cancel()
     isUserSeeking = true
+    debug("seek begin at \(String(format: "%.2f", currentSeconds))s", category: "seek")
   }
 
   func endSeek() {
@@ -216,20 +410,17 @@ final class AppState: ObservableObject {
     isUserSeeking = false
     seekToGlobalTime(currentSeconds, exact: true)
     if wasPlayingBeforeSeek { playback.play() }
+    debug("seek end at \(String(format: "%.2f", currentSeconds))s", category: "seek")
   }
 
   func liveSeek(to seconds: Double) {
     guard isUserSeeking else { return }
-    seekWorkItem?.cancel()
-    let item = DispatchWorkItem { [weak self] in
-      self?.seekToGlobalTime(seconds, exact: false)
-    }
-    seekWorkItem = item
-    DispatchQueue.main.async(execute: item)
+    seekToGlobalTime(seconds, exact: false)
   }
 
   func ingestDroppedURLs(_ urls: [URL]) {
     guard !exporter.isExporting else { return }
+    debug("drop ingest: \(urls.map { $0.lastPathComponent }.joined(separator: ", "))", category: "index")
     indexSources(urls)
   }
 
@@ -241,17 +432,52 @@ final class AppState: ObservableObject {
     return "\(sourceURLs.count) inputs • \(sourceURLs[0].lastPathComponent) + \(sourceURLs.count - 1) more"
   }
 
+  var canReloadSources: Bool {
+    !sourceURLs.isEmpty && !isIndexing && !exporter.isExporting
+  }
+
+  var canExport: Bool {
+    !clipSets.isEmpty && !exporter.isExporting
+  }
+
+  var scanDateRangeSummary: String {
+    guard let minDate, let maxDate else { return "Detecting date range" }
+    return "\(formatShortDate(minDate)) – \(formatShortDate(maxDate))"
+  }
+
+  var scanDurationSummary: String {
+    durationString(seconds: totalDuration)
+  }
+
   var selectedSetsForExport: [ClipSet] {
-    normalizeRange()
-    let start = floorToMinute(selectedStart)
-    let end = floorToMinute(selectedEnd)
-    return clipSets.filter { $0.date >= start && $0.date <= end }
+    let startDate = trimStartDate
+    let endDate = trimEndDate
+    return clipSets.filter { set in
+      set.endDate > startDate && set.date < endDate
+    }
+  }
+
+  var totalMergedFileCount: Int {
+    clipSets.reduce(0) { $0 + $1.files.count }
+  }
+
+  var duplicateSummaryText: String {
+    var parts: [String] = []
+    if duplicateSummary.duplicateFileCount > 0 {
+      parts.append("\(duplicateSummary.duplicateFileCount) duplicate file\(duplicateSummary.duplicateFileCount == 1 ? "" : "s")")
+    }
+    if duplicateSummary.duplicateTimestampCount > 0 {
+      parts.append("\(duplicateSummary.duplicateTimestampCount) timestamp collision\(duplicateSummary.duplicateTimestampCount == 1 ? "" : "s")")
+    }
+    if duplicateSummary.overlapMinuteCount > 0 {
+      parts.append("\(duplicateSummary.overlapMinuteCount) overlap\(duplicateSummary.overlapMinuteCount == 1 ? "" : "s")")
+    }
+    return parts.joined(separator: " • ")
   }
 
   var selectedRangeDescription: String {
-    let sets = selectedSetsForExport
-    guard let first = sets.first, let last = sets.last else { return "No clips selected" }
-    return "\(formatDateTime(first.date))  ->  \(formatDateTime(last.date))"
+    guard !clipSets.isEmpty else { return "No clips selected" }
+    return "\(formatDateTime(trimStartDate))  ->  \(formatDateTime(trimEndDate))"
   }
 
   var partialSelectedSetCount: Int {
@@ -265,10 +491,22 @@ final class AppState: ObservableObject {
     }
   }
 
+  var trimStartDate: Date {
+    date(forGlobalSeconds: trimStartSeconds)
+  }
+
+  var trimEndDate: Date {
+    date(forGlobalSeconds: trimEndSeconds)
+  }
+
+  var selectedTrimDuration: Double {
+    max(0, trimEndSeconds - trimStartSeconds)
+  }
+
   var exportWarningsPreview: [String] {
     var warnings: [String] = []
     if partialSelectedSetCount > 0 {
-      warnings.append("\(partialSelectedSetCount) selected minute(s) are missing one or more enabled cameras and will use black placeholders.")
+      warnings.append("\(partialSelectedSetCount) selected clip span(s) are missing one or more enabled cameras and will use black placeholders.")
     }
     let hidden = camerasDetected.filter { !activeExportCameras.contains($0) }
     if !hidden.isEmpty {
@@ -287,81 +525,304 @@ final class AppState: ObservableObject {
   }
 
   func shutdownForTermination() {
-    seekWorkItem?.cancel()
     playback.stop()
     exporter.cancelExport()
+    deactivateSecurityScopedAccess()
   }
 
   private func updateCurrentSeconds(localSeconds: Double) {
     guard !isUserSeeking else { return }
-    let start = startOffsets[safe: currentIndex] ?? 0
     let local = max(0, localSeconds)
-    currentSeconds = start + local
-    updateOverlayAndTelemetry(index: currentIndex, localSeconds: local)
+    let global = min(totalDuration, currentSegmentStartSeconds + local)
+    currentSeconds = global
+    updateOverlayAndTelemetry(globalSeconds: global, clipIndex: currentSegmentClipIndex, localSeconds: local)
   }
 
   private func rebuildTimeline() {
-    startOffsets = []
-    var sum: Double = 0
-    for set in clipSets {
-      startOffsets.append(sum)
-      sum += max(1, set.duration)
+    guard !clipSets.isEmpty else {
+      timelineAnchorDate = nil
+      startOffsets = []
+      totalDuration = 0
+      timelineGapRanges = []
+      currentSegmentStartSeconds = 0
+      currentSegmentClipIndex = nil
+      return
     }
-    totalDuration = max(1, sum)
+
+    let anchor = clipSets.map(\.date).min() ?? clipSets[0].date
+    timelineAnchorDate = anchor
+    startOffsets = clipSets.map { max(0, $0.date.timeIntervalSince(anchor)) }
+    let maxEndDate = clipSets.map(\.endDate).max() ?? clipSets[0].endDate
+    totalDuration = max(1.0 / 30.0, maxEndDate.timeIntervalSince(anchor))
+    timelineGapRanges = TimelineGapRange.ranges(for: clipSets, minimumDuration: 5)
+    debug("timeline rebuilt: duration=\(Int(totalDuration)) gaps=\(timelineGapRanges.count)", category: "timeline")
+    currentSegmentStartSeconds = 0
+    currentSegmentClipIndex = clipSets.isEmpty ? nil : 0
   }
 
-  private func seekToGlobalTime(_ time: Double, exact: Bool = true) {
+  func rebuildTimelineForTesting() {
+    rebuildTimeline()
+  }
+
+  private func setTrimRange(startSeconds: Double, endSeconds: Double, snapToMinute: Bool = false) {
     guard !clipSets.isEmpty else { return }
-    let clamped = max(0, min(time, totalDuration - 0.001))
-    var idx = 0
-    for i in 0..<startOffsets.count {
-      if i + 1 < startOffsets.count {
-        if clamped >= startOffsets[i] && clamped < startOffsets[i + 1] {
-          idx = i
-          break
-        }
-      } else {
-        idx = i
+    let upperBound = max(totalDuration, 1 / 30)
+    let clampedStart = max(0, min(startSeconds, upperBound))
+    let clampedEnd = max(clampedStart, min(endSeconds, upperBound))
+
+    var normalizedStart = clampedStart
+    var normalizedEnd = max(clampedEnd, normalizedStart + (1 / 30))
+
+    if snapToMinute {
+      normalizedStart = snappedTrimBoundary(clampedStart, roundsUp: false)
+      normalizedEnd = snappedTrimBoundary(clampedEnd, roundsUp: true)
+      normalizedEnd = max(normalizedEnd, normalizedStart + 1)
+      normalizedEnd = min(normalizedEnd, upperBound)
+      if normalizedEnd <= normalizedStart {
+        normalizedEnd = min(upperBound, normalizedStart + 1)
       }
     }
-    let local = clamped - (startOffsets[safe: idx] ?? 0)
-    if idx != currentIndex {
-      currentIndex = idx
-      playback.load(set: clipSets[idx], startSeconds: local)
-      loadTelemetry(for: clipSets[idx])
-    } else {
-      playback.seek(to: local, exact: exact)
-    }
-    currentSeconds = clamped
-    updateOverlayAndTelemetry(index: idx, localSeconds: local)
+
+    trimStartSeconds = normalizedStart
+    trimEndSeconds = normalizedEnd
+    selectedStart = trimStartDate
+    selectedEnd = trimEndDate
   }
 
-  private func loadTelemetry(for set: ClipSet) {
-    let url = set.file(for: .front) ?? set.file(for: .back) ?? set.files.values.first
+  private func snappedTrimBoundary(_ seconds: Double, roundsUp: Bool) -> Double {
+    let minute = 60.0
+    let clamped = max(0, min(seconds, totalDuration))
+    let rounded = roundsUp
+      ? ceil(clamped / minute) * minute
+      : floor(clamped / minute) * minute
+    return max(0, min(rounded, totalDuration))
+  }
+
+  private func date(forGlobalSeconds seconds: Double) -> Date {
+    guard let anchor = timelineAnchorDate else { return Date() }
+    let clamped = max(0, min(seconds, totalDuration))
+    return anchor.addingTimeInterval(clamped)
+  }
+
+  private func globalSeconds(for date: Date) -> Double {
+    guard let anchor = timelineAnchorDate else { return 0 }
+    let seconds = date.timeIntervalSince(anchor)
+    return max(0, min(seconds, totalDuration))
+  }
+
+  private func clipStartOffset(at index: Int) -> Double {
+    startOffsets[safe: index] ?? 0
+  }
+
+  private func activeClipIndex(at globalSeconds: Double) -> Int? {
+    guard !clipSets.isEmpty else { return nil }
+    let clamped = max(0, min(globalSeconds, totalDuration))
+    var active: Int?
+    for index in clipSets.indices {
+      let start = clipStartOffset(at: index)
+      let end = start + clipSets[index].duration
+      if clamped >= start && clamped < end {
+        active = index
+      } else if abs(clamped - end) < 0.001 {
+        active = index
+      }
+    }
+    return active
+  }
+
+  private func nearestClipIndex(to globalSeconds: Double) -> Int {
+    if let active = activeClipIndex(at: globalSeconds) {
+      return active
+    }
+    var candidate = 0
+    for index in clipSets.indices {
+      if clipStartOffset(at: index) <= globalSeconds {
+        candidate = index
+      } else {
+        break
+      }
+    }
+    return candidate
+  }
+
+  private func timelineSegment(at globalSeconds: Double) -> TimelinePlaybackSegment {
+    guard !clipSets.isEmpty else {
+      return TimelinePlaybackSegment(
+        clipIndex: nil,
+        startSeconds: 0,
+        duration: max(1.0 / 30.0, totalDuration)
+      )
+    }
+
+    let clamped = max(0, min(globalSeconds, totalDuration))
+    if let clipIndex = activeClipIndex(at: clamped) {
+      return TimelinePlaybackSegment(
+        clipIndex: clipIndex,
+        startSeconds: clipStartOffset(at: clipIndex),
+        duration: max(1.0 / 30.0, clipSets[clipIndex].duration)
+      )
+    }
+
+    var previousCoveredEnd: Double = 0
+    var nextStart: Double = totalDuration
+    for index in clipSets.indices {
+      let start = clipStartOffset(at: index)
+      let end = start + clipSets[index].duration
+      if start <= clamped {
+        previousCoveredEnd = max(previousCoveredEnd, end)
+      } else {
+        nextStart = start
+        break
+      }
+    }
+
+    let startSeconds = min(max(previousCoveredEnd, 0), totalDuration)
+    let endSeconds = max(startSeconds + (1.0 / 30.0), min(nextStart, totalDuration))
+    return TimelinePlaybackSegment(
+      clipIndex: nil,
+      startSeconds: startSeconds,
+      duration: endSeconds - startSeconds
+    )
+  }
+
+  private func advanceToNextTimelineSegment() {
+    guard totalDuration > 0 else { return }
+    let epsilon = 1.0 / 30.0
+    let nextStart = currentSegmentStartSeconds + playback.currentDuration + epsilon
+    guard nextStart < totalDuration else {
+      currentSeconds = totalDuration
+      updateOverlayAndTelemetry(
+        globalSeconds: totalDuration,
+        clipIndex: currentSegmentClipIndex,
+        localSeconds: playback.currentDuration
+      )
+      return
+    }
+    seekToGlobalTime(nextStart, exact: true, autoplay: true)
+  }
+
+  private func seekToGlobalTime(_ time: Double, exact: Bool = true, autoplay: Bool = false) {
+    guard !clipSets.isEmpty else { return }
+    let upperBound = max(0, totalDuration - (1.0 / 30.0))
+    let clamped = max(0, min(time, upperBound))
+    let segment = timelineSegment(at: clamped)
+    let segmentChanged = !segment.matchesLoadedSegment(
+      clipIndex: currentSegmentClipIndex,
+      startSeconds: currentSegmentStartSeconds,
+      duration: playback.currentDuration
+    )
+    currentSegmentStartSeconds = segment.startSeconds
+    currentSegmentClipIndex = segment.clipIndex
+    let local = max(0, min(clamped - segment.startSeconds, segment.duration))
+
+    if segmentChanged {
+      if let clipIndex = segment.clipIndex {
+        currentIndex = clipIndex
+        playback.load(set: clipSets[clipIndex], startSeconds: local)
+        if !exact {
+          debug("seek live clip \(clipIndex) local=\(String(format: "%.2f", local))", category: "seek")
+        } else {
+          debug("seek exact clip \(clipIndex) local=\(String(format: "%.2f", local))", category: "seek")
+        }
+        if exact {
+          loadTelemetry(for: clipSets[clipIndex])
+        } else {
+          clearTelemetry()
+        }
+      } else {
+        currentIndex = nearestClipIndex(to: clamped)
+        playback.loadGap(duration: segment.duration, startSeconds: local)
+        debug("seek \(exact ? "exact" : "live") gap start=\(String(format: "%.2f", segment.startSeconds)) duration=\(String(format: "%.2f", segment.duration))", category: "seek")
+        clearTelemetry()
+      }
+    } else {
+      if let clipIndex = segment.clipIndex {
+        currentIndex = clipIndex
+        if exact, telemetryURL != clipSets[clipIndex].file(for: .front) ?? clipSets[clipIndex].file(for: .back) ?? clipSets[clipIndex].files.values.first {
+          loadTelemetry(for: clipSets[clipIndex])
+        }
+      } else {
+        currentIndex = nearestClipIndex(to: clamped)
+        if exact {
+          clearTelemetry()
+        }
+      }
+      playback.seek(to: local, exact: exact)
+    }
+
+    currentSeconds = clamped
+    updateOverlayAndTelemetry(globalSeconds: clamped, clipIndex: segment.clipIndex, localSeconds: local)
+
+    if autoplay {
+      playback.play()
+    }
+  }
+
+  private func clearTelemetry() {
+    telemetryTimeline = nil
+    telemetryURL = nil
+    telemetryText = ""
+  }
+
+  private func loadTelemetry(for set: ClipSet?) {
+    let url = set?.file(for: .front) ?? set?.file(for: .back) ?? set?.files.values.first
     telemetryTimeline = nil
     telemetryURL = url
     telemetryText = ""
     guard let fileURL = url else { return }
+    debug("telemetry load \(fileURL.lastPathComponent)", category: "telemetry")
     DispatchQueue.global(qos: .utility).async {
       let timeline = try? TelemetryParser.parseTimeline(url: fileURL)
       DispatchQueue.main.async {
         guard self.telemetryURL == fileURL else { return }
         self.telemetryTimeline = timeline
-        let local = self.currentSeconds - (self.startOffsets[safe: self.currentIndex] ?? 0)
-        self.updateOverlayAndTelemetry(index: self.currentIndex, localSeconds: local)
+        self.debug(
+          timeline == nil ? "telemetry unavailable for \(fileURL.lastPathComponent)" : "telemetry ready for \(fileURL.lastPathComponent)",
+          category: "telemetry"
+        )
+        let local = max(0, self.currentSeconds - self.currentSegmentStartSeconds)
+        self.updateOverlayAndTelemetry(
+          globalSeconds: self.currentSeconds,
+          clipIndex: self.currentSegmentClipIndex,
+          localSeconds: local
+        )
       }
     }
   }
 
-  private func updateOverlayAndTelemetry(index: Int, localSeconds: Double) {
-    let safeLocal = max(0, localSeconds)
-    let base = clipSets[safe: index]?.date ?? Date()
-    overlayText = overlayFormatter.string(from: base.addingTimeInterval(safeLocal))
-    if let timeline = telemetryTimeline {
-      let frame = timeline.closest(to: safeLocal * 1000.0)
-      telemetryText = formatTelemetry(frame?.sei)
-    } else {
+  private func updateOverlayAndTelemetry(globalSeconds: Double, clipIndex: Int?, localSeconds: Double) {
+    overlayText = TeslaCamFormatters.fullDateTime.string(from: date(forGlobalSeconds: globalSeconds))
+    guard clipIndex != nil, let timeline = telemetryTimeline else {
       telemetryText = ""
+      return
+    }
+    let safeLocal = max(0, localSeconds)
+    let frame = timeline.closest(to: safeLocal * 1000.0)
+    telemetryText = formatTelemetry(frame?.sei)
+  }
+
+  private func expectedCoverageCameras(for set: ClipSet) -> Set<Camera> {
+    let present = Set(set.files.keys)
+    let containsClassicSides = !present.intersection([.left_repeater, .right_repeater]).isEmpty
+    let containsSixCamMarkers = !present.intersection([.left, .right, .left_pillar, .right_pillar]).isEmpty
+
+    if containsClassicSides && !containsSixCamMarkers {
+      return Set(Camera.hw3ClassicOrder)
+    }
+    if containsSixCamMarkers && !containsClassicSides {
+      return Set(Camera.hw4SixCamOrder)
+    }
+    if containsClassicSides && containsSixCamMarkers {
+      return present
+    }
+
+    switch layoutProfile {
+    case .hw3FourCam:
+      return Set(Camera.hw3ClassicOrder)
+    case .hw4SixCam:
+      return Set(Camera.hw4SixCamOrder)
+    case .mixedUnknown:
+      return present
     }
   }
 
@@ -369,6 +830,8 @@ final class AppState: ObservableObject {
     guard let s = sei else { return "" }
     let speedKmh = Double(s.vehicleSpeedMps) * 3.6
     let speed = String(format: "%.1f km/h", speedKmh)
+    let pedal = String(format: "%.0f%%", max(0, Double(s.acceleratorPedalPosition)))
+    let steering = String(format: "%.0f°", Double(s.steeringWheelAngle))
     let gear: String
     switch s.gearState {
     case .park: gear = "P"
@@ -383,12 +846,13 @@ final class AppState: ObservableObject {
     case .autosteer: ap = "Autosteer"
     case .tacc: ap = "TACC"
     }
-    return "Speed: \(speed)  Gear: \(gear)  AP: \(ap)  Brake: \(s.brakeApplied ? "On" : "Off")"
+    return "Speed: \(speed)  Pedal: \(pedal)  Steer: \(steering)  Gear: \(gear)  AP: \(ap)  Brake: \(s.brakeApplied ? "On" : "Off")"
   }
 
-  private func orderCameras(_ cams: [Camera]) -> [Camera] {
-    let priority: [Camera] = [.front, .back, .left_repeater, .right_repeater, .left_pillar, .right_pillar]
-    return priority.filter { cams.contains($0) }
+  private func orderCameras(_ cams: [Camera], profile: CameraLayoutProfile) -> [Camera] {
+    let ordered = profile.orderedCameras.filter { cams.contains($0) }
+    let leftovers = cams.filter { !ordered.contains($0) }
+    return ordered + leftovers
   }
 
   private func normalizeSources(_ urls: [URL]) -> [URL] {
@@ -407,13 +871,98 @@ final class AppState: ObservableObject {
     return out
   }
 
+  private func rememberLastSources(_ urls: [URL]) {
+    let bookmarks = urls.compactMap { url -> Data? in
+      try? url.bookmarkData(
+        options: [.withSecurityScope],
+        includingResourceValuesForKeys: nil,
+        relativeTo: nil
+      )
+    }
+    UserDefaults.standard.set(bookmarks, forKey: StorageKey.lastSourceBookmarks)
+  }
+
+  @discardableResult
+  private func restoreLastSourcesIfPossible() -> Bool {
+    guard let bookmarks = UserDefaults.standard.array(forKey: StorageKey.lastSourceBookmarks) as? [Data],
+          !bookmarks.isEmpty else {
+      return false
+    }
+
+    var restored: [URL] = []
+    var refreshedBookmarks: [Data] = []
+    for bookmark in bookmarks {
+      var stale = false
+      guard let url = try? URL(
+        resolvingBookmarkData: bookmark,
+        options: [.withSecurityScope],
+        relativeTo: nil,
+        bookmarkDataIsStale: &stale
+      ) else {
+        continue
+      }
+      guard FileManager.default.fileExists(atPath: url.path) else { continue }
+      restored.append(url)
+      if stale,
+         let refreshed = try? url.bookmarkData(
+          options: [.withSecurityScope],
+          includingResourceValuesForKeys: nil,
+          relativeTo: nil
+         ) {
+        refreshedBookmarks.append(refreshed)
+      } else {
+        refreshedBookmarks.append(bookmark)
+      }
+    }
+
+    guard !restored.isEmpty else { return false }
+    if !refreshedBookmarks.isEmpty {
+      UserDefaults.standard.set(refreshedBookmarks, forKey: StorageKey.lastSourceBookmarks)
+    }
+    indexSources(restored)
+    return true
+  }
+
+  private func activateSecurityScopedAccess(for urls: [URL]) {
+    deactivateSecurityScopedAccess()
+    activeSecurityScopedURLs = urls.filter { url in
+      url.startAccessingSecurityScopedResource()
+    }
+  }
+
+  private func deactivateSecurityScopedAccess() {
+    for url in activeSecurityScopedURLs {
+      url.stopAccessingSecurityScopedResource()
+    }
+    activeSecurityScopedURLs.removeAll()
+  }
+
   private func defaultExportFilename() -> String {
-    let sets = selectedSetsForExport
-    guard let first = sets.first, let last = sets.last else {
+    guard !clipSets.isEmpty else {
       return "teslacam_\(exportPreset.outputLabel).\(exportPreset.defaultExtension)"
     }
-    let suffix = first.timestamp == last.timestamp ? first.timestamp : "\(first.timestamp)_to_\(last.timestamp)"
+    let suffix = "\(overlayFilenameStamp(trimStartDate))_to_\(overlayFilenameStamp(trimEndDate))"
     return "teslacam_\(suffix)_\(exportPreset.outputLabel).\(exportPreset.defaultExtension)"
+  }
+
+  private func exportRange(to chosenURL: URL) {
+    guard let request = makeExportRequest(for: chosenURL) else {
+      errorMessage = "No clips found in the selected range."
+      showError = true
+      return
+    }
+    let preflight = exporter.preflightSummary(request: request)
+    if !preflight.canExport {
+      errorMessage = preflight.blockingIssues.map(\.message).joined(separator: "\n")
+      showError = true
+      return
+    }
+    debug("export request: preset=\(request.preset.rawValue) cameras=\(request.enabledCameras.map { $0.rawValue }.sorted().joined(separator: ",")) duration=\(String(format: "%.2f", request.totalDuration))", category: "export")
+    exporter.export(request: request)
+  }
+
+  private func debug(_ message: String, category: String = "app") {
+    debugLog.record(message, category: category)
   }
 
   private func buildOutputURL(from chosenURL: URL) -> URL {
@@ -433,13 +982,20 @@ final class AppState: ObservableObject {
   private func makeExportRequest(for chosenURL: URL) -> ExportRequest? {
     let sets = selectedSetsForExport
     guard !sets.isEmpty else { return nil }
-    let useSix = camerasDetected.count >= 6
+    let enabled = activeExportCameras
+    let useExpandedGrid = enabled.count > 4 || sets.contains { set in
+      !Set(set.files.keys).intersection([.left, .right, .left_pillar, .right_pillar]).isEmpty
+    }
     return ExportRequest(
       sets: sets,
       outputURL: buildOutputURL(from: chosenURL),
-      useSixCam: useSix,
+      useSixCam: useExpandedGrid,
       preset: exportPreset,
-      enabledCameras: activeExportCameras,
+      enabledCameras: enabled,
+      trimStartSeconds: trimStartSeconds,
+      trimEndSeconds: trimEndSeconds,
+      trimStartDate: trimStartDate,
+      trimEndDate: trimEndDate,
       selectedRangeText: selectedRangeDescription,
       partialClipCount: partialSelectedSetCount
     )
@@ -453,33 +1009,186 @@ final class AppState: ObservableObject {
     var missingCameraCounts: [Camera: Int] = [:]
 
     for (index, set) in sets.enumerated() {
-      let count = set.files.count
-      if count < 6 {
-        partialSetCount += 1
-      }
-      if count >= 6 {
-        six += 1
-      } else {
+      let expected = expectedCoverageCameras(for: set)
+      let present = Set(set.files.keys)
+
+      if expected == Set(Camera.hw3ClassicOrder) {
         four += 1
+      } else if expected == Set(Camera.hw4SixCamOrder) {
+        six += 1
       }
-      for camera in Camera.allCases where set.files[camera] == nil {
-        missingCameraCounts[camera, default: 0] += 1
+
+      if !expected.isEmpty {
+        let missing = expected.subtracting(present)
+        if !missing.isEmpty {
+          partialSetCount += 1
+          for camera in missing {
+            missingCameraCounts[camera, default: 0] += 1
+          }
+        }
       }
+
       if let next = sets[safe: index + 1] {
-        let delta = next.date.timeIntervalSince(set.date)
-        if delta > 61 {
+        let delta = next.date.timeIntervalSince(set.endDate)
+        if delta > 1 {
           gapCount += 1
         }
       }
     }
 
+    let timelineMinutes: Int
+    if let minStart = sets.map(\.date).min(), let maxEnd = sets.map(\.endDate).max() {
+      timelineMinutes = max(1, Int((maxEnd.timeIntervalSince(minStart) / 60).rounded(.up)))
+    } else {
+      timelineMinutes = max(1, Int((sets.reduce(0) { $0 + $1.duration } / 60).rounded(.up)))
+    }
+
     return ExportHealthSummary(
-      totalMinutes: sets.count,
+      totalMinutes: timelineMinutes,
       gapCount: gapCount,
       partialSetCount: partialSetCount,
       fourCameraSetCount: four,
       sixCameraSetCount: six,
       missingCameraCounts: missingCameraCounts
     )
+  }
+
+  private func presentDuplicateResolverIfNeeded(for index: ClipIndex) {
+    guard index.duplicateSummary.hasConflicts else { return }
+    guard duplicatePolicy != .mergeByTime || showDuplicateResolverForConflicts else { return }
+    var parts: [String] = []
+    if index.duplicateSummary.duplicateTimestampCount > 0 {
+      parts.append("\(index.duplicateSummary.duplicateTimestampCount) timestamp collision(s)")
+    }
+    if index.duplicateSummary.overlapMinuteCount > 0 {
+      parts.append("\(index.duplicateSummary.overlapMinuteCount) overlap(s)")
+    }
+    duplicateResolverMessage = parts.joined(separator: " • ")
+    isDuplicateResolverPresented = true
+  }
+
+  #if DEBUG
+  private func applyDebugLaunchModeIfNeeded() -> Bool {
+    let environment = ProcessInfo.processInfo.environment
+
+    if let mode = environment[DebugEnvironment.uiTestMode]?.lowercased() {
+      switch mode {
+      case "blank":
+        return true
+      case "sample":
+        loadSampleTimeline()
+        return true
+      default:
+        break
+      }
+    }
+
+    guard let raw = environment[DebugEnvironment.source], !raw.isEmpty else {
+      return false
+    }
+
+    let urls = raw
+      .split(separator: ":")
+      .map { URL(fileURLWithPath: String($0)) }
+    guard !urls.isEmpty else { return false }
+    indexSources(urls)
+    return true
+  }
+
+  private func debugOutputURL() -> URL? {
+    let environment = ProcessInfo.processInfo.environment
+    guard environment[DebugEnvironment.uiTestMode] != nil else {
+      return nil
+    }
+    let fileManager = FileManager.default
+    let fallbackDirectory = fileManager.temporaryDirectory
+
+    if let raw = environment[DebugEnvironment.exportDirectory], !raw.isEmpty {
+      let candidate = URL(fileURLWithPath: raw, isDirectory: true)
+      if ensureWritableDirectory(candidate, fileManager: fileManager) {
+        return candidate.appendingPathComponent(defaultExportFilename())
+      }
+    }
+
+    return fallbackDirectory.appendingPathComponent(defaultExportFilename())
+  }
+
+  private func ensureWritableDirectory(_ directory: URL, fileManager: FileManager) -> Bool {
+    guard (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
+      return false
+    }
+    let probeURL = directory.appendingPathComponent(".teslacam-ui-test-\(UUID().uuidString)")
+    let created = fileManager.createFile(atPath: probeURL.path, contents: Data())
+    if created {
+      try? fileManager.removeItem(at: probeURL)
+    }
+    return created
+  }
+  #endif
+
+  private func presentOpenPanel(_ panel: NSOpenPanel, completion: @escaping ([URL]) -> Void) {
+    if let window = NSApp.keyWindow {
+      panel.beginSheetModal(for: window) { response in
+        guard response == .OK else { return }
+        completion(panel.urls)
+      }
+      return
+    }
+
+    if panel.runModal() == .OK {
+      completion(panel.urls)
+    }
+  }
+
+  private func presentSavePanel(_ panel: NSSavePanel, completion: @escaping (URL) -> Void) {
+    if let window = NSApp.keyWindow {
+      panel.beginSheetModal(for: window) { response in
+        guard response == .OK, let url = panel.url else { return }
+        completion(url)
+      }
+      return
+    }
+
+    if panel.runModal() == .OK, let url = panel.url {
+      completion(url)
+    }
+  }
+
+  private func loadSampleTimeline() {
+    let base = Date()
+    let sampleSets = [
+      ClipSet(timestamp: "sample_1", date: base, duration: 10, files: [:]),
+      ClipSet(timestamp: "sample_2", date: base.addingTimeInterval(60), duration: 10, files: [:]),
+      ClipSet(timestamp: "sample_3", date: base.addingTimeInterval(120), duration: 10, files: [:])
+    ]
+    sourceURLs = []
+    clipSets = sampleSets
+    minDate = sampleSets.first?.date
+    maxDate = sampleSets.last?.endDate
+    layoutProfile = .hw3FourCam
+    camerasDetected = [.front, .back, .left_repeater, .right_repeater]
+    selectedExportCameras = Set(camerasDetected)
+    exportPreset = .fastHEVC
+    currentIndex = 0
+    overlayText = formatDateTime(base)
+    rebuildTimeline()
+    setTrimRange(startSeconds: 0, endSeconds: totalDuration, snapToMinute: true)
+  }
+
+  private func durationString(seconds: Double) -> String {
+    let totalMinutes = max(0, Int((seconds / 60).rounded()))
+    let hours = totalMinutes / 60
+    let minutes = totalMinutes % 60
+    if hours == 0 {
+      return "\(minutes)m total"
+    }
+    return "\(hours)h \(minutes)m total"
+  }
+
+  private func overlayFilenameStamp(_ date: Date) -> String {
+    TeslaCamFormatters.fullDateTime
+      .string(from: date)
+      .replacingOccurrences(of: ":", with: "-")
+      .replacingOccurrences(of: " ", with: "_")
   }
 }
