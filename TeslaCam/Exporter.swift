@@ -1,3 +1,7 @@
+// Legacy export path.
+// Kept as repo reference only.
+// NativeExportController is the shipping app path.
+
 import Foundation
 import Combine
 import AppKit
@@ -121,7 +125,7 @@ struct ExportJobSnapshot: Identifiable {
   }
 }
 
-private struct MutableExportSession {
+struct MutableExportSession {
   let id: UUID
   let request: ExportRequest
   var phase: ExportJobPhase
@@ -186,6 +190,7 @@ final class ExportController: ObservableObject {
   private var runningProcess: Process?
   private var runningReadHandle: FileHandle?
   private var activeSession: MutableExportSession?
+  private var activeOutputScopeURL: URL?
   private var outputBuffer = ""
   private var cancelRequested = false
   private lazy var logFileURL: URL = {
@@ -227,35 +232,19 @@ final class ExportController: ObservableObject {
 
     guard bundledScriptURL(useSixCam: request.useSixCam) != nil else {
       blocking.append(ExportIssue(message: "Composer script is missing from the app bundle.", isBlocking: true))
-      return ExportPreflightSummary(blockingIssues: blocking, warnings: warnings)
+      return ExportPreflightSummary(blockingIssues: blocking, warnings: warnings, hasWriteAccess: false, resolvedOutputURL: request.outputURL, requiresUserSavePanel: false)
     }
     guard bundledFfmpegPaths() != nil else {
       blocking.append(ExportIssue(message: "Bundled ffmpeg/ffprobe tools are missing from the app bundle.", isBlocking: true))
-      return ExportPreflightSummary(blockingIssues: blocking, warnings: warnings)
+      return ExportPreflightSummary(blockingIssues: blocking, warnings: warnings, hasWriteAccess: false, resolvedOutputURL: request.outputURL, requiresUserSavePanel: false)
     }
 
     if request.sets.isEmpty {
       blocking.append(ExportIssue(message: "There are no clips in the selected export range.", isBlocking: true))
     }
 
-    let outputDir = request.outputURL.deletingLastPathComponent()
-    var isDir: ObjCBool = false
-    if !fm.fileExists(atPath: outputDir.path, isDirectory: &isDir) {
-      do {
-        try fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
-      } catch {
-        blocking.append(ExportIssue(message: "Cannot create output directory: \(outputDir.path)", isBlocking: true))
-      }
-    } else if !isDir.boolValue {
-      blocking.append(ExportIssue(message: "Output parent path is not a directory.", isBlocking: true))
-    }
-
-    if !fm.isWritableFile(atPath: outputDir.path) {
-      blocking.append(ExportIssue(message: "Output directory is not writable: \(outputDir.path)", isBlocking: true))
-    }
-
     if request.partialClipCount > 0 {
-      warnings.append(ExportIssue(message: "\(request.partialClipCount) selected minute(s) are missing one or more cameras and will export with black placeholders.", isBlocking: false))
+      warnings.append(ExportIssue(message: "\(request.partialClipCount) selected clip span(s) are missing one or more cameras and will export with black placeholders.", isBlocking: false))
     }
 
     let hiddenCameras = Camera.allCases.filter { !request.enabledCameras.contains($0) }
@@ -263,15 +252,17 @@ final class ExportController: ObservableObject {
       warnings.append(ExportIssue(message: "Hidden cameras will export as black tiles: \(hiddenCameras.map(\.displayName).joined(separator: ", ")).", isBlocking: false))
     }
 
-    return ExportPreflightSummary(blockingIssues: blocking, warnings: warnings)
+    return ExportPreflightSummary(blockingIssues: blocking, warnings: warnings, hasWriteAccess: true, resolvedOutputURL: request.outputURL, requiresUserSavePanel: false)
   }
 
   func export(request: ExportRequest) {
     guard !isExporting else { return }
+    beginOutputScope(for: request.outputURL)
 
     let preflight = preflightSummary(request: request)
     guard preflight.canExport else {
       lastError = preflight.blockingIssues.map(\.message).joined(separator: "\n")
+      endOutputScope()
       return
     }
 
@@ -547,6 +538,7 @@ final class ExportController: ObservableObject {
         }
         self.appendLog("\nDone: \(outputURL.path)\n")
         self.cleanupTempRootIfNeeded(keepFiles: false)
+        self.endOutputScope()
         self.publishCurrentSession()
       } else {
         let category = self.activeSession?.failureCategory ?? .unknown
@@ -565,6 +557,7 @@ final class ExportController: ObservableObject {
         }
         self.lastError = reason
         self.appendLog("\nComposer exited with status \(process.terminationStatus).\n")
+        self.endOutputScope()
         self.publishCurrentSession()
       }
     }
@@ -601,6 +594,7 @@ final class ExportController: ObservableObject {
       $0.isIndeterminate = false
     }
     lastError = message
+    endOutputScope()
     publishCurrentSession()
   }
 
@@ -622,6 +616,7 @@ final class ExportController: ObservableObject {
       $0.isIndeterminate = false
     }
     lastError = message
+    endOutputScope()
     publishCurrentSession()
   }
 
@@ -639,6 +634,7 @@ final class ExportController: ObservableObject {
       $0.isIndeterminate = false
     }
     cleanupTempRootIfNeeded(keepFiles: false)
+    endOutputScope()
     publishCurrentSession()
   }
 
@@ -782,6 +778,18 @@ final class ExportController: ObservableObject {
       exportHistory.insert(snapshot, at: 0)
       activeSession = session
     }
+  }
+
+  private func beginOutputScope(for outputURL: URL) {
+    endOutputScope()
+    if outputURL.startAccessingSecurityScopedResource() {
+      activeOutputScopeURL = outputURL
+    }
+  }
+
+  private func endOutputScope() {
+    activeOutputScopeURL?.stopAccessingSecurityScopedResource()
+    activeOutputScopeURL = nil
   }
 
   private func appendLog(_ text: String) {

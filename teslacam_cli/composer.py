@@ -7,8 +7,25 @@ from tempfile import mkdtemp
 from typing import Dict, Iterable, List, Optional
 
 from .ffmpeg_tools import ffconcat_path, probe_dimensions, probe_duration, probe_fps, run_command
-from .models import Camera, ClipSet, ComposePlan, Dimensions, LayoutSpec, SelectedSet
+from .models import Camera, ClipSet, ComposePlan, Dimensions, LayoutSpec, MIXED_CAMERA_ORDER, SelectedSet
 
+
+def clip_set_duration(
+    clip_set: ClipSet,
+    ffprobe: Path,
+    duration_cache: Optional[Dict[Path, float]] = None,
+) -> float:
+    max_duration = 0.0
+    for clip_path in clip_set.files.values():
+        if not clip_path.exists():
+            continue
+        duration = duration_cache.get(clip_path) if duration_cache is not None else None
+        if duration is None:
+            duration = probe_duration(ffprobe, clip_path)
+            if duration_cache is not None:
+                duration_cache[clip_path] = duration
+        max_duration = max(max_duration, duration)
+    return max_duration or 60.0
 
 
 def select_clip_sets(
@@ -21,12 +38,7 @@ def select_clip_sets(
     duration_cache: Dict[Path, float] = {}
 
     for clip_set in clip_sets:
-        source = first_existing_clip(clip_set)
-        duration = duration_cache.get(source) if source else None
-        if duration is None:
-            duration = probe_duration(ffprobe, source) if source else 60.0
-            if source:
-                duration_cache[source] = duration
+        duration = clip_set_duration(clip_set, ffprobe, duration_cache)
         clip_end = clip_set.start_time + timedelta(seconds=duration)
         if clip_set.start_time >= end_time or clip_end <= start_time:
             continue
@@ -47,14 +59,7 @@ def select_clip_sets(
 
 
 def first_existing_clip(clip_set: ClipSet) -> Optional[Path]:
-    for camera in (
-        Camera.FRONT,
-        Camera.BACK,
-        Camera.LEFT_REPEATER,
-        Camera.RIGHT_REPEATER,
-        Camera.LEFT_PILLAR,
-        Camera.RIGHT_PILLAR,
-    ):
+    for camera in MIXED_CAMERA_ORDER:
         candidate = clip_set.files.get(camera)
         if candidate and candidate.exists():
             return candidate

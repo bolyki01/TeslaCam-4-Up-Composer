@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Tuple
 
-from .models import Camera, CellSpec, Dimensions, LayoutKind, LayoutSpec
+from .models import Camera, CellSpec, Dimensions, HW3_CAMERA_ORDER, HW4_CAMERA_ORDER, LayoutKind, LayoutSpec
 
 PROFILE_LABELS = {
     "auto": "Auto-detect from clips",
     "legacy4": "Tesla legacy 4-camera layout",
-    "sixcam": "Tesla 6-camera layout (pillar clips present)",
+    "sixcam": "Tesla 6-camera layout (new side + pillar clips)",
 }
 
 _LAYOUT_GRIDS: Dict[LayoutKind, Dict[Camera, Tuple[int, int]]] = {
@@ -18,12 +18,12 @@ _LAYOUT_GRIDS: Dict[LayoutKind, Dict[Camera, Tuple[int, int]]] = {
         Camera.RIGHT_REPEATER: (1, 1),
     },
     LayoutKind.SIX_UP: {
-        Camera.FRONT: (0, 0),
-        Camera.BACK: (0, 1),
-        Camera.LEFT_REPEATER: (0, 2),
-        Camera.RIGHT_REPEATER: (1, 0),
-        Camera.LEFT_PILLAR: (1, 1),
-        Camera.RIGHT_PILLAR: (1, 2),
+        Camera.FRONT: (0, 1),
+        Camera.LEFT: (1, 0),
+        Camera.BACK: (1, 1),
+        Camera.RIGHT: (1, 2),
+        Camera.LEFT_PILLAR: (2, 0),
+        Camera.RIGHT_PILLAR: (2, 2),
     },
 }
 
@@ -37,15 +37,16 @@ def detect_layout_kind(profile: str, available_cameras: Iterable[Camera]) -> Lay
         return LayoutKind.FOUR_UP
     if profile == "sixcam":
         return LayoutKind.SIX_UP
-    if Camera.LEFT_PILLAR in camera_set or Camera.RIGHT_PILLAR in camera_set:
+    if Camera.LEFT in camera_set or Camera.RIGHT in camera_set or Camera.LEFT_PILLAR in camera_set or Camera.RIGHT_PILLAR in camera_set:
         return LayoutKind.SIX_UP
     return LayoutKind.FOUR_UP
 
 
 
 def expected_cameras(layout: LayoutKind) -> List[Camera]:
-    grid = _LAYOUT_GRIDS[layout]
-    return [camera for camera, _ in sorted(grid.items(), key=lambda item: item[1])]
+    if layout == LayoutKind.SIX_UP:
+        return list(HW4_CAMERA_ORDER)
+    return list(HW3_CAMERA_ORDER)
 
 
 
@@ -69,6 +70,25 @@ def build_layout(layout: LayoutKind, dimensions_by_camera: Dict[Camera, Dimensio
     grid = _LAYOUT_GRIDS[layout]
     row_count = max(position[0] for position in grid.values()) + 1
     col_count = max(position[1] for position in grid.values()) + 1
+
+    if layout == LayoutKind.SIX_UP:
+        tile_width = max(dim.width for dim in dimensions_by_camera.values())
+        tile_height = max(dim.height for dim in dimensions_by_camera.values())
+        cell_by_camera: Dict[Camera, CellSpec] = {}
+        for camera, (row, col) in grid.items():
+            cell_by_camera[camera] = CellSpec(
+                width=tile_width,
+                height=tile_height,
+                x=col * tile_width,
+                y=row * tile_height,
+            )
+        return LayoutSpec(
+            kind=layout,
+            cameras=expected_cameras(layout),
+            cell_by_camera=cell_by_camera,
+            canvas_width=tile_width * col_count,
+            canvas_height=tile_height * row_count,
+        )
 
     row_heights = [0 for _ in range(row_count)]
     col_widths = [0 for _ in range(col_count)]

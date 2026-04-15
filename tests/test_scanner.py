@@ -11,8 +11,13 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(normalize_camera("front"), Camera.FRONT)
         self.assertEqual(normalize_camera("rear"), Camera.BACK)
         self.assertEqual(normalize_camera("left-repeater"), Camera.LEFT_REPEATER)
+        self.assertEqual(normalize_camera("left_rear"), Camera.LEFT_REPEATER)
+        self.assertEqual(normalize_camera("left"), Camera.LEFT)
+        self.assertEqual(normalize_camera("right_repeater"), Camera.RIGHT_REPEATER)
         self.assertEqual(normalize_camera("right_rear"), Camera.RIGHT_REPEATER)
+        self.assertEqual(normalize_camera("right"), Camera.RIGHT)
         self.assertEqual(normalize_camera("left-pillar"), Camera.LEFT_PILLAR)
+        self.assertEqual(normalize_camera("right_pillar"), Camera.RIGHT_PILLAR)
         self.assertIsNone(normalize_camera("unknown_camera"))
 
     def test_scan_groups_by_timestamp(self):
@@ -32,6 +37,25 @@ class ScannerTests(unittest.TestCase):
             self.assertIn(Camera.BACK, sets[0].files)
             self.assertIn(Camera.LEFT_REPEATER, sets[0].files)
             self.assertIn(Camera.RIGHT_REPEATER, sets[0].files)
+
+    def test_scan_groups_hw4_names(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for name in [
+                "2026-01-01_00-00-00-front.mp4",
+                "2026-01-01_00-00-00-rear.mp4",
+                "2026-01-01_00-00-00-left.mp4",
+                "2026-01-01_00-00-00-right.mp4",
+                "2026-01-01_00-00-00-left_pillar.mp4",
+                "2026-01-01_00-00-00-right_pillar.mp4",
+            ]:
+                (root / name).write_bytes(b"x")
+            sets = scan_clips(root)
+            self.assertEqual(len(sets), 1)
+            self.assertIn(Camera.LEFT, sets[0].files)
+            self.assertIn(Camera.RIGHT, sets[0].files)
+            self.assertIn(Camera.LEFT_PILLAR, sets[0].files)
+            self.assertIn(Camera.RIGHT_PILLAR, sets[0].files)
 
 
 if __name__ == "__main__":

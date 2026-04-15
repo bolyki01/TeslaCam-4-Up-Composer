@@ -30,7 +30,26 @@ class LayoutTests(unittest.TestCase):
             },
         )
         self.assertEqual(complete[Camera.LEFT_PILLAR].width, 1920)
-        self.assertEqual(complete[Camera.RIGHT_REPEATER].height, 1080)
+        self.assertEqual(complete[Camera.RIGHT].height, 1080)
+
+    def test_six_up_canvas_uses_centered_three_by_three_grid(self):
+        layout = build_layout(
+            LayoutKind.SIX_UP,
+            {
+                Camera.FRONT: Dimensions(1920, 1080),
+                Camera.BACK: Dimensions(1920, 1080),
+                Camera.LEFT: Dimensions(1280, 960),
+                Camera.RIGHT: Dimensions(1280, 960),
+                Camera.LEFT_PILLAR: Dimensions(1280, 960),
+                Camera.RIGHT_PILLAR: Dimensions(1280, 960),
+            },
+        )
+        self.assertEqual(layout.canvas_width, 5760)
+        self.assertEqual(layout.canvas_height, 3240)
+        self.assertEqual(layout.cell_by_camera[Camera.FRONT].x, 1920)
+        self.assertEqual(layout.cell_by_camera[Camera.BACK].x, 1920)
+        self.assertEqual(layout.cell_by_camera[Camera.BACK].y, 1080)
+        self.assertEqual(layout.cell_by_camera[Camera.LEFT_PILLAR].y, 2160)
 
 
 if __name__ == "__main__":

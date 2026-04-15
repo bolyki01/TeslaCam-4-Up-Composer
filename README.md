@@ -2,10 +2,10 @@
 
 Teslacam now ships two paths:
 
-- the existing macOS SwiftUI app for browsing and exporting footage
-- a new cross-platform Python CLI for Windows, macOS, and Linux
+- a native macOS app for browsing and exporting footage on Apple Silicon Macs running macOS 26
+- a separate cross-platform Python CLI in the GitHub repo for Windows, macOS, and Linux
 
-The CLI is designed for maximum output fidelity. It composes Tesla multi-camera clips into a single MP4 using H.265/HEVC. Default mode is **x265 lossless**, which still uses a compressed codec but preserves decoded pixels from the composed timeline instead of applying lossy recompression. If the native composite canvas becomes very large, the CLI keeps it.
+The macOS app now uses a native Swift export path. The CLI keeps the earlier portable ffmpeg-based workflow for power users and automation.
 
 ## What changed
 
@@ -13,9 +13,11 @@ The CLI is designed for maximum output fidelity. It composes Tesla multi-camera 
 - cross-platform launcher scripts: `teslacam-cli`, `teslacam-cli.bat`, `teslacam.sh`
 - exact time trimming to the second for first/last overlapping clip sets
 - native-resolution-first layout sizing; no forced downscale of camera tiles
+- onboarding-first app launch; no automatic source restore on startup
+- true-time timeline with visible recording gaps
 - default output: HEVC/H.265 MP4 with `hvc1` tag for broad player compatibility, including VLC
 - zero third-party Python package dependencies
-- existing macOS app and export scripts remain in place
+- CLI stays separate from the Mac app bundle
 
 ## Requirements
 
@@ -23,7 +25,19 @@ The CLI is designed for maximum output fidelity. It composes Tesla multi-camera 
 - `ffmpeg` and `ffprobe`
 - `ffmpeg` must include `libx265` for lossless or CRF 6 HEVC export
 
-On macOS, the repo can also use the bundled `TeslaCam/Resources/ffmpeg_bin/ffmpeg` and `ffprobe` if present and executable.
+On macOS, the CLI can also use bundled `TeslaCam/Resources/ffmpeg_bin/ffmpeg` and `ffprobe` if present and executable. The App Store app does not bundle those tools.
+
+## Native app
+
+- startup always begins on onboarding until the user chooses a source folder
+- timeline spacing follows real recording time from first clip to last clip
+- uncovered spans are shown as visible gaps and preview as "no recording"
+- HW4 sources with `left`, `right`, `left_pillar`, and `right_pillar` are detected automatically
+- HW4 composite export uses a centered 3x3 layout
+- native HEVC presets scale bitrate with output canvas size
+- ProRes 422 HQ stays the highest-fidelity native export preset
+- composite export is always rendered output; it is not stream-copy passthrough
+- Debug builds show recent debug events for quick failure triage
 
 ## Quick start
 
@@ -100,10 +114,11 @@ python3 teslacam.py /path/to/TeslaCam \
 
 ## Layout behavior
 
-- `auto` chooses 6-camera if pillar clips are present, otherwise 4-camera
+- `auto` chooses 6-camera if HW4 `left` / `right` or pillar clips are present, otherwise 4-camera
 - missing cameras render as black placeholders
-- tile sizes come from probed source clips and are padded rather than forcibly downscaled
-- composite canvas is derived from per-row and per-column maxima, not a fixed low-resolution canvas
+- HW4 composite layout uses a centered 3x3 canvas with intentional empty cells
+- 4-camera layout uses per-row and per-column maxima from probed source clips
+- HW4 3x3 layout uses a uniform tile size based on the largest detected source clip
 
 ## Time parsing accepted by CLI
 
@@ -117,8 +132,20 @@ python3 teslacam.py /path/to/TeslaCam \
 Unit tests:
 
 ```sh
-python3 -m unittest tests.test_scanner tests.test_layouts
+python3 -m unittest tests.test_scanner tests.test_layouts tests.test_timing
 ```
+
+Native app tests:
+
+```sh
+script/test_native.sh
+```
+
+## Canonical docs
+
+- [Agent guide](./AGENTS.md)
+- [Debugging guide](./DEBUGGING.md)
+- [Release checklist](./RELEASE_CHECKLIST.md)
 
 Integration smoke test with ffmpeg:
 
@@ -128,7 +155,9 @@ python3 -m unittest tests.test_integration
 
 ## Notes
 
-- `TeslaCam/Resources/LICENSES.md` and `TeslaCam/Resources/ffmpeg_bin/` are support assets.
+- `TeslaCam/Resources/LICENSES.md` and `TeslaCam/Resources/ffmpeg_bin/` are support assets for the CLI path.
+- `TeslaCam/BrandAssets/AppIcon.svg` is the editable vector master for the macOS app icon.
 - `_legacy/` stays non-canonical.
 - root `teslacam_legacy_macos.sh` keeps the previous mac-only shell flow as fallback.
-- the new CLI does not depend on Homebrew, pip packages, or a GUI.
+- If you build the macOS app side, source `/Users/bolyki/dev/source/build-env.sh` by default, or point `TESLACAM_BUILD_ENV` at a compatible local override.
+- the CLI does not depend on Homebrew, pip packages, or a GUI.

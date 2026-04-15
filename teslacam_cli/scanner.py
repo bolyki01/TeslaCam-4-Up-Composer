@@ -35,10 +35,18 @@ def normalize_camera(raw: str) -> Optional[Camera]:
         return Camera.LEFT_PILLAR
     if "right" in token and "pillar" in token:
         return Camera.RIGHT_PILLAR
-    if ("left" in token and "repeat" in token) or token in {"left", "left_rear"}:
+    if "left" in token and "repeat" in token:
         return Camera.LEFT_REPEATER
-    if ("right" in token and "repeat" in token) or token in {"right", "right_rear"}:
+    if "right" in token and "repeat" in token:
         return Camera.RIGHT_REPEATER
+    if token == "left_rear":
+        return Camera.LEFT_REPEATER
+    if token == "right_rear":
+        return Camera.RIGHT_REPEATER
+    if token == "left":
+        return Camera.LEFT
+    if token == "right":
+        return Camera.RIGHT
 
     try:
         return Camera(token)

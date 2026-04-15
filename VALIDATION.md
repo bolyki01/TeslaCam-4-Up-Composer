@@ -1,35 +1,26 @@
 # Validation
 
-Validated in Linux container.
+## Native macOS app
 
-## Automated tests
+- onboarding-first launch
+- true-time timeline gaps
+- gap preview state
+- aligned unified playback and export controls
+- Debug-build settings debug log visibility
+- HW4 scanner support for `left`, `right`, `left_pillar`, and `right_pillar`
+- native HW4 centered 3x3 composite export
+- Apple Silicon macOS 26 app target
 
-Passed:
-
-```sh
-python3 -m unittest tests.test_scanner tests.test_layouts tests.test_integration -v
-```
-
-Coverage from these tests:
+## CLI
 
 - camera token normalization
 - clip grouping by Tesla timestamp
-- 4-up layout sizing logic
+- 4-camera layout sizing
+- HW4 centered 3x3 layout sizing
 - missing-dimension fallback logic
-- end-to-end compose to HEVC/H.265 MP4 with ffmpeg/ffprobe
+- end-to-end compose path
 
-## Manual smoke validation
+## Debugging references
 
-Also verified manually:
-
-- 6-camera layout compose path
-- partial-range trim across two consecutive clip sets
-- final output codec: `hevc`
-- final output container: MP4
-- final output duration matched requested trimmed range
-
-## Notes
-
-- Windows and macOS wrapper scripts were added but not executed in this Linux container.
-- The CLI itself is pure Python plus ffmpeg/ffprobe and does not depend on OS-specific Python packages.
-- The existing macOS SwiftUI app remains in the repo unchanged; the new CLI is the portable export path.
+- see [DEBUGGING.md](./DEBUGGING.md) for clean launch, gap checks, export diagnostics, and HW4 fixture validation
+- see [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) for ship gating

@@ -5,10 +5,12 @@ enum Camera: String, CaseIterable, Hashable {
   case back
   case left_repeater
   case right_repeater
+  case left
+  case right
   case left_pillar
   case right_pillar
 
-  static let priority: [Camera] = [.front, .back, .left_repeater, .right_repeater, .left_pillar, .right_pillar]
+  static let priority: [Camera] = [.front, .back, .left_repeater, .right_repeater, .left, .right, .left_pillar, .right_pillar]
 }
 
 struct ClipSet {
@@ -167,8 +169,12 @@ struct TeslaCamOverlayGenerator {
     if token == "back" || token == "rear" || token == "rear_camera" { return .back }
     if token.contains("left") && token.contains("pillar") { return .left_pillar }
     if token.contains("right") && token.contains("pillar") { return .right_pillar }
-    if (token.contains("left") && token.contains("repeat")) || token == "left" || token == "left_rear" { return .left_repeater }
-    if (token.contains("right") && token.contains("repeat")) || token == "right" || token == "right_rear" { return .right_repeater }
+    if token.contains("left") && token.contains("repeat") { return .left_repeater }
+    if token.contains("right") && token.contains("repeat") { return .right_repeater }
+    if token == "left_rear" { return .left_repeater }
+    if token == "right_rear" { return .right_repeater }
+    if token == "left" { return .left }
+    if token == "right" { return .right }
     return Camera(rawValue: token)
   }
 

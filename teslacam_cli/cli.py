@@ -9,13 +9,14 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from .composer import (
+    clip_set_duration,
     compose,
     prepare_workdir,
     probe_dimensions_for_selection,
     probe_selection_fps,
     select_clip_sets,
 )
-from .ffmpeg_tools import ToolResolutionError, choose_encoder, probe_duration, resolve_tools
+from .ffmpeg_tools import ToolResolutionError, choose_encoder, resolve_tools
 from .layouts import PROFILE_LABELS, build_layout, detect_layout_kind, fill_missing_dimensions
 from .models import Camera, ComposePlan
 from .scanner import cameras_in_sets, format_clip_timestamp, parse_clip_timestamp, scan_clips
@@ -198,8 +199,7 @@ def parse_user_datetime(value: str) -> datetime:
 def dataset_range(clip_sets, ffprobe: Path) -> tuple[datetime, datetime]:
     first = clip_sets[0]
     last = clip_sets[-1]
-    last_source = next(iter(last.files.values()), None)
-    last_duration = probe_duration(ffprobe, last_source) if last_source else 60.0
+    last_duration = clip_set_duration(last, ffprobe)
     return first.start_time, last.start_time + timedelta(seconds=last_duration)
 
 

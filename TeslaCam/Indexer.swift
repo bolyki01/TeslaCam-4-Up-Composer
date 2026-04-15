@@ -1,4 +1,6 @@
 import Foundation
+import AVFoundation
+import CoreGraphics
 
 enum ClipIndexError: Error {
   case noClipsFound
@@ -21,16 +23,26 @@ final class ClipIndexer {
   }()
 
   static func index(rootURL: URL, progress: @escaping (Int) -> Void) throws -> ClipIndex {
-    try index(inputURLs: [rootURL], progress: progress)
+    try index(inputURLs: [rootURL], duplicatePolicy: .mergeByTime, progress: progress)
   }
 
-  static func index(inputURLs: [URL], progress: @escaping (Int) -> Void) throws -> ClipIndex {
+  static func index(
+    inputURLs: [URL],
+    duplicatePolicy: DuplicateClipPolicy = .mergeByTime,
+    progress: @escaping (Int) -> Void
+  ) throws -> ClipIndex {
     let fm = FileManager.default
     let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .nameKey, .isHiddenKey]
 
-    var map: [String: (date: Date, files: [Camera: URL])] = [:]
+    var map: [String: IndexedClipSetBuilder] = [:]
+    var keepAllSets: [ClipSet] = []
+    var keepAllPrimaryIndexByTimestamp: [String: Int] = [:]
     var camerasFound = Set<Camera>()
+    var duplicateFileCount = 0
+    var duplicateTimestampCount = 0
     var scanned = 0
+    var seenDuplicateTimestamps = Set<String>()
+    var metadataCache: [String: ClipAssetProbe] = [:]
 
     let normalizedInputs = normalizeInputs(inputURLs)
     guard !normalizedInputs.isEmpty else {
@@ -50,21 +62,54 @@ final class ClipIndexer {
           continue
         }
         for case let fileURL as URL in enumerator {
-          parseClipFile(fileURL, into: &map, camerasFound: &camerasFound, scanned: &scanned, progress: progress)
+          parseClipFile(
+            fileURL,
+            duplicatePolicy: duplicatePolicy,
+            into: &map,
+            keepAllSets: &keepAllSets,
+            keepAllPrimaryIndexByTimestamp: &keepAllPrimaryIndexByTimestamp,
+            camerasFound: &camerasFound,
+            duplicateFileCount: &duplicateFileCount,
+            duplicateTimestampCount: &duplicateTimestampCount,
+            seenDuplicateTimestamps: &seenDuplicateTimestamps,
+            scanned: &scanned,
+            metadataCache: &metadataCache,
+            progress: progress
+          )
         }
       } else {
-        parseClipFile(input, into: &map, camerasFound: &camerasFound, scanned: &scanned, progress: progress)
+        parseClipFile(
+          input,
+          duplicatePolicy: duplicatePolicy,
+          into: &map,
+          keepAllSets: &keepAllSets,
+          keepAllPrimaryIndexByTimestamp: &keepAllPrimaryIndexByTimestamp,
+          camerasFound: &camerasFound,
+          duplicateFileCount: &duplicateFileCount,
+          duplicateTimestampCount: &duplicateTimestampCount,
+          seenDuplicateTimestamps: &seenDuplicateTimestamps,
+          scanned: &scanned,
+          metadataCache: &metadataCache,
+          progress: progress
+        )
       }
     }
 
-    var sets: [ClipSet] = []
-    sets.reserveCapacity(map.count)
-    for (ts, entry) in map {
-      // Default duration to 60s to avoid heavy scanning during index
-      sets.append(ClipSet(timestamp: ts, date: entry.date, duration: 60.0, files: entry.files))
+    var sets: [ClipSet]
+    if duplicatePolicy == .keepAll {
+      sets = keepAllSets
+    } else {
+      sets = []
+      sets.reserveCapacity(map.count)
+      for (_, entry) in map {
+        sets.append(entry.makeClipSet())
+      }
     }
     sets.sort {
       if $0.date == $1.date {
+        if $0.timestamp == $1.timestamp {
+          return $0.id < $1.id
+        }
         return $0.timestamp < $1.timestamp
       }
       return $0.date < $1.date
@@ -74,7 +119,23 @@ final class ClipIndexer {
       throw ClipIndexError.noClipsFound
     }
 
-    return ClipIndex(sets: sets, minDate: first.date, maxDate: last.date, camerasFound: camerasFound)
+    let maxEnd = sets.map(\.endDate).max() ?? last.endDate
+    let totalDuration = max(0.1, maxEnd.timeIntervalSince(first.date))
+    let overlapMinuteCount = overlapCount(in: sets)
+
+    return ClipIndex(
+      sets: sets,
+      minDate: first.date,
+      maxDate: maxEnd,
+      totalDuration: totalDuration,
+      camerasFound: camerasFound,
+      layoutProfile: detectLayoutProfile(camerasFound: camerasFound),
+      duplicateSummary: DuplicateResolutionSummary(
+        duplicateFileCount: duplicateFileCount,
+        duplicateTimestampCount: duplicateTimestampCount,
+        overlapMinuteCount: overlapMinuteCount
+      )
+    )
   }
 
   private static func normalizeInputs(_ inputs: [URL]) -> [URL] {
@@ -93,11 +154,19 @@ final class ClipIndexer {
 
   private static func parseClipFile(
     _ fileURL: URL,
-    into map: inout [String: (date: Date, files: [Camera: URL])],
+    duplicatePolicy: DuplicateClipPolicy,
+    into map: inout [String: IndexedClipSetBuilder],
+    keepAllSets: inout [ClipSet],
+    keepAllPrimaryIndexByTimestamp: inout [String: Int],
     camerasFound: inout Set<Camera>,
+    duplicateFileCount: inout Int,
+    duplicateTimestampCount: inout Int,
+    seenDuplicateTimestamps: inout Set<String>,
     scanned: inout Int,
+    metadataCache: inout [String: ClipAssetProbe],
     progress: (Int) -> Void
   ) {
+    let fm = FileManager.default
     let ext = fileURL.pathExtension.lowercased()
     if ext != "mp4" && ext != "mov" { return }
 
@@ -106,20 +175,91 @@ final class ClipIndexer {
     let timestamp = match.timestamp
     guard let date = dateFormatter.date(from: timestamp) else { return }
     let camera = match.camera
+    let metadata = probeMetadata(for: fileURL, cache: &metadataCache)
 
-    var entry = map[timestamp] ?? (date: date, files: [:])
+    if duplicatePolicy == .keepAll {
+      if let primaryIndex = keepAllPrimaryIndexByTimestamp[timestamp] {
+        if keepAllSets[primaryIndex].files[camera] == nil {
+          var files = keepAllSets[primaryIndex].files
+          files[camera] = fileURL
+          var durations = keepAllSets[primaryIndex].cameraDurations
+          durations[camera] = metadata.duration
+          var naturalSizes = keepAllSets[primaryIndex].naturalSizes
+          naturalSizes[camera] = metadata.naturalSize
+          keepAllSets[primaryIndex] = ClipSet(
+            id: keepAllSets[primaryIndex].id,
+            timestamp: keepAllSets[primaryIndex].timestamp,
+            date: keepAllSets[primaryIndex].date,
+            duration: max(keepAllSets[primaryIndex].duration, metadata.duration),
+            files: files,
+            cameraDurations: durations,
+            naturalSizes: naturalSizes
+          )
+        } else {
+          duplicateFileCount += 1
+          if seenDuplicateTimestamps.insert(timestamp).inserted {
+            duplicateTimestampCount += 1
+          }
+          let suffix = keepAllSets.filter { $0.timestamp == timestamp }.count + 1
+          let duplicateID = "\(timestamp)__dup\(suffix)"
+          keepAllSets.append(
+            ClipSet(
+              id: duplicateID,
+              timestamp: timestamp,
+              date: date,
+              duration: metadata.duration,
+              files: [camera: fileURL],
+              cameraDurations: [camera: metadata.duration],
+              naturalSizes: [camera: metadata.naturalSize]
+            )
+          )
+        }
+      } else {
+        keepAllPrimaryIndexByTimestamp[timestamp] = keepAllSets.count
+        keepAllSets.append(
+          ClipSet(
+            id: timestamp,
+            timestamp: timestamp,
+            date: date,
+            duration: metadata.duration,
+            files: [camera: fileURL],
+            cameraDurations: [camera: metadata.duration],
+            naturalSizes: [camera: metadata.naturalSize]
+          )
+        )
+      }
+      camerasFound.insert(camera)
+      scanned += 1
+      if scanned % 100 == 0 { progress(scanned) }
+      return
+    }
+
+    var entry = map[timestamp] ?? IndexedClipSetBuilder(timestamp: timestamp, date: date)
     if let existing = entry.files[camera] {
-      if fileURL.path < existing.path {
-        entry.files[camera] = fileURL
+      duplicateFileCount += 1
+      if seenDuplicateTimestamps.insert(timestamp).inserted {
+        duplicateTimestampCount += 1
+      }
+      switch duplicatePolicy {
+      case .mergeByTime, .keepAll:
+        if fileURL.path < existing.path {
+          entry.replace(camera: camera, url: fileURL, metadata: metadata)
+        }
+      case .preferNewest:
+        let existingDate = (try? fm.attributesOfItem(atPath: existing.path)[.modificationDate] as? Date) ?? .distantPast
+        let candidateDate = (try? fm.attributesOfItem(atPath: fileURL.path)[.modificationDate] as? Date) ?? .distantPast
+        if candidateDate > existingDate || (candidateDate == existingDate && fileURL.path < existing.path) {
+          entry.replace(camera: camera, url: fileURL, metadata: metadata)
+        }
       }
     } else {
-      entry.files[camera] = fileURL
+      entry.insert(camera: camera, url: fileURL, metadata: metadata)
     }
     map[timestamp] = entry
     camerasFound.insert(camera)
 
     scanned += 1
-    if scanned % 500 == 0 { progress(scanned) }
+    if scanned % 100 == 0 { progress(scanned) }
   }
 
   private static func firstMatch(in filename: String) -> (timestamp: String, camera: Camera)? {
@@ -141,7 +281,7 @@ final class ClipIndexer {
     if token == "front" || token == "fwd" || token == "forward" {
       return .front
     }
-    if token == "back" || token == "rear" {
+    if token == "back" || token == "rear" || token == "rear_camera" {
       return .back
     }
     if token.contains("left") && token.contains("pillar") {
@@ -150,17 +290,142 @@ final class ClipIndexer {
     if token.contains("right") && token.contains("pillar") {
       return .right_pillar
     }
-    if (token.contains("left") && token.contains("repeat")) || token == "left" || token == "left_rear" {
+    if (token.contains("left") && token.contains("repeat")) || token == "left_rear" {
       return .left_repeater
     }
-    if (token.contains("right") && token.contains("repeat")) || token == "right" || token == "right_rear" {
+    if (token.contains("right") && token.contains("repeat")) || token == "right_rear" {
       return .right_repeater
     }
-
-    if token == "rear_camera" {
-      return .back
+    if token == "left" {
+      return .left
+    }
+    if token == "right" {
+      return .right
     }
 
     return Camera(rawValue: token)
+  }
+
+  private static func probeMetadata(for fileURL: URL, cache: inout [String: ClipAssetProbe]) -> ClipAssetProbe {
+    if let cached = cache[fileURL.path] {
+      return cached
+    }
+
+    let asset = AVURLAsset(
+      url: fileURL,
+      options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
+    )
+    let loaded = loadAssetMetadata(for: asset)
+    let durationSeconds = max(0.1, normalizedDuration(loaded.duration))
+    let probe: ClipAssetProbe
+
+    if let naturalSize = loaded.naturalSize {
+      probe = ClipAssetProbe(
+        duration: durationSeconds,
+        naturalSize: naturalSize
+      )
+    } else {
+      probe = ClipAssetProbe(duration: durationSeconds, naturalSize: CGSize(width: 1280, height: 960))
+    }
+
+    cache[fileURL.path] = probe
+    return probe
+  }
+
+  private static func normalizedDuration(_ time: CMTime) -> Double {
+    let seconds = CMTimeGetSeconds(time)
+    guard seconds.isFinite, seconds > 0 else { return 60.0 }
+    return seconds
+  }
+
+  private static nonisolated func loadAssetMetadata(for asset: AVURLAsset) -> (duration: CMTime, naturalSize: CGSize?) {
+    let semaphore = DispatchSemaphore(value: 0)
+    var loadedDuration = CMTime.invalid
+    var loadedNaturalSize: CGSize?
+
+    Task.detached(priority: .userInitiated) {
+      defer { semaphore.signal() }
+      do {
+        async let duration = asset.load(.duration)
+        async let tracks = asset.loadTracks(withMediaType: .video)
+        loadedDuration = try await duration
+        if let track = try await tracks.first {
+          async let naturalSize = track.load(.naturalSize)
+          async let preferredTransform = track.load(.preferredTransform)
+          let transformed = try await naturalSize.applying(preferredTransform)
+          loadedNaturalSize = CGSize(width: abs(transformed.width), height: abs(transformed.height))
+        } else {
+          loadedNaturalSize = nil
+        }
+      } catch {
+        loadedDuration = .invalid
+        loadedNaturalSize = nil
+      }
+    }
+
+    semaphore.wait()
+    return (loadedDuration, loadedNaturalSize)
+  }
+
+  private static func detectLayoutProfile(camerasFound: Set<Camera>) -> CameraLayoutProfile {
+    let hw3Cameras: Set<Camera> = [.front, .back, .left_repeater, .right_repeater]
+    let hw4Cameras: Set<Camera> = [.front, .back, .left, .right, .left_pillar, .right_pillar]
+    let usesClassicSides = camerasFound.contains(.left_repeater) || camerasFound.contains(.right_repeater)
+    let usesNewSides = camerasFound.contains(.left) || camerasFound.contains(.right) || camerasFound.contains(.left_pillar) || camerasFound.contains(.right_pillar)
+
+    if !camerasFound.isEmpty, camerasFound.isSubset(of: hw3Cameras) {
+      return .hw3FourCam
+    }
+    if usesNewSides && !usesClassicSides && camerasFound.subtracting(hw4Cameras).isEmpty {
+      return .hw4SixCam
+    }
+    return .mixedUnknown
+  }
+
+  private static func overlapCount(in sets: [ClipSet]) -> Int {
+    guard sets.count > 1 else { return 0 }
+    var overlaps = 0
+    for index in 0..<(sets.count - 1) {
+      if sets[index + 1].date < sets[index].endDate {
+        overlaps += 1
+      }
+    }
+    return overlaps
+  }
+}
+
+private struct ClipAssetProbe {
+  let duration: Double
+  let naturalSize: CGSize
+}
+
+private struct IndexedClipSetBuilder {
+  let timestamp: String
+  let date: Date
+  var files: [Camera: URL] = [:]
+  var durations: [Camera: Double] = [:]
+  var naturalSizes: [Camera: CGSize] = [:]
+
+  mutating func insert(camera: Camera, url: URL, metadata: ClipAssetProbe) {
+    files[camera] = url
+    durations[camera] = metadata.duration
+    naturalSizes[camera] = metadata.naturalSize
+  }
+
+  mutating func replace(camera: Camera, url: URL, metadata: ClipAssetProbe) {
+    files[camera] = url
+    durations[camera] = metadata.duration
+    naturalSizes[camera] = metadata.naturalSize
+  }
+
+  func makeClipSet() -> ClipSet {
+    ClipSet(
+      timestamp: timestamp,
+      date: date,
+      duration: durations.values.max() ?? 60.0,
+      files: files,
+      cameraDurations: durations,
+      naturalSizes: naturalSizes
+    )
   }
 }
