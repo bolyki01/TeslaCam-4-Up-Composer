@@ -106,6 +106,20 @@ class ScannerTests(unittest.TestCase):
         self.assertTrue(any(clip_set.files.get(Camera.FRONT) == front_a for clip_set in result.clip_sets))
         self.assertTrue(any(clip_set.files.get(Camera.FRONT) == front_b for clip_set in result.clip_sets))
 
+    def test_scan_ignores_hidden_path_components(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            hidden = root / ".hidden"
+            hidden.mkdir()
+            (hidden / "2026-01-01_00-00-00-front.mp4").write_bytes(b"hidden")
+            (root / "2026-01-01_00-00-00-rear.mp4").write_bytes(b"visible")
+
+            result = scan_source(root)
+
+        self.assertEqual(len(result.clip_sets), 1)
+        self.assertNotIn(Camera.FRONT, result.clip_sets[0].files)
+        self.assertIn(Camera.BACK, result.clip_sets[0].files)
+
 
 if __name__ == "__main__":
     unittest.main()

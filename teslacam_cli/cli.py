@@ -16,6 +16,7 @@ from .composer import (
     probe_selection_fps,
     select_clip_sets,
 )
+from .domain_contract import dry_run_manifest, write_manifest_json
 from .ffmpeg_tools import ToolResolutionError, choose_encoder, resolve_tools
 from .layouts import PROFILE_LABELS, build_layout, detect_layout_kind, fill_missing_dimensions
 from .models import Camera, ComposePlan, DuplicatePolicy, OutputConflictPolicy
@@ -82,6 +83,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loglevel", default="info", help="ffmpeg loglevel (default: info)")
     parser.add_argument("--interactive", action="store_true", help="Force prompt mode even when arguments are supplied")
     parser.add_argument("--dry-run", action="store_true", help="Scan and print resolved plan without rendering")
+    parser.add_argument(
+        "--dry-run-json",
+        nargs="?",
+        const="-",
+        metavar="PATH",
+        help="Scan and emit the resolved dry-run manifest as JSON to stdout or PATH without rendering.",
+    )
     return parser
 
 
@@ -152,21 +160,40 @@ def main(argv: Optional[list[str]] = None) -> int:
         fps = probe_selection_fps(config.ffprobe, selected_sets)
         encoder = choose_encoder(config.ffmpeg, config.mode, config.x265_preset)
 
-        print_summary(
-            source_dir=config.source_dir,
-            output_file=config.output_file,
-            start_time=config.start_time,
-            end_time=config.end_time,
-            layout=layout.kind.value,
-            mode=encoder.label,
-            camera_dimensions=dimensions,
-            sets=len(selected_sets),
-            duplicate_policy=config.duplicate_policy,
-            duplicate_file_count=scan_result.duplicate_file_count,
-            duplicate_timestamp_count=scan_result.duplicate_timestamp_count,
-        )
+        if args.dry_run_json is None:
+            print_summary(
+                source_dir=config.source_dir,
+                output_file=config.output_file,
+                start_time=config.start_time,
+                end_time=config.end_time,
+                layout=layout.kind.value,
+                mode=encoder.label,
+                camera_dimensions=dimensions,
+                sets=len(selected_sets),
+                duplicate_policy=config.duplicate_policy,
+                duplicate_file_count=scan_result.duplicate_file_count,
+                duplicate_timestamp_count=scan_result.duplicate_timestamp_count,
+            )
 
-        if args.dry_run:
+        if args.dry_run or args.dry_run_json is not None:
+            if args.dry_run_json is not None:
+                manifest = dry_run_manifest(
+                    source_dir=config.source_dir,
+                    output_file=config.output_file,
+                    start_time=config.start_time,
+                    end_time=config.end_time,
+                    profile=config.profile,
+                    mode=config.mode,
+                    duplicate_policy=config.duplicate_policy,
+                    output_conflict=config.output_conflict,
+                    scan_result=scan_result,
+                    selected_sets=selected_sets,
+                    layout=layout,
+                    dimensions=dimensions,
+                    fps=fps,
+                    encoder_label=encoder.label,
+                )
+                write_manifest_json(manifest, args.dry_run_json)
             if not config.keep_workdir and config.workdir.exists():
                 shutil.rmtree(config.workdir, ignore_errors=True)
             return 0

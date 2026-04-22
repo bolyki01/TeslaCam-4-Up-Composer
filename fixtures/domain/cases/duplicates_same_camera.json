@@ -1,0 +1,100 @@
+{
+  "description": "Duplicate front camera under the same timestamp. Prefer-newest selects folder_b by mtime.",
+  "expected_scan": {
+    "keep-all": {
+      "cameras": [
+        "front",
+        "back"
+      ],
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "folder_a/2026-01-01_00-00-00-rear.mp4",
+            "front": "folder_a/2026-01-01_00-00-00-front.mp4"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        },
+        {
+          "cameras": [
+            "front"
+          ],
+          "files": {
+            "front": "folder_b/2026-01-01_00-00-00-front.mp4"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        }
+      ],
+      "duplicate_file_count": 1,
+      "duplicate_timestamp_count": 1
+    },
+    "merge-by-time": {
+      "cameras": [
+        "front",
+        "back"
+      ],
+      "clip_set_count": 1,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "folder_a/2026-01-01_00-00-00-rear.mp4",
+            "front": "folder_a/2026-01-01_00-00-00-front.mp4"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        }
+      ],
+      "duplicate_file_count": 1,
+      "duplicate_timestamp_count": 1
+    },
+    "prefer-newest": {
+      "cameras": [
+        "front",
+        "back"
+      ],
+      "clip_set_count": 1,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "folder_a/2026-01-01_00-00-00-rear.mp4",
+            "front": "folder_b/2026-01-01_00-00-00-front.mp4"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        }
+      ],
+      "duplicate_file_count": 1,
+      "duplicate_timestamp_count": 1
+    }
+  },
+  "files": [
+    {
+      "mtime": 1700000000,
+      "path": "folder_a/2026-01-01_00-00-00-front.mp4"
+    },
+    {
+      "mtime": 1700000000,
+      "path": "folder_a/2026-01-01_00-00-00-rear.mp4"
+    },
+    {
+      "mtime": 1700000100,
+      "path": "folder_b/2026-01-01_00-00-00-front.mp4"
+    }
+  ],
+  "name": "duplicates_same_camera",
+  "schema_version": 1
+}

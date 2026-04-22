@@ -72,6 +72,8 @@ def scan_source(
     seen_duplicate_timestamps: Set[str] = set()
 
     for path in sorted(root.rglob("*")):
+        if _is_hidden_path(path, root):
+            continue
         if not path.is_file():
             continue
         if path.suffix.lower() not in {".mp4", ".mov"}:
@@ -176,3 +178,11 @@ def _safe_mtime(path: Path) -> float:
         return path.stat().st_mtime
     except OSError:
         return 0.0
+
+
+def _is_hidden_path(path: Path, root: Path) -> bool:
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        relative = path
+    return any(part.startswith(".") for part in relative.parts)

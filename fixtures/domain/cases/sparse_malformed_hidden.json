@@ -1,0 +1,141 @@
+{
+  "description": "Malformed, unknown, non-video, and hidden files are ignored while sparse valid sets survive.",
+  "expected_scan": {
+    "keep-all": {
+      "cameras": [
+        "front",
+        "left_repeater",
+        "right_pillar"
+      ],
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "left_repeater"
+          ],
+          "files": {
+            "front": "SavedClips/2026-01-01_00-00-00-front.mp4",
+            "left_repeater": "SavedClips/2026-01-01_00-00-00-left_rear.mov"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "right_pillar"
+          ],
+          "files": {
+            "front": "SavedClips/2026-01-01_00-01-00-forward_2.mp4",
+            "right_pillar": "SavedClips/2026-01-01_00-01-00-right-pillar.mp4"
+          },
+          "start_time": "2026-01-01T00:01:00",
+          "timestamp": "2026-01-01_00-01-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "merge-by-time": {
+      "cameras": [
+        "front",
+        "left_repeater",
+        "right_pillar"
+      ],
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "left_repeater"
+          ],
+          "files": {
+            "front": "SavedClips/2026-01-01_00-00-00-front.mp4",
+            "left_repeater": "SavedClips/2026-01-01_00-00-00-left_rear.mov"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "right_pillar"
+          ],
+          "files": {
+            "front": "SavedClips/2026-01-01_00-01-00-forward_2.mp4",
+            "right_pillar": "SavedClips/2026-01-01_00-01-00-right-pillar.mp4"
+          },
+          "start_time": "2026-01-01T00:01:00",
+          "timestamp": "2026-01-01_00-01-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "prefer-newest": {
+      "cameras": [
+        "front",
+        "left_repeater",
+        "right_pillar"
+      ],
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "left_repeater"
+          ],
+          "files": {
+            "front": "SavedClips/2026-01-01_00-00-00-front.mp4",
+            "left_repeater": "SavedClips/2026-01-01_00-00-00-left_rear.mov"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "right_pillar"
+          ],
+          "files": {
+            "front": "SavedClips/2026-01-01_00-01-00-forward_2.mp4",
+            "right_pillar": "SavedClips/2026-01-01_00-01-00-right-pillar.mp4"
+          },
+          "start_time": "2026-01-01T00:01:00",
+          "timestamp": "2026-01-01_00-01-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    }
+  },
+  "files": [
+    {
+      "path": "SavedClips/2026-01-01_00-00-00-front.mp4"
+    },
+    {
+      "path": "SavedClips/2026-01-01_00-00-00-left_rear.mov"
+    },
+    {
+      "path": "SavedClips/2026-01-01_00-01-00-right-pillar.mp4"
+    },
+    {
+      "path": "SavedClips/2026-01-01_00-01-00-forward_2.mp4"
+    },
+    {
+      "path": "SavedClips/2026-01-01_00-01-00-unknown_camera.mp4"
+    },
+    {
+      "path": "SavedClips/not-a-teslacam-file.mp4"
+    },
+    {
+      "path": "SavedClips/2026-01-01_00-02-00-front.txt"
+    },
+    {
+      "path": ".hidden/2026-01-01_00-03-00-front.mp4"
+    }
+  ],
+  "name": "sparse_malformed_hidden",
+  "schema_version": 1
+}
