@@ -1,5 +1,8 @@
 import AppKit
 import SwiftUI
+#if canImport(Sentry)
+import Sentry
+#endif
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
   private var window: NSWindow?
@@ -151,6 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 @main
 struct MainApp {
   static func main() {
+    startSentryIfConfigured()
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.setActivationPolicy(.regular)
@@ -158,6 +162,31 @@ struct MainApp {
     app.activate(ignoringOtherApps: true)
     app.run()
   }
+}
+
+private func startSentryIfConfigured() {
+  #if canImport(Sentry)
+  guard ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] != "1" else {
+    return
+  }
+
+  let rawDSN = (Bundle.main.object(forInfoDictionaryKey: "SENTRY_DSN") as? String)
+    ?? ProcessInfo.processInfo.environment["SENTRY_DSN"]
+    ?? ""
+  let dsn = rawDSN.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard dsn.isEmpty == false else {
+    return
+  }
+
+  SentrySDK.start { options in
+    options.dsn = dsn
+    options.debug = false
+    options.enableSwizzling = false
+    options.sendDefaultPii = false
+    options.tracesSampleRate = 0
+    options.profilesSampleRate = 0
+  }
+  #endif
 }
 
 private struct SettingsView: View {
