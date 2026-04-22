@@ -1,0 +1,168 @@
+{
+  "description": "Two standard HW3 timestamps with all four classic cameras.",
+  "expected_scan": {
+    "keep-all": {
+      "cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "right_repeater"
+          ],
+          "files": {
+            "back": "SavedClips/2026-01-01_00-00-00-rear.mp4",
+            "front": "SavedClips/2026-01-01_00-00-00-front.mp4",
+            "left_repeater": "SavedClips/2026-01-01_00-00-00-left_repeater.mp4",
+            "right_repeater": "SavedClips/2026-01-01_00-00-00-right_repeater.mp4"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "right_repeater"
+          ],
+          "files": {
+            "back": "SavedClips/2026-01-01_00-01-00-rear.mp4",
+            "front": "SavedClips/2026-01-01_00-01-00-front.mp4",
+            "left_repeater": "SavedClips/2026-01-01_00-01-00-left_repeater.mp4",
+            "right_repeater": "SavedClips/2026-01-01_00-01-00-right_repeater.mp4"
+          },
+          "start_time": "2026-01-01T00:01:00",
+          "timestamp": "2026-01-01_00-01-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "merge-by-time": {
+      "cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "right_repeater"
+          ],
+          "files": {
+            "back": "SavedClips/2026-01-01_00-00-00-rear.mp4",
+            "front": "SavedClips/2026-01-01_00-00-00-front.mp4",
+            "left_repeater": "SavedClips/2026-01-01_00-00-00-left_repeater.mp4",
+            "right_repeater": "SavedClips/2026-01-01_00-00-00-right_repeater.mp4"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "right_repeater"
+          ],
+          "files": {
+            "back": "SavedClips/2026-01-01_00-01-00-rear.mp4",
+            "front": "SavedClips/2026-01-01_00-01-00-front.mp4",
+            "left_repeater": "SavedClips/2026-01-01_00-01-00-left_repeater.mp4",
+            "right_repeater": "SavedClips/2026-01-01_00-01-00-right_repeater.mp4"
+          },
+          "start_time": "2026-01-01T00:01:00",
+          "timestamp": "2026-01-01_00-01-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "prefer-newest": {
+      "cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "right_repeater"
+          ],
+          "files": {
+            "back": "SavedClips/2026-01-01_00-00-00-rear.mp4",
+            "front": "SavedClips/2026-01-01_00-00-00-front.mp4",
+            "left_repeater": "SavedClips/2026-01-01_00-00-00-left_repeater.mp4",
+            "right_repeater": "SavedClips/2026-01-01_00-00-00-right_repeater.mp4"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "right_repeater"
+          ],
+          "files": {
+            "back": "SavedClips/2026-01-01_00-01-00-rear.mp4",
+            "front": "SavedClips/2026-01-01_00-01-00-front.mp4",
+            "left_repeater": "SavedClips/2026-01-01_00-01-00-left_repeater.mp4",
+            "right_repeater": "SavedClips/2026-01-01_00-01-00-right_repeater.mp4"
+          },
+          "start_time": "2026-01-01T00:01:00",
+          "timestamp": "2026-01-01_00-01-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    }
+  },
+  "files": [
+    {
+      "path": "SavedClips/2026-01-01_00-00-00-front.mp4"
+    },
+    {
+      "path": "SavedClips/2026-01-01_00-00-00-rear.mp4"
+    },
+    {
+      "path": "SavedClips/2026-01-01_00-00-00-left_repeater.mp4"
+    },
+    {
+      "path": "SavedClips/2026-01-01_00-00-00-right_repeater.mp4"
+    },
+    {
+      "path": "SavedClips/2026-01-01_00-01-00-front.mp4"
+    },
+    {
+      "path": "SavedClips/2026-01-01_00-01-00-rear.mp4"
+    },
+    {
+      "path": "SavedClips/2026-01-01_00-01-00-left_repeater.mp4"
+    },
+    {
+      "path": "SavedClips/2026-01-01_00-01-00-right_repeater.mp4"
+    }
+  ],
+  "name": "classic_4_camera",
+  "schema_version": 1
+}

@@ -1,0 +1,132 @@
+{
+  "description": "Single HW4 timestamp with new side and pillar cameras.",
+  "expected_scan": {
+    "keep-all": {
+      "cameras": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "clip_set_count": 1,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left",
+            "right",
+            "left_pillar",
+            "right_pillar"
+          ],
+          "files": {
+            "back": "RecentClips/2026-01-01_00-00-00-rear.mp4",
+            "front": "RecentClips/2026-01-01_00-00-00-front.mp4",
+            "left": "RecentClips/2026-01-01_00-00-00-left.mp4",
+            "left_pillar": "RecentClips/2026-01-01_00-00-00-left_pillar.mp4",
+            "right": "RecentClips/2026-01-01_00-00-00-right.mp4",
+            "right_pillar": "RecentClips/2026-01-01_00-00-00-right_pillar.mp4"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "merge-by-time": {
+      "cameras": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "clip_set_count": 1,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left",
+            "right",
+            "left_pillar",
+            "right_pillar"
+          ],
+          "files": {
+            "back": "RecentClips/2026-01-01_00-00-00-rear.mp4",
+            "front": "RecentClips/2026-01-01_00-00-00-front.mp4",
+            "left": "RecentClips/2026-01-01_00-00-00-left.mp4",
+            "left_pillar": "RecentClips/2026-01-01_00-00-00-left_pillar.mp4",
+            "right": "RecentClips/2026-01-01_00-00-00-right.mp4",
+            "right_pillar": "RecentClips/2026-01-01_00-00-00-right_pillar.mp4"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "prefer-newest": {
+      "cameras": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "clip_set_count": 1,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left",
+            "right",
+            "left_pillar",
+            "right_pillar"
+          ],
+          "files": {
+            "back": "RecentClips/2026-01-01_00-00-00-rear.mp4",
+            "front": "RecentClips/2026-01-01_00-00-00-front.mp4",
+            "left": "RecentClips/2026-01-01_00-00-00-left.mp4",
+            "left_pillar": "RecentClips/2026-01-01_00-00-00-left_pillar.mp4",
+            "right": "RecentClips/2026-01-01_00-00-00-right.mp4",
+            "right_pillar": "RecentClips/2026-01-01_00-00-00-right_pillar.mp4"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    }
+  },
+  "files": [
+    {
+      "path": "RecentClips/2026-01-01_00-00-00-front.mp4"
+    },
+    {
+      "path": "RecentClips/2026-01-01_00-00-00-rear.mp4"
+    },
+    {
+      "path": "RecentClips/2026-01-01_00-00-00-left.mp4"
+    },
+    {
+      "path": "RecentClips/2026-01-01_00-00-00-right.mp4"
+    },
+    {
+      "path": "RecentClips/2026-01-01_00-00-00-left_pillar.mp4"
+    },
+    {
+      "path": "RecentClips/2026-01-01_00-00-00-right_pillar.mp4"
+    }
+  ],
+  "name": "hw4_6_camera",
+  "schema_version": 1
+}

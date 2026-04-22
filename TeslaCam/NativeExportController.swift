@@ -6,6 +6,9 @@ import CoreVideo
 import CoreGraphics
 
 final class NativeExportController: ObservableObject {
+  private static let staleWorkdirAge: TimeInterval = 24 * 60 * 60
+  private static let minimumDiskHeadroomBytes: Int64 = 256 * 1024 * 1024
+
   @Published var log: String = ""
   @Published var lastError: String = ""
   @Published var currentJob: ExportJobSnapshot?
@@ -73,6 +76,20 @@ final class NativeExportController: ObservableObject {
       blocking.append(ExportIssue(message: "The selected export location is not writable.", isBlocking: true))
     }
 
+    let requiredBytes = estimatedRequiredDiskBytes(for: request)
+    if let availableBytes = availableDiskCapacity(forWritingTo: request.outputURL) {
+      if availableBytes < requiredBytes {
+        blocking.append(
+          ExportIssue(
+            message: "The selected export location has only \(Self.formatBytes(availableBytes)) free. Export preflight requires at least \(Self.formatBytes(requiredBytes)).",
+            isBlocking: true
+          )
+        )
+      }
+    } else {
+      warnings.append(ExportIssue(message: "Free disk space could not be checked for the selected export location.", isBlocking: false))
+    }
+
     return ExportPreflightSummary(
       blockingIssues: blocking,
       warnings: warnings,
@@ -84,6 +101,7 @@ final class NativeExportController: ObservableObject {
 
   func export(request: ExportRequest) {
     guard !isExporting else { return }
+    cleanupStaleTempDirectories()
     beginOutputScope(for: request.outputURL)
     debug("start \(request.outputURL.lastPathComponent) preset=\(request.preset.rawValue)", category: "export")
 
@@ -130,8 +148,19 @@ final class NativeExportController: ObservableObject {
     appendLog("Preset: \(request.preset.displayName)\n")
     appendLog("Range: \(request.selectedRangeText)\n")
     appendLog("Selected cameras: \(request.enabledCameras.sorted { $0.rawValue < $1.rawValue }.map(\.displayName).joined(separator: ", "))\n")
+    appendStructuredLogEvent(
+      "export_started",
+      fields: [
+        "output": request.outputURL.path,
+        "preset": request.preset.rawValue,
+        "range": request.selectedRangeText,
+        "duration": String(format: "%.3f", request.totalDuration),
+        "parts": "\(request.totalParts)"
+      ]
+    )
     for warning in preflight.warnings {
       appendLog("Warning: \(warning.message)\n")
+      appendStructuredLogEvent("preflight_warning", fields: ["message": warning.message])
     }
     publishCurrentSession()
     isStatusPresented = true
@@ -272,6 +301,7 @@ final class NativeExportController: ObservableObject {
     }
 
     try writer.finishWriting()
+    try? fm.removeItem(at: tempRoot)
 
     runOnMain {
       self.updateSession {
@@ -283,10 +313,13 @@ final class NativeExportController: ObservableObject {
         $0.completedDuration = request.totalDuration
         $0.isTerminal = true
         $0.canRevealOutput = true
+        $0.canRevealWorkingFiles = false
+        $0.tempRootURL = nil
         $0.canRetry = true
         $0.isIndeterminate = false
       }
       self.appendLog("\nDone: \(request.outputURL.path)\n")
+      self.appendStructuredLogEvent("export_completed", fields: ["output": request.outputURL.path])
       self.debug("completed \(request.outputURL.lastPathComponent)", category: "export")
       self.endOutputScope()
       self.publishCurrentSession()
@@ -315,6 +348,13 @@ final class NativeExportController: ObservableObject {
     } else {
       appendLog("Export failed: \(message)\n")
     }
+    appendStructuredLogEvent(
+      category == .cancelled ? "export_cancelled" : "export_failed",
+      fields: [
+        "category": category.rawValue,
+        "message": message
+      ]
+    )
     debug(category == .cancelled ? "cancelled \(message)" : "failed \(message)", category: "export")
     cleanupPartialOutput(at: activeSession?.outputURL)
     updateSession {
@@ -341,6 +381,13 @@ final class NativeExportController: ObservableObject {
     update(&session)
     activeSession = session
     if session.phase != previousPhase {
+      appendStructuredLogEvent(
+        "phase_changed",
+        fields: [
+          "from": previousPhase.rawValue,
+          "to": session.phase.rawValue
+        ]
+      )
       debug("phase \(previousPhase.rawValue) -> \(session.phase.rawValue)", category: "export")
     }
     publishCurrentSession()
@@ -399,6 +446,74 @@ final class NativeExportController: ObservableObject {
   private func endOutputScope() {
     activeOutputScopeURL?.stopAccessingSecurityScopedResource()
     activeOutputScopeURL = nil
+  }
+
+  private func estimatedRequiredDiskBytes(for request: ExportRequest) -> Int64 {
+    let seconds = max(1, request.totalDuration)
+    let bytesPerSecond: Double
+    switch request.preset {
+    case .editFriendlyProRes:
+      bytesPerSecond = 32 * 1024 * 1024
+    case .maxQualityHEVC:
+      bytesPerSecond = 8 * 1024 * 1024
+    case .fastHEVC:
+      bytesPerSecond = 4 * 1024 * 1024
+    }
+    let estimatedOutput = Int64((seconds * bytesPerSecond).rounded(.up))
+    return max(Self.minimumDiskHeadroomBytes, estimatedOutput + Self.minimumDiskHeadroomBytes)
+  }
+
+  private func availableDiskCapacity(forWritingTo outputURL: URL) -> Int64? {
+    let targetDirectory = outputURL.deletingLastPathComponent()
+    do {
+      let values = try targetDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+      if let important = values.volumeAvailableCapacityForImportantUsage {
+        return important
+      }
+      let fallback = try fm.attributesOfFileSystem(forPath: targetDirectory.path)
+      if let number = fallback[.systemFreeSize] as? NSNumber {
+        return number.int64Value
+      }
+      return fallback[.systemFreeSize] as? Int64
+    } catch {
+      return nil
+    }
+  }
+
+  private static func formatBytes(_ bytes: Int64) -> String {
+    let formatter = ByteCountFormatter()
+    formatter.allowedUnits = [.useMB, .useGB, .useTB]
+    formatter.countStyle = .file
+    return formatter.string(fromByteCount: bytes)
+  }
+
+  private func cleanupStaleTempDirectories(now: Date = Date()) {
+    let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+    guard let entries = try? fm.contentsOfDirectory(
+      at: tempRoot,
+      includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey]
+    ) else { return }
+
+    for entry in entries where entry.lastPathComponent.hasPrefix("teslacam_export_") {
+      let values = try? entry.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey])
+      guard values?.isDirectory == true else { continue }
+      let modified = values?.contentModificationDate ?? .distantPast
+      if now.timeIntervalSince(modified) > Self.staleWorkdirAge {
+        try? fm.removeItem(at: entry)
+      }
+    }
+  }
+
+  private func appendStructuredLogEvent(_ name: String, fields: [String: String] = [:]) {
+    var payload = fields
+    payload["event"] = name
+    payload["timestamp"] = ISO8601DateFormatter().string(from: Date())
+    if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+       let line = String(data: data, encoding: .utf8) {
+      appendLog("event: \(line)\n")
+    } else {
+      appendLog("event: \(name)\n")
+    }
   }
 
   private func appendLog(_ text: String) {

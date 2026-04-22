@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from teslacam_cli.cli import apply_output_conflict_policy, resolve_output_path, unique_output_path
+from teslacam_cli.cli import apply_output_conflict_policy, build_parser, resolve_output_path, unique_output_path
 from teslacam_cli.models import OutputConflictPolicy
 
 
@@ -50,6 +50,16 @@ class CliPathTests(unittest.TestCase):
         self.assertEqual(resolved.parent, destination.resolve())
         self.assertTrue(resolved.name.startswith("teslacam_lossless_"))
         self.assertEqual(resolved.suffix, ".mp4")
+
+    def test_dry_run_json_defaults_to_stdout_and_implies_no_render_contract(self):
+        args = build_parser().parse_args(["/tmp/source", "--dry-run-json"])
+
+        self.assertEqual(args.dry_run_json, "-")
+
+    def test_dry_run_json_accepts_output_path(self):
+        args = build_parser().parse_args(["/tmp/source", "--dry-run-json", "/tmp/manifest.json"])
+
+        self.assertEqual(args.dry_run_json, "/tmp/manifest.json")
 
 
 if __name__ == "__main__":

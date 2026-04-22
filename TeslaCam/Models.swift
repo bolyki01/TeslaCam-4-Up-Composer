@@ -781,6 +781,100 @@ struct ClipIndex {
   }
 }
 
+struct DomainClipSetManifest: Codable, Equatable {
+  let timestamp: String
+  let startTime: String
+  let cameras: [String]
+  let files: [String: String]
+
+  enum CodingKeys: String, CodingKey {
+    case timestamp
+    case startTime = "start_time"
+    case cameras
+    case files
+  }
+}
+
+struct DomainScanManifest: Codable, Equatable {
+  let schemaVersion: Int
+  let type: String
+  let clipSetCount: Int
+  let duplicateFileCount: Int
+  let duplicateTimestampCount: Int
+  let cameras: [String]
+  let clipSets: [DomainClipSetManifest]
+
+  enum CodingKeys: String, CodingKey {
+    case schemaVersion = "schema_version"
+    case type
+    case clipSetCount = "clip_set_count"
+    case duplicateFileCount = "duplicate_file_count"
+    case duplicateTimestampCount = "duplicate_timestamp_count"
+    case cameras
+    case clipSets = "clip_sets"
+  }
+}
+
+extension ClipIndex {
+  func domainScanManifest(relativeTo rootURL: URL) -> DomainScanManifest {
+    let cameraOrder = Dictionary(uniqueKeysWithValues: Camera.mixedOrder.enumerated().map { ($0.element, $0.offset) })
+    let orderedCameras = camerasFound.sorted { lhs, rhs in
+      let lhsIndex = cameraOrder[lhs] ?? Int.max
+      let rhsIndex = cameraOrder[rhs] ?? Int.max
+      if lhsIndex == rhsIndex { return lhs.rawValue < rhs.rawValue }
+      return lhsIndex < rhsIndex
+    }
+    let clipSetManifests = sets.map { set -> DomainClipSetManifest in
+      let cameras = set.files.keys.sorted { lhs, rhs in
+        let lhsIndex = cameraOrder[lhs] ?? Int.max
+        let rhsIndex = cameraOrder[rhs] ?? Int.max
+        if lhsIndex == rhsIndex { return lhs.rawValue < rhs.rawValue }
+        return lhsIndex < rhsIndex
+      }
+      var files: [String: String] = [:]
+      for camera in cameras {
+        if let url = set.files[camera] {
+          files[camera.rawValue] = Self.contractPath(url, relativeTo: rootURL)
+        }
+      }
+      return DomainClipSetManifest(
+        timestamp: set.timestamp,
+        startTime: Self.contractTimestamp(set.date),
+        cameras: cameras.map(\.rawValue),
+        files: files
+      )
+    }
+
+    return DomainScanManifest(
+      schemaVersion: 1,
+      type: "teslacam.scan",
+      clipSetCount: sets.count,
+      duplicateFileCount: duplicateSummary.duplicateFileCount,
+      duplicateTimestampCount: duplicateSummary.duplicateTimestampCount,
+      cameras: orderedCameras.map(\.rawValue),
+      clipSets: clipSetManifests
+    )
+  }
+
+  private static func contractTimestamp(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone.current
+    formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+    return formatter.string(from: date)
+  }
+
+  private static func contractPath(_ url: URL, relativeTo rootURL: URL) -> String {
+    let rootPath = rootURL.standardizedFileURL.path
+    let path = url.standardizedFileURL.path
+    let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+    if path.hasPrefix(prefix) {
+      return String(path.dropFirst(prefix.count))
+    }
+    return path
+  }
+}
+
 struct ExportHealthSummary {
   let totalMinutes: Int
   let gapCount: Int

@@ -53,6 +53,7 @@ struct ContentView: View {
 
             TimelineExportCard(
               state: state,
+              playback: state.playback,
               playbackUI: state.playbackUI,
               timelineMarkers: timelineMarkers,
               isSingleDayTimeline: isSingleDayTimeline
@@ -123,7 +124,8 @@ struct ContentView: View {
   }
 
   private func loadedPreviewMaxHeight(for totalHeight: CGFloat) -> CGFloat {
-    let reserved: CGFloat = 430
+    // Keep the export controls reachable in the default desktop window.
+    let reserved: CGFloat = state.camerasDetected.count <= 4 ? 580 : 620
     return max(320, totalHeight - reserved)
   }
 }
@@ -376,9 +378,18 @@ private struct PreviewPanelCard: View {
 
 private struct TimelineExportCard: View {
   @ObservedObject var state: AppState
+  @ObservedObject var playback: MultiCamPlaybackController
   @ObservedObject var playbackUI: PlaybackUIState
   let timelineMarkers: [Date]
   let isSingleDayTimeline: Bool
+
+  private let quickRangeColumns = [
+    GridItem(.flexible(minimum: 120), spacing: 8),
+    GridItem(.flexible(minimum: 120), spacing: 8)
+  ]
+  private let cameraColumns = [
+    GridItem(.adaptive(minimum: 120), spacing: 8)
+  ]
 
   var body: some View {
     let minDate = state.minDate ?? Date()
@@ -395,10 +406,15 @@ private struct TimelineExportCard: View {
         Button {
           state.togglePlay()
         } label: {
-          Image(systemName: state.playback.isPlaying ? "pause.fill" : "play.fill")
+          Label(
+            playback.isPlaying ? "Pause" : "Play",
+            systemImage: playback.isPlaying ? "pause.fill" : "play.fill"
+          )
+          .labelStyle(.iconOnly)
         }
         .buttonStyle(IconButtonStyle(prominent: true))
-        .accessibilityLabel(state.playback.isPlaying ? "Pause" : "Play")
+        .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
+        .accessibilityValue(playback.isPlaying ? "playing" : "paused")
         .accessibilityIdentifier("toggle-playback")
 
         Text(playbackSummaryText)
@@ -495,17 +511,15 @@ private struct TimelineExportCard: View {
             .font(.system(size: 10, weight: .semibold))
             .foregroundColor(TeslaCamTheme.Colors.textTertiary)
 
-          ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-              Button("Whole Timeline") { state.setFullRange() }
-                .buttonStyle(QuickActionButtonStyle())
-              Button("Current Minute") { state.setCurrentMinuteRange() }
-                .buttonStyle(QuickActionButtonStyle())
-              Button("Last 5m") { state.setRecentRange(minutes: 5) }
-                .buttonStyle(QuickActionButtonStyle())
-              Button("Last 15m") { state.setRecentRange(minutes: 15) }
-                .buttonStyle(QuickActionButtonStyle())
-            }
+          LazyVGrid(columns: quickRangeColumns, alignment: .leading, spacing: 8) {
+            Button("Whole Timeline") { state.setFullRange() }
+              .buttonStyle(QuickActionButtonStyle())
+            Button("Current Minute") { state.setCurrentMinuteRange() }
+              .buttonStyle(QuickActionButtonStyle())
+            Button("Last 5m") { state.setRecentRange(minutes: 5) }
+              .buttonStyle(QuickActionButtonStyle())
+            Button("Last 15m") { state.setRecentRange(minutes: 15) }
+              .buttonStyle(QuickActionButtonStyle())
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -546,19 +560,18 @@ private struct TimelineExportCard: View {
           }
         }
 
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 8) {
-            ForEach(state.camerasDetected, id: \.self) { camera in
-              ExportCameraChip(
-                title: camera.displayName,
-                enabled: state.activeExportCameras.contains(camera)
-              ) {
-                let isEnabled = state.activeExportCameras.contains(camera)
-                state.toggleExportCamera(camera, isEnabled: !isEnabled)
-              }
+        LazyVGrid(columns: cameraColumns, alignment: .leading, spacing: 8) {
+          ForEach(state.camerasDetected, id: \.self) { camera in
+            ExportCameraChip(
+              title: camera.displayName,
+              enabled: state.activeExportCameras.contains(camera)
+            ) {
+              let isEnabled = state.activeExportCameras.contains(camera)
+              state.toggleExportCamera(camera, isEnabled: !isEnabled)
             }
           }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
 

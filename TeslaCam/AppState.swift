@@ -72,6 +72,11 @@ final class AppState: ObservableObject {
         self?.objectWillChange.send()
       }
       .store(in: &observers)
+    playback.objectWillChange
+      .sink { [weak self] _ in
+        self?.objectWillChange.send()
+      }
+      .store(in: &observers)
   }
 
   var currentSeconds: Double {

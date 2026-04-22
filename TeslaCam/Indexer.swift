@@ -61,7 +61,11 @@ final class ClipIndexer {
         ) else {
           continue
         }
-        for case let fileURL as URL in enumerator {
+        let fileURLs = enumerator.compactMap { item -> URL? in
+          guard let fileURL = item as? URL else { return nil }
+          return fileURL.standardizedFileURL
+        }.sorted { $0.path < $1.path }
+        for fileURL in fileURLs {
           parseClipFile(
             fileURL,
             duplicatePolicy: duplicatePolicy,
@@ -105,14 +109,19 @@ final class ClipIndexer {
         sets.append(entry.makeClipSet())
       }
     }
-    sets.sort {
-      if $0.date == $1.date {
-        if $0.timestamp == $1.timestamp {
-          return $0.id < $1.id
+    sets.sort { lhs, rhs in
+      if lhs.date == rhs.date {
+        if lhs.timestamp == rhs.timestamp {
+          let lhsPaths = lhs.files.values.map(\.path).sorted()
+          let rhsPaths = rhs.files.values.map(\.path).sorted()
+          if lhsPaths == rhsPaths {
+            return lhs.id < rhs.id
+          }
+          return lhsPaths.lexicographicallyPrecedes(rhsPaths)
         }
-        return $0.timestamp < $1.timestamp
+        return lhs.timestamp < rhs.timestamp
       }
-      return $0.date < $1.date
+      return lhs.date < rhs.date
     }
 
     guard let first = sets.first, let last = sets.last else {

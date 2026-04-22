@@ -189,6 +189,34 @@ struct TeslaCamTests {
     #expect(index.sets.contains { $0.file(for: .front)?.lastPathComponent == frontNewer.lastPathComponent })
   }
 
+  @Test func sharedDomainFixturesMatchNativeScanManifestsForAllDuplicatePolicies() async throws {
+    let fixtureDirectory = repositoryRootForTests()
+      .appendingPathComponent("fixtures", isDirectory: true)
+      .appendingPathComponent("domain", isDirectory: true)
+      .appendingPathComponent("cases", isDirectory: true)
+    let fixtureURLs = try FileManager.default.contentsOfDirectory(
+      at: fixtureDirectory,
+      includingPropertiesForKeys: nil
+    ).filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+    #expect(fixtureURLs.count >= 4)
+
+    let decoder = JSONDecoder()
+    for fixtureURL in fixtureURLs {
+      let fixture = try decoder.decode(DomainFixtureCase.self, from: Data(contentsOf: fixtureURL))
+      let root = try TemporaryDirectory.make()
+      defer { try? root.remove() }
+      try materializeDomainFixture(fixture, at: root.url)
+
+      for policy in DuplicateClipPolicy.allCases {
+        let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: policy) { _ in }
+        let actual = index.domainScanManifest(relativeTo: root.url).withoutContractHeader
+        let expected = try #require(fixture.expectedScan[policy.contractValue])
+        #expect(actual == expected)
+      }
+    }
+  }
+
   @Test func currentMinuteRangeUsesCurrentClipBounds() async throws {
     let state = AppState()
     let date = Date(timeIntervalSince1970: 1_700_000_123)
@@ -646,4 +674,82 @@ private func teslaTimestampDate(_ timestamp: String) -> Date? {
   formatter.timeZone = TimeZone.current
   formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
   return formatter.date(from: timestamp)
+}
+
+private struct DomainFixtureCase: Decodable {
+  let name: String
+  let files: [DomainFixtureFile]
+  let expectedScan: [String: DomainScanManifestWithoutHeader]
+
+  enum CodingKeys: String, CodingKey {
+    case name
+    case files
+    case expectedScan = "expected_scan"
+  }
+}
+
+private struct DomainFixtureFile: Decodable {
+  let path: String
+  let mtime: TimeInterval?
+}
+
+private struct DomainScanManifestWithoutHeader: Codable, Equatable {
+  let clipSetCount: Int
+  let duplicateFileCount: Int
+  let duplicateTimestampCount: Int
+  let cameras: [String]
+  let clipSets: [DomainClipSetManifest]
+
+  enum CodingKeys: String, CodingKey {
+    case clipSetCount = "clip_set_count"
+    case duplicateFileCount = "duplicate_file_count"
+    case duplicateTimestampCount = "duplicate_timestamp_count"
+    case cameras
+    case clipSets = "clip_sets"
+  }
+}
+
+private extension DomainScanManifest {
+  var withoutContractHeader: DomainScanManifestWithoutHeader {
+    DomainScanManifestWithoutHeader(
+      clipSetCount: clipSetCount,
+      duplicateFileCount: duplicateFileCount,
+      duplicateTimestampCount: duplicateTimestampCount,
+      cameras: cameras,
+      clipSets: clipSets
+    )
+  }
+}
+
+private extension DuplicateClipPolicy {
+  var contractValue: String {
+    switch self {
+    case .mergeByTime: return "merge-by-time"
+    case .keepAll: return "keep-all"
+    case .preferNewest: return "prefer-newest"
+    }
+  }
+}
+
+private func repositoryRootForTests() -> URL {
+  URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+}
+
+private func materializeDomainFixture(_ fixture: DomainFixtureCase, at root: URL) throws {
+  for entry in fixture.files {
+    let url = root.appendingPathComponent(entry.path)
+    try FileManager.default.createDirectory(
+      at: url.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try Data("fixture".utf8).write(to: url)
+    if let mtime = entry.mtime {
+      try FileManager.default.setAttributes(
+        [.modificationDate: Date(timeIntervalSince1970: mtime)],
+        ofItemAtPath: url.path
+      )
+    }
+  }
 }
