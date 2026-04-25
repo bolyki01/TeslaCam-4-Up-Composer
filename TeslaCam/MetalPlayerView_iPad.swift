@@ -1,10 +1,10 @@
-#if os(macOS)
+#if os(iOS)
 import SwiftUI
-import AppKit
+import UIKit
 import AVFoundation
 import MetalKit
 
-struct MetalPlayerView: NSViewRepresentable {
+struct MetalPlayerView: UIViewRepresentable {
   @ObservedObject var playback: MultiCamPlaybackController
   var cameraOrder: [Camera]
 
@@ -12,10 +12,9 @@ struct MetalPlayerView: NSViewRepresentable {
     Coordinator()
   }
 
-  func makeNSView(context: Context) -> MTKView {
+  func makeUIView(context: Context) -> MTKView {
     let view = MTKView()
-    view.wantsLayer = true
-    view.layer?.backgroundColor = NSColor.black.cgColor
+    view.backgroundColor = UIColor.black
     view.enableSetNeedsDisplay = false
     view.isPaused = false
     view.preferredFramesPerSecond = 30
@@ -29,14 +28,14 @@ struct MetalPlayerView: NSViewRepresentable {
     return view
   }
 
-  func updateNSView(_ nsView: MTKView, context: Context) {
+  func updateUIView(_ uiView: MTKView, context: Context) {
     guard let renderer = context.coordinator.renderer else { return }
     applyState(to: renderer)
-    nsView.needsDisplay = true
+    uiView.setNeedsDisplay()
   }
 
-  static func dismantleNSView(_ nsView: MTKView, coordinator: Coordinator) {
-    nsView.delegate = nil
+  static func dismantleUIView(_ uiView: MTKView, coordinator: Coordinator) {
+    uiView.delegate = nil
     coordinator.renderer = nil
   }
 
