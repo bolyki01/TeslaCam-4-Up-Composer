@@ -1,0 +1,24 @@
+name: Sentry Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  sentry-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: getsentry/action-release@v3
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        with:
+          environment: production
+          release: ${{ github.sha }}

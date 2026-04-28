@@ -2,11 +2,17 @@
 
 ## CLI
 
-Run from the repo root:
+Primary command from the repo root:
 
 ```bash
 ./teslacam-cli
+```
+
+Compatibility adapters to the same Python module:
+
+```bash
 python3 teslacam.py
+./teslacam.sh
 ```
 
 Optional install:
@@ -40,6 +46,14 @@ Use `script/test_native.sh` for the native lane. It resolves `TESLACAM_BUILD_ENV
 script/test_native.sh
 ```
 
+## Architecture checks
+
+- Keep domain changes covered by shared fixtures and `docs/domain-contract.md`.
+- Keep CLI planning pure; rendering and human output stay behind adapters.
+- Keep native export behind validated plan plus preflight.
+- Keep camera layout changes reflected in scan manifests, preview, native export, and CLI dry-run output.
+- Keep derived build folders ignored and out of git.
+
 ## Debug flow
 
 - `TESLACAM_DEBUG_SOURCE=/absolute/path/to/TeslaCam` injects a source in Debug builds.
@@ -61,4 +75,6 @@ script/test_native.sh
 
 - `TeslaCam/Resources/LICENSES.md` and `TeslaCam/Resources/ffmpeg_bin/` are support assets, not dev notes.
 - The CLI stays dependency-light and cross-platform.
+- `./teslacam-cli` is the active CLI entrypoint; `teslacam.py` and `teslacam.sh` are adapters.
+- `teslacam_legacy_macos.sh` is legacy reference only, not the native app export path.
 - Keep app and CLI output behavior aligned for duplicate handling, time trimming, and layout selection.

@@ -24,9 +24,9 @@ final class TeslaCamUITests: XCTestCase {
   func testSampleLaunchShowsPlaybackAndExport() throws {
     let app = launchApp(mode: "sample")
 
-    XCTAssertTrue(app.buttons["Export Video"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["Play"].exists || app.buttons["Pause"].exists)
-    XCTAssertTrue(app.staticTexts["Timeline"].exists)
+    XCTAssertTrue(app.buttons["export-video"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["toggle-playback"].exists)
+    XCTAssertTrue(app.otherElements["merged-timeline-track"].exists)
   }
 
   @MainActor
@@ -36,13 +36,10 @@ final class TeslaCamUITests: XCTestCase {
     app.launchEnvironment["TESLACAM_DEBUG_EXPORT_DIR"] = NSTemporaryDirectory()
     app.launch()
 
-    XCTAssertTrue(app.buttons["Export Video"].waitForExistence(timeout: 5))
-    app.buttons["Export Video"].click()
+    XCTAssertTrue(app.buttons["export-video"].waitForExistence(timeout: 5))
+    app.buttons["export-video"].click()
 
-    XCTAssertTrue(
-      app.staticTexts["Exporting Video"].waitForExistence(timeout: 5) ||
-      app.staticTexts["Export Complete"].waitForExistence(timeout: 5)
-    )
+    XCTAssertTrue(app.descendants(matching: .any)["export-overlay"].waitForExistence(timeout: 5))
   }
 
   @MainActor
@@ -63,11 +60,11 @@ final class TeslaCamUITests: XCTestCase {
   func testSampleQuickRangeAndCameraButtonsRespond() throws {
     let app = launchApp(mode: "sample")
 
-    let wholeTimeline = app.buttons["Whole Timeline"]
-    let currentMinute = app.buttons["Current Minute"]
-    let lastFive = app.buttons["Last 5m"]
-    let lastFifteen = app.buttons["Last 15m"]
-    let frontCamera = app.buttons["Front"]
+    let wholeTimeline = app.buttons["range-whole-timeline"]
+    let currentMinute = app.buttons["range-current-minute"]
+    let lastFive = app.buttons["range-last-5m"]
+    let lastFifteen = app.buttons["range-last-15m"]
+    let frontCamera = app.buttons["camera-front"]
 
     XCTAssertTrue(wholeTimeline.waitForExistence(timeout: 5))
     XCTAssertTrue(currentMinute.exists)

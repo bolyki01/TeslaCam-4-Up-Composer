@@ -6,6 +6,10 @@ xcuserdata/
 *.xcscmblueprint
 *.xcodeproj/project.xcworkspace/xcuserdata/
 DerivedData/
+DerivedData-*/
+build-dd/
+*.xcresult/
+*.resultbundle/
 *.ipa
 *.dSYM
 *.dSYM.zip
@@ -21,6 +25,10 @@ Package.resolved
 
 # macOS
 .DS_Store
+
+# Local agent/worktree noise
+.claude/
+.codex/
 
 # Logs
 *.log

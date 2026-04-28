@@ -1,7 +1,13 @@
 import unittest
+import json
+from pathlib import Path
 
-from teslacam_cli.layouts import build_layout, fill_missing_dimensions
+from teslacam_cli.domain_contract import layout_manifest
+from teslacam_cli.layouts import build_camera_layout_plan, build_layout, fill_missing_dimensions
 from teslacam_cli.models import Camera, Dimensions, LayoutKind
+
+
+FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "domain" / "cases"
 
 
 class LayoutTests(unittest.TestCase):
@@ -50,6 +56,29 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(layout.cell_by_camera[Camera.BACK].x, 1920)
         self.assertEqual(layout.cell_by_camera[Camera.BACK].y, 1080)
         self.assertEqual(layout.cell_by_camera[Camera.LEFT_PILLAR].y, 2160)
+
+    def test_shared_layout_fixtures_match_python_contract_plan(self):
+        checked = 0
+        for fixture_path in sorted(FIXTURE_DIR.glob("*.json")):
+            case = json.loads(fixture_path.read_text(encoding="utf-8"))
+            expected_layout = case.get("expected_layout")
+            if expected_layout is None:
+                continue
+            checked += 1
+            cameras = {
+                Camera(entry)
+                for policy in case["expected_scan"].values()
+                for entry in policy["cameras"]
+            }
+            for profile, expected in expected_layout.items():
+                with self.subTest(fixture=fixture_path.name, profile=profile):
+                    layout = build_camera_layout_plan(
+                        profile,
+                        cameras,
+                        {},
+                    )
+                    self.assertEqual(layout_manifest(layout), expected)
+        self.assertGreaterEqual(checked, 1)
 
 
 if __name__ == "__main__":

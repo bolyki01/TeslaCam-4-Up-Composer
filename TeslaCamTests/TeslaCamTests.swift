@@ -37,6 +37,100 @@ struct TeslaCamTests {
     #expect((hw4Fast ?? 0) > (hdFast ?? 0))
   }
 
+  @Test func exportPlanValidatesTrimRangeAndEnabledCameras() async throws {
+    let emptyRange = exportRequestForPlan(
+      enabledCameras: [.front],
+      trimStart: Date(timeIntervalSince1970: 100),
+      trimEnd: Date(timeIntervalSince1970: 100)
+    )
+    #expect(throws: ExportPlan.ValidationError.self) {
+      try ExportPlan(request: emptyRange)
+    }
+
+    let noCameras = exportRequestForPlan(enabledCameras: [])
+    #expect(throws: ExportPlan.ValidationError.self) {
+      try ExportPlan(request: noCameras)
+    }
+  }
+
+  @Test func exportPlanCapturesHw4CanvasWithoutDownscaling() async throws {
+    let size = CGSize(width: 1920, height: 1080)
+    let cameras = Set(Camera.hw4SixCamOrder)
+    let request = exportRequestForPlan(
+      useSixCam: true,
+      enabledCameras: cameras,
+      files: Dictionary(uniqueKeysWithValues: cameras.map { ($0, URL(fileURLWithPath: "/tmp/\($0.rawValue).mov")) }),
+      naturalSizes: Dictionary(uniqueKeysWithValues: cameras.map { ($0, size) })
+    )
+
+    let plan = try ExportPlan(request: request)
+
+    #expect(plan.canvasSize == CGSize(width: 5760, height: 3240))
+    #expect(plan.tileSize == size)
+    #expect(plan.cameraOrder == Camera.hw4SixCamOrder)
+    #expect(plan.totalDuration == request.totalDuration)
+  }
+
+  @Test func exportPreflightReportsAccessAndDiskProblemsThroughAdapter() async throws {
+    let request = exportRequestForPlan()
+    let plan = try ExportPlan(request: request)
+    let preflight = ExportPreflight(
+      fileAccess: StubExportPreflightFileAccess(
+        canWrite: false,
+        availableCapacity: 1
+      )
+    )
+
+    let summary = preflight.summary(for: plan)
+
+    #expect(!summary.canExport)
+    #expect(summary.blockingIssues.contains { $0.message == "The selected export location is not writable." })
+    #expect(summary.blockingIssues.contains { $0.message.contains("Export preflight requires at least") })
+  }
+
+  @Test func exportPreflightBlocksOversizedHevcCanvasButAllowsProRes() async throws {
+    let cameras: Set<Camera> = [.front]
+    let oversized = CGSize(width: 9000, height: 2400)
+    let hevcPlan = try ExportPlan(
+      request: exportRequestForPlan(
+        preset: .fastHEVC,
+        enabledCameras: cameras,
+        files: [.front: URL(fileURLWithPath: "/tmp/front.mov")],
+        naturalSizes: [.front: oversized]
+      )
+    )
+    let proResPlan = try ExportPlan(
+      request: exportRequestForPlan(
+        preset: .editFriendlyProRes,
+        enabledCameras: cameras,
+        files: [.front: URL(fileURLWithPath: "/tmp/front.mov")],
+        naturalSizes: [.front: oversized]
+      )
+    )
+    let preflight = ExportPreflight(fileAccess: StubExportPreflightFileAccess(canWrite: true, availableCapacity: Int64.max))
+
+    let hevc = preflight.summary(for: hevcPlan)
+    let proRes = preflight.summary(for: proResPlan)
+
+    let width = Int(hevcPlan.canvasSize.width.rounded(.up))
+    let height = Int(hevcPlan.canvasSize.height.rounded(.up))
+    #expect(hevc.blockingIssues.map(\.message) == [
+      "Composite canvas \(width)×\(height) exceeds the hardware HEVC encoder ceiling (8192 px per side). Reduce enabled cameras or switch to ProRes preset."
+    ])
+    #expect(proRes.canExport)
+  }
+
+  @Test func nativeExportPublishesPreflightBlockAsStatus() async throws {
+    let controller = NativeExportController()
+    let request = exportRequestForPlan(enabledCameras: [])
+
+    controller.export(request: request)
+
+    #expect(controller.currentJob?.phase == .failed)
+    #expect(controller.currentJob?.failureReason == "Select at least one camera to export.")
+    #expect(controller.isStatusPresented)
+  }
+
   @Test func healthSummaryMixedCoverageFlagReflectsCounts() async throws {
     let summary = ExportHealthSummary(
       totalMinutes: 12,
@@ -217,6 +311,39 @@ struct TeslaCamTests {
     }
   }
 
+  @Test func sharedLayoutFixturesMatchNativeLayoutPlan() async throws {
+    let fixtureDirectory = repositoryRootForTests()
+      .appendingPathComponent("fixtures", isDirectory: true)
+      .appendingPathComponent("domain", isDirectory: true)
+      .appendingPathComponent("cases", isDirectory: true)
+    let fixtureURLs = try FileManager.default.contentsOfDirectory(
+      at: fixtureDirectory,
+      includingPropertiesForKeys: nil
+    ).filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+    let decoder = JSONDecoder()
+    var checked = 0
+    for fixtureURL in fixtureURLs {
+      let fixture = try decoder.decode(DomainFixtureCase.self, from: Data(contentsOf: fixtureURL))
+      guard let expectedLayout = fixture.expectedLayout else { continue }
+      checked += 1
+      let detected = Set(fixture.expectedScan.values.flatMap(\.cameras).compactMap(Camera.init(rawValue:)))
+
+      for request in CameraLayoutRequest.allCases {
+        let expected = try #require(expectedLayout[request.rawValue])
+        let plan = CameraLayoutPlan.build(
+          requestedProfile: request,
+          detectedCameras: detected,
+          enabledCameras: detected,
+          naturalSizes: [:]
+        )
+        #expect(plan.domainLayoutManifest == expected)
+      }
+    }
+
+    #expect(checked >= 1)
+  }
+
   @Test func currentMinuteRangeUsesCurrentClipBounds() async throws {
     let state = AppState()
     let date = Date(timeIntervalSince1970: 1_700_000_123)
@@ -342,6 +469,70 @@ struct TeslaCamTests {
     #expect(coverage.activeClipIndex(at: 5) == 1)
     #expect(coverage.nearestClipIndex(to: 60) == 1)
     #expect(coverage.activeClipIndex(at: 125) == 0)
+  }
+
+  @Test func timelineStoreOwnsCoverageAndTrimSelection() async throws {
+    let anchor = Date(timeIntervalSince1970: 1_700_000_000)
+    let sets = [
+      ClipSet(timestamp: "a", date: anchor, duration: 50, files: [:]),
+      ClipSet(timestamp: "b", date: anchor.addingTimeInterval(80), duration: 60, files: [:])
+    ]
+    var store = TimelineStore()
+
+    store.load(sets: sets, minDate: anchor, maxDate: anchor.addingTimeInterval(140))
+    store.setTrimRange(startSeconds: 52, endSeconds: 84, snapToMinute: true)
+
+    #expect(abs(store.totalDuration - 140) < 0.001)
+    #expect(store.gapRanges == [TimelineGapRange(startSeconds: 50, endSeconds: 80)])
+    #expect(abs(store.trimStartSeconds - 0) < 0.001)
+    #expect(abs(store.trimEndSeconds - 120) < 0.001)
+    #expect(store.selectedSetsForExport.map(\.timestamp) == ["a", "b"])
+    #expect(store.currentGapRange(at: 60) == TimelineGapRange(startSeconds: 50, endSeconds: 80))
+  }
+
+  @Test func exportStoreResolvesNamesAndBuildsRequests() async throws {
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+
+    let store = ExportStore(fileManager: .default)
+    let first = store.resolvedOutputURL(
+      chosenURL: root.url,
+      preferredFilename: "manual-export.mov",
+      preset: .maxQualityHEVC
+    )
+    try Data().write(to: first)
+
+    let second = store.resolvedOutputURL(
+      chosenURL: root.url,
+      preferredFilename: "manual-export.mov",
+      preset: .maxQualityHEVC
+    )
+
+    let anchor = Date(timeIntervalSince1970: 1_700_000_000)
+    let request = store.makeRequest(
+      sets: [
+        ClipSet(
+          timestamp: "a",
+          date: anchor,
+          duration: 60,
+          files: [.front: URL(fileURLWithPath: "/tmp/front.mov"), .left: URL(fileURLWithPath: "/tmp/left.mov")]
+        )
+      ],
+      chosenURL: second,
+      preset: .maxQualityHEVC,
+      enabledCameras: [.front, .left],
+      trimStartSeconds: 0,
+      trimEndSeconds: 60,
+      trimStartDate: anchor,
+      trimEndDate: anchor.addingTimeInterval(60),
+      selectedRangeText: "range",
+      partialClipCount: 0
+    )
+
+    #expect(first.lastPathComponent == "manual-export.mp4")
+    #expect(second.lastPathComponent == "manual-export-2.mp4")
+    #expect(request?.outputURL.lastPathComponent == "manual-export-2.mp4")
+    #expect(request?.useSixCam == true)
   }
 
   @Test func exportDirectoryNamingAvoidsExistingFiles() async throws {
@@ -594,6 +785,52 @@ private struct TemporaryDirectory {
   }
 }
 
+private struct StubExportPreflightFileAccess: ExportPreflightFileAccess {
+  var canWrite: Bool
+  var availableCapacity: Int64?
+
+  func canWrite(to outputURL: URL) -> Bool {
+    canWrite
+  }
+
+  func availableCapacity(forWritingTo outputURL: URL) -> Int64? {
+    availableCapacity
+  }
+}
+
+private func exportRequestForPlan(
+  preset: ExportPreset = .maxQualityHEVC,
+  useSixCam: Bool = false,
+  enabledCameras: Set<Camera> = [.front],
+  files: [Camera: URL] = [.front: URL(fileURLWithPath: "/tmp/front.mov")],
+  naturalSizes: [Camera: CGSize] = [.front: CGSize(width: 1920, height: 1080)],
+  trimStart: Date = Date(timeIntervalSince1970: 100),
+  trimEnd: Date = Date(timeIntervalSince1970: 102)
+) -> ExportRequest {
+  ExportRequest(
+    sets: [
+      ClipSet(
+        timestamp: "sample",
+        date: trimStart,
+        duration: max(0, trimEnd.timeIntervalSince(trimStart)),
+        files: files,
+        cameraDurations: Dictionary(uniqueKeysWithValues: files.keys.map { ($0, max(0, trimEnd.timeIntervalSince(trimStart))) }),
+        naturalSizes: naturalSizes
+      )
+    ],
+    outputURL: URL(fileURLWithPath: "/tmp/export.\(preset.defaultExtension)"),
+    useSixCam: useSixCam,
+    preset: preset,
+    enabledCameras: enabledCameras,
+    trimStartSeconds: 0,
+    trimEndSeconds: max(0, trimEnd.timeIntervalSince(trimStart)),
+    trimStartDate: trimStart,
+    trimEndDate: trimEnd,
+    selectedRangeText: "sample",
+    partialClipCount: 0
+  )
+}
+
 private func makeVideo(at url: URL, duration: Double, size: CGSize) throws {
   let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
   let settings: [String: Any] = [
@@ -680,11 +917,13 @@ private struct DomainFixtureCase: Decodable {
   let name: String
   let files: [DomainFixtureFile]
   let expectedScan: [String: DomainScanManifestWithoutHeader]
+  let expectedLayout: [String: DomainLayoutManifest]?
 
   enum CodingKeys: String, CodingKey {
     case name
     case files
     case expectedScan = "expected_scan"
+    case expectedLayout = "expected_layout"
   }
 }
 

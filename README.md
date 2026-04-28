@@ -32,9 +32,17 @@ The native app uses the shipping Swift export path. The CLI keeps the portable f
 
 ## Quick start
 
+Primary CLI:
+
 ```sh
 ./teslacam-cli
+```
+
+Compatibility adapters to the same Python module:
+
+```sh
 python3 teslacam.py
+./teslacam.sh
 ```
 
 ## Domain parity and dry runs
@@ -48,8 +56,17 @@ teslacam-cli /path/to/TeslaCam --dry-run-json manifest.json
 teslacam-cli /path/to/TeslaCam --dry-run-json -
 ```
 
+## Architecture
+
+- Domain behavior is fixture-backed and documented in `docs/domain-contract.md`.
+- The CLI builds a pure run plan, then hands rendering and user output to adapters.
+- The native app builds a validated export plan, runs preflight, and keeps export status observable.
+- Camera layout is a shared contract: index, preview, native export, and CLI dry runs must agree.
+- App state is split around timeline, export, playback, and UI-facing state so tests can cover logic without driving the full app.
+
 ## Notes
 
 - The App Store app does not bundle `ffmpeg`.
 - Native export is the shipping app path.
+- `./teslacam-cli` is the primary CLI command; wrappers are compatibility adapters.
 - `_legacy/` is non-canonical and should not drive new work.

@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Optional
 
 from .composer import (
+    RenderConcatStarted,
+    RenderEvent,
+    RenderPartStarted,
+    RenderReporter,
+    RenderStarted,
+    RenderUnreadableClips,
     clip_set_duration,
     compose,
     prepare_workdir,
@@ -17,14 +23,42 @@ from .composer import (
     select_clip_sets,
 )
 from .domain_contract import dry_run_manifest, write_manifest_json
-from .ffmpeg_tools import ToolResolutionError, choose_encoder, resolve_tools
-from .layouts import PROFILE_LABELS, build_layout, detect_layout_kind, fill_missing_dimensions
-from .models import Camera, ComposePlan, DuplicatePolicy, OutputConflictPolicy
+from .ffmpeg_tools import FfmpegRunner, MediaProbe, ToolResolutionError, resolve_tools
+from .layouts import PROFILE_LABELS, build_camera_layout_plan, fill_missing_dimensions
+from .models import (
+    Camera,
+    ComposePlan,
+    Dimensions,
+    DuplicatePolicy,
+    EncoderPlan,
+    LayoutSpec,
+    OutputConflictPolicy,
+    ScanResult,
+    SelectedSet,
+)
 from .scanner import cameras_in_sets, format_clip_timestamp, parse_clip_timestamp, scan_source
 
 
 @dataclass(frozen=True)
-class RunConfig:
+class RunOptions:
+    source_dir: Path
+    output_arg: Optional[str]
+    start_arg: Optional[str]
+    end_arg: Optional[str]
+    profile: str
+    mode: str
+    ffmpeg: Path
+    ffprobe: Path
+    workdir_arg: Optional[Path]
+    keep_workdir: bool
+    x265_preset: str
+    loglevel: str
+    duplicate_policy: DuplicatePolicy
+    output_conflict: OutputConflictPolicy
+
+
+@dataclass(frozen=True)
+class RunPlan:
     source_dir: Path
     output_file: Path
     start_time: datetime
@@ -33,13 +67,171 @@ class RunConfig:
     mode: str
     ffmpeg: Path
     ffprobe: Path
-    workdir: Path
+    workdir_arg: Optional[Path]
     keep_workdir: bool
     x265_preset: str
     loglevel: str
     duplicate_policy: DuplicatePolicy
     output_conflict: OutputConflictPolicy
+    scan_result: ScanResult
+    selected_sets: list[SelectedSet]
+    layout: LayoutSpec
+    dimensions: dict[Camera, Dimensions]
+    fps: float
+    encoder: EncoderPlan
 
+    def to_compose_plan(
+        self,
+        workdir: Path,
+        media_probe: MediaProbe,
+        ffmpeg_runner: Optional[FfmpegRunner] = None,
+        render_reporter: Optional[RenderReporter] = None,
+    ) -> ComposePlan:
+        return ComposePlan(
+            source_dir=self.source_dir,
+            output_file=self.output_file,
+            ffmpeg=self.ffmpeg,
+            ffprobe=self.ffprobe,
+            layout=self.layout,
+            fps=self.fps,
+            encoder=self.encoder,
+            selected_sets=self.selected_sets,
+            dimensions_by_camera=self.dimensions,
+            workdir=workdir,
+            keep_workdir=self.keep_workdir,
+            loglevel=self.loglevel,
+            media_probe=media_probe,
+            ffmpeg_runner=ffmpeg_runner,
+            render_reporter=render_reporter,
+        )
+
+    def dry_run_manifest(self) -> dict:
+        return dry_run_manifest(
+            source_dir=self.source_dir,
+            output_file=self.output_file,
+            start_time=self.start_time,
+            end_time=self.end_time,
+            profile=self.profile,
+            mode=self.mode,
+            duplicate_policy=self.duplicate_policy,
+            output_conflict=self.output_conflict,
+            scan_result=self.scan_result,
+            selected_sets=self.selected_sets,
+            layout=self.layout,
+            dimensions=self.dimensions,
+            fps=self.fps,
+            encoder_label=self.encoder.label,
+        )
+
+
+class RunPlanBuilder:
+    def __init__(self, media_probe: Optional[MediaProbe] = None) -> None:
+        self.media_probe = media_probe or MediaProbe()
+
+    def build(self, options: RunOptions) -> RunPlan:
+        scan_result = scan_source(options.source_dir, duplicate_policy=options.duplicate_policy)
+        start_default, end_default = dataset_range(scan_result.clip_sets, options.ffprobe, self.media_probe)
+        start_time = parse_user_datetime(options.start_arg) if options.start_arg else start_default
+        end_time = parse_user_datetime(options.end_arg) if options.end_arg else end_default
+        if end_time <= start_time:
+            raise RuntimeError("End time must be after start time.")
+
+        output_file = resolve_output_path(
+            options.source_dir,
+            options.output_arg,
+            options.mode,
+            start_time,
+            end_time,
+            output_conflict=options.output_conflict,
+        )
+        selected_sets = select_clip_sets(
+            scan_result.clip_sets,
+            start_time,
+            end_time,
+            options.ffprobe,
+            media_probe=self.media_probe,
+        )
+        if not selected_sets:
+            raise RuntimeError("No clips overlap the requested time range.")
+
+        available_cameras = cameras_in_sets(selected_sets_to_clip_sets(selected_sets))
+        probed_dimensions = probe_dimensions_for_selection(
+            options.ffprobe,
+            selected_sets,
+            media_probe=self.media_probe,
+        )
+        layout = build_camera_layout_plan(options.profile, available_cameras, probed_dimensions)
+        dimensions = fill_missing_dimensions(layout.kind, probed_dimensions)
+        fps = probe_selection_fps(options.ffprobe, selected_sets, media_probe=self.media_probe)
+        encoder = self.media_probe.choose_encoder(options.ffmpeg, options.mode, options.x265_preset)
+
+        return RunPlan(
+            source_dir=options.source_dir,
+            output_file=output_file,
+            start_time=start_time,
+            end_time=end_time,
+            profile=options.profile,
+            mode=options.mode,
+            ffmpeg=options.ffmpeg,
+            ffprobe=options.ffprobe,
+            workdir_arg=options.workdir_arg,
+            keep_workdir=options.keep_workdir or options.workdir_arg is not None,
+            x265_preset=options.x265_preset,
+            loglevel=options.loglevel,
+            duplicate_policy=options.duplicate_policy,
+            output_conflict=options.output_conflict,
+            scan_result=scan_result,
+            selected_sets=selected_sets,
+            layout=layout,
+            dimensions=dimensions,
+            fps=fps,
+            encoder=encoder,
+        )
+
+
+class CliPresenter:
+    def print_plan(self, plan: RunPlan) -> None:
+        print_summary(
+            source_dir=plan.source_dir,
+            output_file=plan.output_file,
+            start_time=plan.start_time,
+            end_time=plan.end_time,
+            layout=plan.layout.kind.value,
+            mode=plan.encoder.label,
+            camera_dimensions=plan.dimensions,
+            sets=len(plan.selected_sets),
+            duplicate_policy=plan.duplicate_policy,
+            duplicate_file_count=plan.scan_result.duplicate_file_count,
+            duplicate_timestamp_count=plan.scan_result.duplicate_timestamp_count,
+        )
+
+    def print_done(self, output: Path, workdir: Path, keep_workdir: bool) -> None:
+        print(f"Done: {output}")
+        if keep_workdir:
+            print(f"Workdir kept: {workdir}")
+
+    def handle_render_event(self, event: RenderEvent) -> None:
+        if isinstance(event, RenderStarted):
+            print(f"Using ffmpeg: {event.ffmpeg}")
+            print(f"Using ffprobe: {event.ffprobe}")
+            print(
+                f"Canvas: {event.canvas_width}x{event.canvas_height} | "
+                f"Layout: {event.layout} | FPS: {event.fps:.3f} | Mode: {event.mode}"
+            )
+            print(f"Clip sets selected: {event.selected_count}")
+        elif isinstance(event, RenderUnreadableClips):
+            print(f"Warning: {len(event.paths)} unreadable or missing clip(s) will render as black placeholders.")
+            for clip_path in event.paths[:5]:
+                print(f"  - {clip_path}")
+            if len(event.paths) > 5:
+                print(f"  ... {len(event.paths) - 5} more")
+        elif isinstance(event, RenderPartStarted):
+            print(
+                f"[{event.index}/{event.total}] {event.timestamp} "
+                f"trim {event.trim_start:.3f}s -> {event.trim_end:.3f}s"
+            )
+        elif isinstance(event, RenderConcatStarted):
+            print("Concatenating final MP4...")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -101,123 +293,55 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         repo_root = Path(__file__).resolve().parent.parent
         interactive = args.interactive or args.source is None
+        presenter = CliPresenter()
+        media_probe = MediaProbe()
         ffmpeg, ffprobe = resolve_tools(repo_root, args.ffmpeg, args.ffprobe)
         duplicate_policy = DuplicatePolicy(args.duplicate_policy)
         output_conflict = OutputConflictPolicy(args.output_conflict)
 
         if interactive:
-            config = prompt_run_config(
+            options = prompt_run_options(
                 ffmpeg=ffmpeg,
                 ffprobe=ffprobe,
                 duplicate_policy=duplicate_policy,
                 output_conflict=output_conflict,
+                media_probe=media_probe,
             )
         else:
-            source_dir = Path(args.source).expanduser().resolve()
-            scan_result = scan_source(source_dir, duplicate_policy=duplicate_policy)
-            start_default, end_default = dataset_range(scan_result.clip_sets, ffprobe)
-            start_time = parse_user_datetime(args.start) if args.start else start_default
-            end_time = parse_user_datetime(args.end) if args.end else end_default
-            output_file = resolve_output_path(
-                source_dir,
-                args.output,
-                args.mode,
-                start_time,
-                end_time,
-                output_conflict=output_conflict,
-            )
-            workdir, workdir_was_explicit = prepare_workdir(Path(args.workdir).expanduser().resolve() if args.workdir else None)
-            config = RunConfig(
-                source_dir=source_dir,
-                output_file=output_file,
-                start_time=start_time,
-                end_time=end_time,
+            options = RunOptions(
+                source_dir=Path(args.source).expanduser().resolve(),
+                output_arg=args.output,
+                start_arg=args.start,
+                end_arg=args.end,
                 profile=args.profile,
                 mode=args.mode,
                 ffmpeg=ffmpeg,
                 ffprobe=ffprobe,
-                workdir=workdir,
-                keep_workdir=args.keep_workdir or workdir_was_explicit,
+                workdir_arg=Path(args.workdir).expanduser().resolve() if args.workdir else None,
+                keep_workdir=args.keep_workdir,
                 x265_preset=args.x265_preset,
                 loglevel=args.loglevel,
                 duplicate_policy=duplicate_policy,
                 output_conflict=output_conflict,
             )
 
-        if config.end_time <= config.start_time:
-            raise RuntimeError("End time must be after start time.")
-
-        scan_result = scan_source(config.source_dir, duplicate_policy=config.duplicate_policy)
-        selected_sets = select_clip_sets(scan_result.clip_sets, config.start_time, config.end_time, config.ffprobe)
-        if not selected_sets:
-            raise RuntimeError("No clips overlap the requested time range.")
-
-        available_cameras = cameras_in_sets(selected_sets_to_clip_sets(selected_sets))
-        layout_kind = detect_layout_kind(config.profile, available_cameras)
-        probed_dimensions = probe_dimensions_for_selection(config.ffprobe, selected_sets)
-        dimensions = fill_missing_dimensions(layout_kind, probed_dimensions)
-        layout = build_layout(layout_kind, dimensions)
-        fps = probe_selection_fps(config.ffprobe, selected_sets)
-        encoder = choose_encoder(config.ffmpeg, config.mode, config.x265_preset)
+        plan = RunPlanBuilder(media_probe=media_probe).build(options)
 
         if args.dry_run_json is None:
-            print_summary(
-                source_dir=config.source_dir,
-                output_file=config.output_file,
-                start_time=config.start_time,
-                end_time=config.end_time,
-                layout=layout.kind.value,
-                mode=encoder.label,
-                camera_dimensions=dimensions,
-                sets=len(selected_sets),
-                duplicate_policy=config.duplicate_policy,
-                duplicate_file_count=scan_result.duplicate_file_count,
-                duplicate_timestamp_count=scan_result.duplicate_timestamp_count,
-            )
+            presenter.print_plan(plan)
 
         if args.dry_run or args.dry_run_json is not None:
             if args.dry_run_json is not None:
-                manifest = dry_run_manifest(
-                    source_dir=config.source_dir,
-                    output_file=config.output_file,
-                    start_time=config.start_time,
-                    end_time=config.end_time,
-                    profile=config.profile,
-                    mode=config.mode,
-                    duplicate_policy=config.duplicate_policy,
-                    output_conflict=config.output_conflict,
-                    scan_result=scan_result,
-                    selected_sets=selected_sets,
-                    layout=layout,
-                    dimensions=dimensions,
-                    fps=fps,
-                    encoder_label=encoder.label,
-                )
+                manifest = plan.dry_run_manifest()
                 write_manifest_json(manifest, args.dry_run_json)
-            if not config.keep_workdir and config.workdir.exists():
-                shutil.rmtree(config.workdir, ignore_errors=True)
             return 0
 
-        plan = ComposePlan(
-            source_dir=config.source_dir,
-            output_file=config.output_file,
-            ffmpeg=config.ffmpeg,
-            ffprobe=config.ffprobe,
-            layout=layout,
-            fps=fps,
-            encoder=encoder,
-            selected_sets=selected_sets,
-            dimensions_by_camera=dimensions,
-            workdir=config.workdir,
-            keep_workdir=config.keep_workdir,
-            loglevel=config.loglevel,
-        )
-        output = compose(plan)
-        print(f"Done: {output}")
-        if config.keep_workdir:
-            print(f"Workdir kept: {config.workdir}")
-        elif config.workdir.exists():
-            shutil.rmtree(config.workdir, ignore_errors=True)
+        workdir, _workdir_was_explicit = prepare_workdir(plan.workdir_arg)
+        compose_plan = plan.to_compose_plan(workdir, media_probe, render_reporter=presenter)
+        output = compose(compose_plan)
+        presenter.print_done(output, workdir, plan.keep_workdir)
+        if not plan.keep_workdir and workdir.exists():
+            shutil.rmtree(workdir, ignore_errors=True)
         return 0
     except KeyboardInterrupt:
         print("Interrupted.", file=sys.stderr)
@@ -256,10 +380,14 @@ def parse_user_datetime(value: str) -> datetime:
 
 
 
-def dataset_range(clip_sets, ffprobe: Path) -> tuple[datetime, datetime]:
+def dataset_range(
+    clip_sets,
+    ffprobe: Path,
+    media_probe: Optional[MediaProbe] = None,
+) -> tuple[datetime, datetime]:
     first = clip_sets[0]
     last = clip_sets[-1]
-    last_duration = clip_set_duration(last, ffprobe)
+    last_duration = clip_set_duration(last, ffprobe, media_probe=media_probe)
     return first.start_time, last.start_time + timedelta(seconds=last_duration)
 
 
@@ -289,7 +417,6 @@ def resolve_output_path(
             path = path.with_suffix(".mp4")
         return apply_output_conflict_policy(path, output_conflict)
     output_dir = source_dir / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
     path = (output_dir / default_output_filename(mode, start_time, end_time)).resolve()
     return apply_output_conflict_policy(path, output_conflict)
 
@@ -318,12 +445,13 @@ def unique_output_path(path: Path) -> Path:
 
 
 
-def prompt_run_config(
+def prompt_run_options(
     ffmpeg: Path,
     ffprobe: Path,
     duplicate_policy: DuplicatePolicy,
     output_conflict: OutputConflictPolicy,
-) -> RunConfig:
+    media_probe: MediaProbe,
+) -> RunOptions:
     while True:
         raw_source = input("TeslaCam source folder: ").strip()
         if raw_source:
@@ -334,7 +462,7 @@ def prompt_run_config(
 
     scan_result = scan_source(source_dir, duplicate_policy=duplicate_policy)
     clip_sets = scan_result.clip_sets
-    start_default, end_default = dataset_range(clip_sets, ffprobe)
+    start_default, end_default = dataset_range(clip_sets, ffprobe, media_probe)
     cameras = cameras_in_sets(clip_sets)
     print(
         f"Found {len(clip_sets)} clip sets | "
@@ -390,23 +518,23 @@ def prompt_run_config(
     )
 
     raw_workdir = input("Workdir [temporary]: ").strip()
-    workdir, workdir_was_explicit = prepare_workdir(Path(raw_workdir).expanduser().resolve() if raw_workdir else None)
+    workdir_arg = Path(raw_workdir).expanduser().resolve() if raw_workdir else None
 
     raw_keep = input("Keep intermediate files? [N]: ").strip().lower()
-    keep_workdir = workdir_was_explicit or raw_keep in {"y", "yes"}
+    keep_workdir = workdir_arg is not None or raw_keep in {"y", "yes"}
 
     raw_preset = input("x265 preset [medium]: ").strip() or "medium"
 
-    return RunConfig(
+    return RunOptions(
         source_dir=source_dir,
-        output_file=output_file,
-        start_time=start_time,
-        end_time=end_time,
+        output_arg=str(output_file),
+        start_arg=start_time.strftime("%Y-%m-%d %H:%M:%S"),
+        end_arg=end_time.strftime("%Y-%m-%d %H:%M:%S"),
         profile=profile,
         mode=mode,
         ffmpeg=ffmpeg,
         ffprobe=ffprobe,
-        workdir=workdir,
+        workdir_arg=workdir_arg,
         keep_workdir=keep_workdir,
         x265_preset=raw_preset,
         loglevel="info",

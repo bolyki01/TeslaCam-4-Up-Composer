@@ -1,27 +1,68 @@
 from __future__ import annotations
 
-import shutil
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Protocol, Union
 
-from .ffmpeg_tools import ffconcat_path, probe_dimensions, probe_duration, probe_fps, probe_has_video_stream, run_command
+from .ffmpeg_tools import FfmpegRunner, MediaProbe, ffconcat_path
 from .models import Camera, ClipSet, ComposePlan, Dimensions, LayoutSpec, MIXED_CAMERA_ORDER, SelectedSet
+
+
+@dataclass(frozen=True)
+class RenderStarted:
+    ffmpeg: Path
+    ffprobe: Path
+    canvas_width: int
+    canvas_height: int
+    layout: str
+    fps: float
+    mode: str
+    selected_count: int
+
+
+@dataclass(frozen=True)
+class RenderUnreadableClips:
+    paths: List[Path]
+
+
+@dataclass(frozen=True)
+class RenderPartStarted:
+    index: int
+    total: int
+    timestamp: str
+    trim_start: float
+    trim_end: float
+
+
+@dataclass(frozen=True)
+class RenderConcatStarted:
+    pass
+
+
+RenderEvent = Union[RenderStarted, RenderUnreadableClips, RenderPartStarted, RenderConcatStarted]
+
+
+class RenderReporter(Protocol):
+    def handle_render_event(self, event: RenderEvent) -> None:
+        ...
 
 
 def clip_set_duration(
     clip_set: ClipSet,
     ffprobe: Path,
     duration_cache: Optional[Dict[Path, float]] = None,
+    media_probe: Optional[MediaProbe] = None,
 ) -> float:
+    probe = media_probe or MediaProbe()
     max_duration = 0.0
     for clip_path in clip_set.files.values():
         if not clip_path.exists():
             continue
         duration = duration_cache.get(clip_path) if duration_cache is not None else None
         if duration is None:
-            duration = probe_duration(ffprobe, clip_path)
+            duration = probe.duration(ffprobe, clip_path)
             if duration_cache is not None:
                 duration_cache[clip_path] = duration
         max_duration = max(max_duration, duration)
@@ -33,12 +74,13 @@ def select_clip_sets(
     start_time: datetime,
     end_time: datetime,
     ffprobe: Path,
+    media_probe: Optional[MediaProbe] = None,
 ) -> List[SelectedSet]:
     selected: List[SelectedSet] = []
     duration_cache: Dict[Path, float] = {}
 
     for clip_set in clip_sets:
-        duration = clip_set_duration(clip_set, ffprobe, duration_cache)
+        duration = clip_set_duration(clip_set, ffprobe, duration_cache, media_probe)
         clip_end = clip_set.start_time + timedelta(seconds=duration)
         if clip_set.start_time >= end_time or clip_end <= start_time:
             continue
@@ -58,12 +100,17 @@ def select_clip_sets(
 
 
 
-def first_existing_clip(clip_set: ClipSet, ffprobe: Optional[Path] = None) -> Optional[Path]:
+def first_existing_clip(
+    clip_set: ClipSet,
+    ffprobe: Optional[Path] = None,
+    media_probe: Optional[MediaProbe] = None,
+) -> Optional[Path]:
+    probe = media_probe or MediaProbe()
     for camera in MIXED_CAMERA_ORDER:
         candidate = clip_set.files.get(camera)
         if not candidate or not candidate.exists():
             continue
-        if ffprobe is not None and not probe_has_video_stream(ffprobe, candidate):
+        if ffprobe is not None and not probe.has_video_stream(ffprobe, candidate):
             continue
         return candidate
     return None
@@ -73,24 +120,31 @@ def first_existing_clip(clip_set: ClipSet, ffprobe: Optional[Path] = None) -> Op
 def probe_dimensions_for_selection(
     ffprobe: Path,
     selected_sets: Iterable[SelectedSet],
+    media_probe: Optional[MediaProbe] = None,
 ) -> Dict[Camera, Dimensions]:
+    probe = media_probe or MediaProbe()
     dimensions: Dict[Camera, Dimensions] = {}
     for selected in selected_sets:
         for camera, clip_path in selected.clip_set.files.items():
             if camera in dimensions:
                 continue
-            probed = probe_dimensions(ffprobe, clip_path)
+            probed = probe.dimensions(ffprobe, clip_path)
             if probed is not None:
                 dimensions[camera] = probed
     return dimensions
 
 
 
-def probe_selection_fps(ffprobe: Path, selected_sets: Iterable[SelectedSet]) -> float:
+def probe_selection_fps(
+    ffprobe: Path,
+    selected_sets: Iterable[SelectedSet],
+    media_probe: Optional[MediaProbe] = None,
+) -> float:
+    probe = media_probe or MediaProbe()
     for selected in selected_sets:
-        source = first_existing_clip(selected.clip_set, ffprobe=ffprobe)
+        source = first_existing_clip(selected.clip_set, ffprobe=ffprobe, media_probe=probe)
         if source is not None:
-            return probe_fps(ffprobe, source)
+            return probe.fps(ffprobe, source)
     return 36.027
 
 
@@ -105,35 +159,46 @@ def prepare_workdir(workdir: Optional[Path]) -> tuple[Path, bool]:
 
 
 def compose(plan: ComposePlan) -> Path:
+    media_probe = plan.media_probe or MediaProbe()
+    runner = plan.ffmpeg_runner or FfmpegRunner()
+    reporter = plan.render_reporter
     parts_dir = plan.workdir / "parts"
     parts_dir.mkdir(parents=True, exist_ok=True)
     concat_file = plan.workdir / "concat.txt"
     part_paths: List[Path] = []
-    clip_readability = collect_clip_readability(plan.ffprobe, plan.selected_sets)
+    clip_readability = collect_clip_readability(plan.ffprobe, plan.selected_sets, media_probe=media_probe)
     unreadable_paths = sorted(path for path, readable in clip_readability.items() if not readable)
 
-    print(f"Using ffmpeg: {plan.ffmpeg}")
-    print(f"Using ffprobe: {plan.ffprobe}")
-    print(
-        f"Canvas: {plan.layout.canvas_width}x{plan.layout.canvas_height} | "
-        f"Layout: {plan.layout.kind.value} | FPS: {plan.fps:.3f} | Mode: {plan.encoder.label}"
+    emit_render_event(
+        reporter,
+        RenderStarted(
+            ffmpeg=plan.ffmpeg,
+            ffprobe=plan.ffprobe,
+            canvas_width=plan.layout.canvas_width,
+            canvas_height=plan.layout.canvas_height,
+            layout=plan.layout.kind.value,
+            fps=plan.fps,
+            mode=plan.encoder.label,
+            selected_count=len(plan.selected_sets),
+        ),
     )
-    print(f"Clip sets selected: {len(plan.selected_sets)}")
     if unreadable_paths:
-        print(f"Warning: {len(unreadable_paths)} unreadable or missing clip(s) will render as black placeholders.")
-        for clip_path in unreadable_paths[:5]:
-            print(f"  - {clip_path}")
-        if len(unreadable_paths) > 5:
-            print(f"  ... {len(unreadable_paths) - 5} more")
+        emit_render_event(reporter, RenderUnreadableClips(paths=unreadable_paths))
 
     for index, selected in enumerate(plan.selected_sets, start=1):
         part_path = parts_dir / f"{index:06d}_{selected.clip_set.timestamp}.{plan.encoder.output_extension}"
-        print(
-            f"[{index}/{len(plan.selected_sets)}] {selected.clip_set.timestamp} "
-            f"trim {selected.trim_start:.3f}s -> {selected.trim_end:.3f}s"
+        emit_render_event(
+            reporter,
+            RenderPartStarted(
+                index=index,
+                total=len(plan.selected_sets),
+                timestamp=selected.clip_set.timestamp,
+                trim_start=selected.trim_start,
+                trim_end=selected.trim_end,
+            ),
         )
         command = build_part_command(plan, selected, part_path, clip_readability)
-        run_command(command)
+        runner.run(command)
         part_paths.append(part_path)
 
     with concat_file.open("w", encoding="utf-8", newline="\n") as handle:
@@ -159,9 +224,14 @@ def compose(plan: ComposePlan) -> Path:
         "+faststart",
         str(plan.output_file),
     ]
-    print("Concatenating final MP4...")
-    run_command(concat_command)
+    emit_render_event(reporter, RenderConcatStarted())
+    runner.run(concat_command)
     return plan.output_file
+
+
+def emit_render_event(reporter: Optional[RenderReporter], event: RenderEvent) -> None:
+    if reporter is not None:
+        reporter.handle_render_event(event)
 
 
 
@@ -240,13 +310,18 @@ def build_part_command(
     ]
 
 
-def collect_clip_readability(ffprobe: Path, selected_sets: Iterable[SelectedSet]) -> Dict[Path, bool]:
+def collect_clip_readability(
+    ffprobe: Path,
+    selected_sets: Iterable[SelectedSet],
+    media_probe: Optional[MediaProbe] = None,
+) -> Dict[Path, bool]:
+    probe = media_probe or MediaProbe()
     readability: Dict[Path, bool] = {}
     for selected in selected_sets:
         for clip_path in selected.clip_set.files.values():
             if clip_path in readability:
                 continue
-            readability[clip_path] = clip_path.exists() and probe_has_video_stream(ffprobe, clip_path)
+            readability[clip_path] = clip_path.exists() and probe.has_video_stream(ffprobe, clip_path)
     return readability
 
 

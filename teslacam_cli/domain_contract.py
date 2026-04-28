@@ -130,8 +130,11 @@ def layout_manifest(layout: LayoutSpec) -> Dict[str, Any]:
             "y": cell.y,
         }
     return {
+        "profile": layout.profile,
         "kind": layout.kind.value,
-        "cameras": [camera.value for camera in layout.cameras],
+        "expected_cameras": [camera.value for camera in (layout.expected_cameras or layout.cameras)],
+        "render_order": [camera.value for camera in layout.cameras],
+        "hidden_cameras": [camera.value for camera in (layout.hidden_cameras or [])],
         "canvas": {"width": layout.canvas_width, "height": layout.canvas_height},
         "cells": cells,
     }

@@ -23,6 +23,28 @@ class FfmpegRuntimeError(RuntimeError):
     pass
 
 
+class MediaProbe:
+    def duration(self, ffprobe: Path, media_path: Path) -> float:
+        return probe_duration(ffprobe, media_path)
+
+    def dimensions(self, ffprobe: Path, media_path: Path) -> Optional[Dimensions]:
+        return probe_dimensions(ffprobe, media_path)
+
+    def fps(self, ffprobe: Path, media_path: Path) -> float:
+        return probe_fps(ffprobe, media_path)
+
+    def has_video_stream(self, ffprobe: Path, media_path: Path) -> bool:
+        return probe_has_video_stream(ffprobe, media_path)
+
+    def choose_encoder(self, ffmpeg: Path, mode: str, x265_preset: str) -> EncoderPlan:
+        return choose_encoder(ffmpeg, mode, x265_preset)
+
+
+class FfmpegRunner:
+    def run(self, args: Sequence[str], cwd: Optional[Path] = None) -> None:
+        run_command(args, cwd=cwd)
+
+
 @lru_cache(maxsize=8)
 def _encoders_text(ffmpeg_path: str) -> str:
     result = subprocess.run(

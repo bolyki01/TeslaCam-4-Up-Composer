@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 
 class Camera(str, Enum):
@@ -129,6 +129,9 @@ class LayoutSpec:
     cell_by_camera: Dict[Camera, CellSpec]
     canvas_width: int
     canvas_height: int
+    profile: str = "auto"
+    expected_cameras: Optional[List[Camera]] = None
+    hidden_cameras: Optional[List[Camera]] = None
 
 
 @dataclass(frozen=True)
@@ -153,6 +156,9 @@ class ComposePlan:
     workdir: Path
     keep_workdir: bool
     loglevel: str
+    media_probe: Optional[Any] = None
+    ffmpeg_runner: Optional[Any] = None
+    render_reporter: Optional[Any] = None
 
 
 @dataclass(frozen=True)
