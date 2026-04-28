@@ -2,11 +2,18 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
 
 from teslacam_cli.cli import dataset_range
 from teslacam_cli.composer import select_clip_sets
 from teslacam_cli.models import Camera, ClipSet
+
+
+class DurationProbe:
+    def __init__(self, durations):
+        self.durations = durations
+
+    def duration(self, _ffprobe, path):
+        return self.durations[path]
 
 
 class TimingTests(unittest.TestCase):
@@ -30,8 +37,7 @@ class TimingTests(unittest.TestCase):
             )
 
             durations = {front: 30.0, right: 75.0}
-            with patch("teslacam_cli.composer.probe_duration", side_effect=lambda _ffprobe, path: durations[path]):
-                start_time, end_time = dataset_range([first, last], Path("/fake/ffprobe"))
+            start_time, end_time = dataset_range([first, last], Path("/fake/ffprobe"), DurationProbe(durations))
 
         self.assertEqual(start_time, first.start_time)
         self.assertEqual(end_time, last.start_time + timedelta(seconds=75))
@@ -51,13 +57,13 @@ class TimingTests(unittest.TestCase):
             )
             durations = {front: 30.0, right: 60.0}
 
-            with patch("teslacam_cli.composer.probe_duration", side_effect=lambda _ffprobe, path: durations[path]):
-                selected = select_clip_sets(
-                    [clip_set],
-                    start_time=datetime(2026, 1, 1, 0, 0, 10),
-                    end_time=datetime(2026, 1, 1, 0, 0, 55),
-                    ffprobe=Path("/fake/ffprobe"),
-                )
+            selected = select_clip_sets(
+                [clip_set],
+                start_time=datetime(2026, 1, 1, 0, 0, 10),
+                end_time=datetime(2026, 1, 1, 0, 0, 55),
+                ffprobe=Path("/fake/ffprobe"),
+                media_probe=DurationProbe(durations),
+            )
 
         self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0].duration, 60.0)

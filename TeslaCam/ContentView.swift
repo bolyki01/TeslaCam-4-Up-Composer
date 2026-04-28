@@ -525,12 +525,20 @@ private struct TimelineExportCard: View {
         HStack(spacing: 6) {
           Button("All") { state.setFullRange() }
             .buttonStyle(QuickActionButtonStyle())
+            .accessibilityLabel("Whole Timeline")
+            .accessibilityIdentifier("range-whole-timeline")
           Button("1m") { state.setCurrentMinuteRange() }
             .buttonStyle(QuickActionButtonStyle())
+            .accessibilityLabel("Current Minute")
+            .accessibilityIdentifier("range-current-minute")
           Button("5m") { state.setRecentRange(minutes: 5) }
             .buttonStyle(QuickActionButtonStyle())
+            .accessibilityLabel("Last 5m")
+            .accessibilityIdentifier("range-last-5m")
           Button("15m") { state.setRecentRange(minutes: 15) }
             .buttonStyle(QuickActionButtonStyle())
+            .accessibilityLabel("Last 15m")
+            .accessibilityIdentifier("range-last-15m")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -677,6 +685,7 @@ private struct CameraToggleRow: View {
         .buttonStyle(.plain)
         .accessibilityLabel(camera.displayName)
         .accessibilityValue(state.activeExportCameras.contains(camera) ? "Included" : "Excluded")
+        .accessibilityIdentifier("camera-\(camera.rawValue)")
       }
     }
   }
@@ -1068,6 +1077,7 @@ private struct TimelineSelectionTrack: View {
             .offset(x: gapStartX, y: laneY)
             .allowsHitTesting(false)
         }
+      let isFullRange = selectedStartSeconds <= 0.01 && selectedEndSeconds >= totalDuration - 0.01
 
         RoundedRectangle(cornerRadius: 10, style: .continuous)
           .fill(TeslaCamTheme.Colors.accentSoft)
@@ -1079,6 +1089,7 @@ private struct TimelineSelectionTrack: View {
           .offset(x: startX, y: laneY)
           .contentShape(Rectangle())
           .gesture(selectionDrag(width: trackWidth))
+          .allowsHitTesting(!isFullRange)
 
         handle
           .offset(x: clampedHandleX(centerX: startX, trackInset: trackInset, trackWidth: trackWidth), y: laneY - 1)

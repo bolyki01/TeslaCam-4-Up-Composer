@@ -30,6 +30,32 @@ _LAYOUT_GRIDS: Dict[LayoutKind, Dict[Camera, Tuple[int, int]]] = {
 _DEFAULT_DIMENSIONS = Dimensions(width=1280, height=960)
 
 
+def build_camera_layout_plan(
+    profile: str,
+    available_cameras: Iterable[Camera],
+    probed_dimensions: Dict[Camera, Dimensions],
+) -> LayoutSpec:
+    available = set(available_cameras)
+    layout_kind = detect_layout_kind(profile, available)
+    dimensions = fill_missing_dimensions(layout_kind, probed_dimensions)
+    layout = build_layout(layout_kind, dimensions)
+    expected = expected_cameras(layout_kind)
+    hidden = sorted(
+        available.difference(expected),
+        key=lambda item: _camera_sort_key(item),
+    )
+    return LayoutSpec(
+        kind=layout.kind,
+        cameras=layout.cameras,
+        cell_by_camera=layout.cell_by_camera,
+        canvas_width=layout.canvas_width,
+        canvas_height=layout.canvas_height,
+        profile=profile,
+        expected_cameras=expected,
+        hidden_cameras=hidden,
+    )
+
+
 
 def detect_layout_kind(profile: str, available_cameras: Iterable[Camera]) -> LayoutKind:
     camera_set = set(available_cameras)
@@ -47,6 +73,11 @@ def expected_cameras(layout: LayoutKind) -> List[Camera]:
     if layout == LayoutKind.SIX_UP:
         return list(HW4_CAMERA_ORDER)
     return list(HW3_CAMERA_ORDER)
+
+
+def _camera_sort_key(camera: Camera) -> tuple[int, str]:
+    order = {item: index for index, item in enumerate(HW3_CAMERA_ORDER + HW4_CAMERA_ORDER)}
+    return (order.get(camera, 999), camera.value)
 
 
 

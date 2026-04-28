@@ -377,18 +377,7 @@ final class ClipIndexer {
   }
 
   private static func detectLayoutProfile(camerasFound: Set<Camera>) -> CameraLayoutProfile {
-    let hw3Cameras: Set<Camera> = [.front, .back, .left_repeater, .right_repeater]
-    let hw4Cameras: Set<Camera> = [.front, .back, .left, .right, .left_pillar, .right_pillar]
-    let usesClassicSides = camerasFound.contains(.left_repeater) || camerasFound.contains(.right_repeater)
-    let usesNewSides = camerasFound.contains(.left) || camerasFound.contains(.right) || camerasFound.contains(.left_pillar) || camerasFound.contains(.right_pillar)
-
-    if !camerasFound.isEmpty, camerasFound.isSubset(of: hw3Cameras) {
-      return .hw3FourCam
-    }
-    if usesNewSides && !usesClassicSides && camerasFound.subtracting(hw4Cameras).isEmpty {
-      return .hw4SixCam
-    }
-    return .mixedUnknown
+    CameraLayoutPlan.detectedProfile(for: camerasFound)
   }
 
   private static func overlapCount(in sets: [ClipSet]) -> Int {

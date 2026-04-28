@@ -99,6 +99,215 @@ enum CameraLayoutProfile: String, CaseIterable, Identifiable {
   }
 }
 
+enum CameraLayoutRequest: String, CaseIterable {
+  case auto
+  case legacy4
+  case sixcam
+}
+
+enum CameraLayoutKind: String {
+  case fourUp = "4up"
+  case sixUp = "6up"
+}
+
+struct CameraLayoutCell: Codable, Equatable {
+  let width: Int
+  let height: Int
+  let x: Int
+  let y: Int
+}
+
+struct DomainLayoutCanvas: Codable, Equatable {
+  let width: Int
+  let height: Int
+}
+
+struct DomainLayoutManifest: Codable, Equatable {
+  let profile: String
+  let kind: String
+  let expectedCameras: [String]
+  let renderOrder: [String]
+  let hiddenCameras: [String]
+  let canvas: DomainLayoutCanvas
+  let cells: [String: CameraLayoutCell]
+
+  enum CodingKeys: String, CodingKey {
+    case profile
+    case kind
+    case expectedCameras = "expected_cameras"
+    case renderOrder = "render_order"
+    case hiddenCameras = "hidden_cameras"
+    case canvas
+    case cells
+  }
+}
+
+struct CameraLayoutPlan {
+  let requestedProfile: CameraLayoutRequest
+  let kind: CameraLayoutKind
+  let expectedCameras: [Camera]
+  let renderOrder: [Camera]
+  let hiddenCameras: [Camera]
+  let canvasSize: CGSize
+  let cellByCamera: [Camera: CGRect]
+
+  static func build(
+    requestedProfile: CameraLayoutRequest,
+    detectedCameras: Set<Camera>,
+    enabledCameras: Set<Camera>,
+    naturalSizes: [Camera: CGSize]
+  ) -> CameraLayoutPlan {
+    let available = detectedCameras.union(enabledCameras)
+    let kind = layoutKind(requestedProfile: requestedProfile, cameras: available)
+    let expected = expectedCameras(for: kind)
+    let sizes = filledSizes(for: expected, naturalSizes: naturalSizes)
+    let cells = buildCells(kind: kind, sizes: sizes)
+    let maxX = cells.values.map(\.maxX).max() ?? 1280
+    let maxY = cells.values.map(\.maxY).max() ?? 960
+    let hidden = available.subtracting(expected).sortedByContractOrder()
+    return CameraLayoutPlan(
+      requestedProfile: requestedProfile,
+      kind: kind,
+      expectedCameras: expected,
+      renderOrder: expected,
+      hiddenCameras: hidden,
+      canvasSize: CGSize(width: maxX, height: maxY),
+      cellByCamera: cells
+    )
+  }
+
+  static func detectedProfile(for cameras: Set<Camera>) -> CameraLayoutProfile {
+    guard !cameras.isEmpty else { return .mixedUnknown }
+    return layoutKind(requestedProfile: .auto, cameras: cameras) == .sixUp ? .hw4SixCam : .hw3FourCam
+  }
+
+  var domainLayoutManifest: DomainLayoutManifest {
+    var cells: [String: CameraLayoutCell] = [:]
+    for camera in renderOrder {
+      guard let rect = cellByCamera[camera] else { continue }
+      cells[camera.rawValue] = CameraLayoutCell(
+        width: Int(rect.width.rounded()),
+        height: Int(rect.height.rounded()),
+        x: Int(rect.minX.rounded()),
+        y: Int(rect.minY.rounded())
+      )
+    }
+    return DomainLayoutManifest(
+      profile: requestedProfile.rawValue,
+      kind: kind.rawValue,
+      expectedCameras: expectedCameras.map(\.rawValue),
+      renderOrder: renderOrder.map(\.rawValue),
+      hiddenCameras: hiddenCameras.map(\.rawValue),
+      canvas: DomainLayoutCanvas(
+        width: Int(canvasSize.width.rounded()),
+        height: Int(canvasSize.height.rounded())
+      ),
+      cells: cells
+    )
+  }
+
+  private static func layoutKind(
+    requestedProfile: CameraLayoutRequest,
+    cameras: Set<Camera>
+  ) -> CameraLayoutKind {
+    switch requestedProfile {
+    case .legacy4:
+      return .fourUp
+    case .sixcam:
+      return .sixUp
+    case .auto:
+      let hw4Markers: Set<Camera> = [.left, .right, .left_pillar, .right_pillar]
+      return cameras.isDisjoint(with: hw4Markers) ? .fourUp : .sixUp
+    }
+  }
+
+  private static func expectedCameras(for kind: CameraLayoutKind) -> [Camera] {
+    switch kind {
+    case .fourUp:
+      return Camera.hw3ClassicOrder
+    case .sixUp:
+      return Camera.hw4SixCamOrder
+    }
+  }
+
+  private static func filledSizes(
+    for cameras: [Camera],
+    naturalSizes: [Camera: CGSize]
+  ) -> [Camera: CGSize] {
+    let known = naturalSizes.values.filter { $0.width > 0 && $0.height > 0 }
+    let fallback = CGSize(
+      width: known.map(\.width).max() ?? 1280,
+      height: known.map(\.height).max() ?? 960
+    )
+    return Dictionary(uniqueKeysWithValues: cameras.map { camera in
+      (camera, naturalSizes[camera] ?? fallback)
+    })
+  }
+
+  private static func buildCells(
+    kind: CameraLayoutKind,
+    sizes: [Camera: CGSize]
+  ) -> [Camera: CGRect] {
+    switch kind {
+    case .sixUp:
+      let tileWidth = sizes.values.map(\.width).max() ?? 1280
+      let tileHeight = sizes.values.map(\.height).max() ?? 960
+      let grid: [Camera: (row: Int, col: Int)] = [
+        .front: (0, 1),
+        .left: (1, 0),
+        .back: (1, 1),
+        .right: (1, 2),
+        .left_pillar: (2, 0),
+        .right_pillar: (2, 2)
+      ]
+      return grid.mapValues { position in
+        CGRect(
+          x: CGFloat(position.col) * tileWidth,
+          y: CGFloat(position.row) * tileHeight,
+          width: tileWidth,
+          height: tileHeight
+        )
+      }
+    case .fourUp:
+      let grid: [Camera: (row: Int, col: Int)] = [
+        .front: (0, 0),
+        .back: (0, 1),
+        .left_repeater: (1, 0),
+        .right_repeater: (1, 1)
+      ]
+      var rowHeights = [CGFloat](repeating: 0, count: 2)
+      var colWidths = [CGFloat](repeating: 0, count: 2)
+      for (camera, position) in grid {
+        let size = sizes[camera] ?? CGSize(width: 1280, height: 960)
+        rowHeights[position.row] = max(rowHeights[position.row], size.height)
+        colWidths[position.col] = max(colWidths[position.col], size.width)
+      }
+      let xOffsets: [CGFloat] = [0, colWidths[0]]
+      let yOffsets: [CGFloat] = [0, rowHeights[0]]
+      return grid.mapValues { position in
+        CGRect(
+          x: xOffsets[position.col],
+          y: yOffsets[position.row],
+          width: colWidths[position.col],
+          height: rowHeights[position.row]
+        )
+      }
+    }
+  }
+}
+
+private extension Sequence where Element == Camera {
+  func sortedByContractOrder() -> [Camera] {
+    let order = Dictionary(uniqueKeysWithValues: Camera.mixedOrder.enumerated().map { ($0.element, $0.offset) })
+    return sorted { lhs, rhs in
+      let lhsIndex = order[lhs] ?? Int.max
+      let rhsIndex = order[rhs] ?? Int.max
+      if lhsIndex == rhsIndex { return lhs.rawValue < rhs.rawValue }
+      return lhsIndex < rhsIndex
+    }
+  }
+}
+
 enum ExportPreset: String, CaseIterable, Identifiable {
   case maxQualityHEVC
   case fastHEVC

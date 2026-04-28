@@ -12,9 +12,218 @@ import AppKit
 import UIKit
 #endif
 
+struct ExportPlan {
+  enum ValidationError: LocalizedError, Equatable {
+    case noClips
+    case emptyTrimRange
+    case noEnabledCameras
+    case invalidCanvas
+
+    var errorDescription: String? {
+      switch self {
+      case .noClips:
+        return "There are no clips in the selected export range."
+      case .emptyTrimRange:
+        return "Selected trim range is empty."
+      case .noEnabledCameras:
+        return "Select at least one camera to export."
+      case .invalidCanvas:
+        return "Export canvas could not be prepared."
+      }
+    }
+  }
+
+  let sets: [ClipSet]
+  let outputURL: URL
+  let useSixCam: Bool
+  let preset: ExportPreset
+  let enabledCameras: Set<Camera>
+  let trimStartSeconds: Double
+  let trimEndSeconds: Double
+  let trimStartDate: Date
+  let trimEndDate: Date
+  let selectedRangeText: String
+  let partialClipCount: Int
+  fileprivate let layout: TimelineFrameLayout
+
+  var totalParts: Int { sets.count }
+  var totalDuration: Double { trimEndDate.timeIntervalSince(trimStartDate) }
+  var canvasSize: CGSize { layout.canvasSize }
+  var tileSize: CGSize { layout.tileSize }
+  var cameraOrder: [Camera] { layout.cameraOrder }
+  var boundsByCamera: [Camera: CGRect] { layout.boundsByCamera }
+
+  init(request: ExportRequest) throws {
+    guard !request.sets.isEmpty else {
+      throw ValidationError.noClips
+    }
+    guard request.trimEndDate > request.trimStartDate, request.totalDuration > 0 else {
+      throw ValidationError.emptyTrimRange
+    }
+    guard !request.enabledCameras.isEmpty else {
+      throw ValidationError.noEnabledCameras
+    }
+
+    let layout = try TimelineFrameLayout.build(
+      sets: request.sets,
+      enabledCameras: request.enabledCameras,
+      useSixCam: request.useSixCam
+    )
+    guard layout.canvasSize.width.isFinite,
+          layout.canvasSize.height.isFinite,
+          layout.canvasSize.width > 0,
+          layout.canvasSize.height > 0 else {
+      throw ValidationError.invalidCanvas
+    }
+
+    self.sets = request.sets
+    self.outputURL = request.outputURL
+    self.useSixCam = request.useSixCam
+    self.preset = request.preset
+    self.enabledCameras = request.enabledCameras
+    self.trimStartSeconds = request.trimStartSeconds
+    self.trimEndSeconds = request.trimEndSeconds
+    self.trimStartDate = request.trimStartDate
+    self.trimEndDate = request.trimEndDate
+    self.selectedRangeText = request.selectedRangeText
+    self.partialClipCount = request.partialClipCount
+    self.layout = layout
+  }
+}
+
+protocol ExportPreflightFileAccess {
+  func canWrite(to outputURL: URL) -> Bool
+  func availableCapacity(forWritingTo outputURL: URL) -> Int64?
+}
+
+struct FileManagerExportPreflightFileAccess: ExportPreflightFileAccess {
+  var fileManager: FileManager = .default
+
+  func canWrite(to outputURL: URL) -> Bool {
+    let scopeURL: URL?
+    if outputURL.startAccessingSecurityScopedResource() {
+      scopeURL = outputURL
+    } else {
+      let targetDirectory = outputURL.deletingLastPathComponent()
+      if targetDirectory.startAccessingSecurityScopedResource() {
+        scopeURL = targetDirectory
+      } else {
+        scopeURL = nil
+      }
+    }
+
+    defer {
+      scopeURL?.stopAccessingSecurityScopedResource()
+    }
+
+    let created = fileManager.createFile(atPath: outputURL.path, contents: Data())
+    if created {
+      try? fileManager.removeItem(at: outputURL)
+    }
+    return created
+  }
+
+  func availableCapacity(forWritingTo outputURL: URL) -> Int64? {
+    let targetDirectory = outputURL.deletingLastPathComponent()
+    do {
+      let values = try targetDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+      if let important = values.volumeAvailableCapacityForImportantUsage {
+        return important
+      }
+      let fallback = try fileManager.attributesOfFileSystem(forPath: targetDirectory.path)
+      if let number = fallback[.systemFreeSize] as? NSNumber {
+        return number.int64Value
+      }
+      return fallback[.systemFreeSize] as? Int64
+    } catch {
+      return nil
+    }
+  }
+}
+
+struct ExportPreflight {
+  private static let minimumDiskHeadroomBytes: Int64 = 256 * 1024 * 1024
+  private static let hevcEncoderMaxSidePixels: CGFloat = 8192
+
+  var fileAccess: ExportPreflightFileAccess = FileManagerExportPreflightFileAccess()
+
+  func summary(for plan: ExportPlan) -> ExportPreflightSummary {
+    var blocking: [ExportIssue] = []
+    var warnings: [ExportIssue] = []
+
+    if plan.partialClipCount > 0 {
+      warnings.append(ExportIssue(message: "\(plan.partialClipCount) selected clip span(s) are missing one or more cameras and will export with black placeholders.", isBlocking: false))
+    }
+
+    let visibleCameras = Set(plan.sets.flatMap { $0.files.keys }).union(plan.enabledCameras)
+    let hiddenCameras = Camera.mixedOrder.filter { visibleCameras.contains($0) && !plan.enabledCameras.contains($0) }
+    if !hiddenCameras.isEmpty {
+      warnings.append(ExportIssue(message: "Hidden cameras will export as black tiles: \(hiddenCameras.map(\.displayName).joined(separator: ", ")).", isBlocking: false))
+    }
+
+    if plan.preset != .editFriendlyProRes,
+       plan.canvasSize.width > Self.hevcEncoderMaxSidePixels || plan.canvasSize.height > Self.hevcEncoderMaxSidePixels {
+      blocking.append(
+        ExportIssue(
+          message: "Composite canvas \(Int(plan.canvasSize.width.rounded(.up)))×\(Int(plan.canvasSize.height.rounded(.up))) exceeds the hardware HEVC encoder ceiling (8192 px per side). Reduce enabled cameras or switch to ProRes preset.",
+          isBlocking: true
+        )
+      )
+    }
+
+    let hasWriteAccess = fileAccess.canWrite(to: plan.outputURL)
+    if !hasWriteAccess {
+      blocking.append(ExportIssue(message: "The selected export location is not writable.", isBlocking: true))
+    }
+
+    let requiredBytes = estimatedRequiredDiskBytes(for: plan)
+    if let availableBytes = fileAccess.availableCapacity(forWritingTo: plan.outputURL) {
+      if availableBytes < requiredBytes {
+        blocking.append(
+          ExportIssue(
+            message: "The selected export location has only \(Self.formatBytes(availableBytes)) free. Export preflight requires at least \(Self.formatBytes(requiredBytes)).",
+            isBlocking: true
+          )
+        )
+      }
+    } else {
+      warnings.append(ExportIssue(message: "Free disk space could not be checked for the selected export location.", isBlocking: false))
+    }
+
+    return ExportPreflightSummary(
+      blockingIssues: blocking,
+      warnings: warnings,
+      hasWriteAccess: hasWriteAccess,
+      resolvedOutputURL: plan.outputURL,
+      requiresUserSavePanel: false
+    )
+  }
+
+  private func estimatedRequiredDiskBytes(for plan: ExportPlan) -> Int64 {
+    let seconds = max(1, plan.totalDuration)
+    let bytesPerSecond: Double
+    switch plan.preset {
+    case .editFriendlyProRes:
+      bytesPerSecond = 32 * 1024 * 1024
+    case .maxQualityHEVC:
+      bytesPerSecond = 8 * 1024 * 1024
+    case .fastHEVC:
+      bytesPerSecond = 4 * 1024 * 1024
+    }
+    let estimatedOutput = Int64((seconds * bytesPerSecond).rounded(.up))
+    return max(Self.minimumDiskHeadroomBytes, estimatedOutput + Self.minimumDiskHeadroomBytes)
+  }
+
+  private static func formatBytes(_ bytes: Int64) -> String {
+    let formatter = ByteCountFormatter()
+    formatter.allowedUnits = [.useMB, .useGB, .useTB]
+    formatter.countStyle = .file
+    return formatter.string(fromByteCount: bytes)
+  }
+}
+
 final class NativeExportController: ObservableObject {
   private static let staleWorkdirAge: TimeInterval = 24 * 60 * 60
-  private static let minimumDiskHeadroomBytes: Int64 = 256 * 1024 * 1024
 
   @Published var log: String = ""
   @Published var lastError: String = ""
@@ -57,53 +266,19 @@ final class NativeExportController: ObservableObject {
   }
 
   func preflightSummary(request: ExportRequest) -> ExportPreflightSummary {
-    var blocking: [ExportIssue] = []
-    var warnings: [ExportIssue] = []
-
-    if request.sets.isEmpty {
-      blocking.append(ExportIssue(message: "There are no clips in the selected export range.", isBlocking: true))
+    do {
+      return ExportPreflight().summary(for: try ExportPlan(request: request))
+    } catch {
+      return ExportPreflightSummary(
+        blockingIssues: [
+          ExportIssue(message: error.localizedDescription, isBlocking: true)
+        ],
+        warnings: [],
+        hasWriteAccess: false,
+        resolvedOutputURL: request.outputURL,
+        requiresUserSavePanel: false
+      )
     }
-
-    if request.totalDuration <= 0 {
-      blocking.append(ExportIssue(message: "Selected trim range is empty.", isBlocking: true))
-    }
-
-    if request.partialClipCount > 0 {
-      warnings.append(ExportIssue(message: "\(request.partialClipCount) selected clip span(s) are missing one or more cameras and will export with black placeholders.", isBlocking: false))
-    }
-
-    let visibleCameras = Set(request.sets.flatMap { $0.files.keys }).union(request.enabledCameras)
-    let hiddenCameras = Camera.mixedOrder.filter { visibleCameras.contains($0) && !request.enabledCameras.contains($0) }
-    if !hiddenCameras.isEmpty {
-      warnings.append(ExportIssue(message: "Hidden cameras will export as black tiles: \(hiddenCameras.map(\.displayName).joined(separator: ", ")).", isBlocking: false))
-    }
-
-    let hasWriteAccess = verifyWriteAccess(to: request.outputURL)
-    if !hasWriteAccess {
-      blocking.append(ExportIssue(message: "The selected export location is not writable.", isBlocking: true))
-    }
-
-    let requiredBytes = estimatedRequiredDiskBytes(for: request)
-    if let availableBytes = availableDiskCapacity(forWritingTo: request.outputURL) {
-      if availableBytes < requiredBytes {
-        blocking.append(
-          ExportIssue(
-            message: "The selected export location has only \(Self.formatBytes(availableBytes)) free. Export preflight requires at least \(Self.formatBytes(requiredBytes)).",
-            isBlocking: true
-          )
-        )
-      }
-    } else {
-      warnings.append(ExportIssue(message: "Free disk space could not be checked for the selected export location.", isBlocking: false))
-    }
-
-    return ExportPreflightSummary(
-      blockingIssues: blocking,
-      warnings: warnings,
-      hasWriteAccess: hasWriteAccess,
-      resolvedOutputURL: request.outputURL,
-      requiresUserSavePanel: false
-    )
   }
 
   func export(request: ExportRequest) {
@@ -114,7 +289,7 @@ final class NativeExportController: ObservableObject {
 
     let preflight = preflightSummary(request: request)
     guard preflight.canExport else {
-      lastError = preflight.blockingIssues.map(\.message).joined(separator: "\n")
+      publishBlockedPreflight(request: request, preflight: preflight)
       endOutputScope()
       return
     }
@@ -183,6 +358,43 @@ final class NativeExportController: ObservableObject {
     }
   }
 
+  private func publishBlockedPreflight(request: ExportRequest, preflight: ExportPreflightSummary) {
+    let message = preflight.blockingIssues.map(\.message).joined(separator: "\n")
+    let now = Date()
+    let session = MutableExportSession(
+      id: UUID(),
+      request: request,
+      phase: .failed,
+      progress: 1,
+      phaseLabel: "Export blocked",
+      startedAt: now,
+      finishedAt: now,
+      outputURL: request.outputURL,
+      logFileURL: logFileURL,
+      tempRootURL: nil,
+      failureCategory: .preparation,
+      failureReason: message,
+      completedParts: 0,
+      totalParts: request.totalParts,
+      completedDuration: 0,
+      totalDuration: request.totalDuration,
+      isIndeterminate: false,
+      isTerminal: true,
+      canRevealOutput: false,
+      canRevealWorkingFiles: false,
+      canRetry: true,
+      isCancelled: false
+    )
+
+    activeSession = session
+    currentJob = session.snapshot(fileManager: fm)
+    lastError = message
+    isStatusPresented = true
+    appendLog("Export blocked: \(message)\n")
+    appendStructuredLogEvent("export_blocked", fields: ["message": message])
+    debug("blocked \(request.outputURL.lastPathComponent): \(message)", category: "export")
+  }
+
   func retry(_ snapshot: ExportJobSnapshot) {
     export(request: snapshot.request)
   }
@@ -232,6 +444,7 @@ final class NativeExportController: ObservableObject {
   }
 
   private func performExport(request: ExportRequest) throws {
+    let plan = try ExportPlan(request: request)
     let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory())
       .appendingPathComponent("teslacam_export_\(UUID().uuidString)", isDirectory: true)
     try fm.createDirectory(at: tempRoot, withIntermediateDirectories: true)
@@ -250,19 +463,15 @@ final class NativeExportController: ObservableObject {
     }
 
     let frameProvider = TimelineFrameProvider(
-      sets: request.sets,
-      trimStartDate: request.trimStartDate,
-      trimEndDate: request.trimEndDate
+      sets: plan.sets,
+      trimStartDate: plan.trimStartDate,
+      trimEndDate: plan.trimEndDate
     )
-    let layout = try TimelineFrameLayout.build(
-      sets: request.sets,
-      enabledCameras: request.enabledCameras,
-      useSixCam: request.useSixCam
-    )
+    let layout = plan.layout
     appendLog("Canvas: \(Int(layout.canvasSize.width))x\(Int(layout.canvasSize.height))\n")
     debug("layout cameras=\(layout.cameraOrder.map(\.rawValue).joined(separator: ",")) canvas=\(Int(layout.canvasSize.width))x\(Int(layout.canvasSize.height))", category: "export")
 
-    let writer = try NativeMovieWriter(outputURL: request.outputURL, size: layout.canvasSize, preset: request.preset)
+    let writer = try NativeMovieWriter(outputURL: plan.outputURL, size: plan.canvasSize, preset: plan.preset)
     try writer.start()
 
     runOnMain {
@@ -273,7 +482,7 @@ final class NativeExportController: ObservableObject {
       }
     }
 
-    let composer = TimelineFrameComposer(layout: layout, enabledCameras: request.enabledCameras)
+    let composer = TimelineFrameComposer(layout: layout, enabledCameras: plan.enabledCameras)
     let fps: Double = 30
     let frameCount = max(1, Int((frameProvider.totalDuration * fps).rounded(.up)))
 
@@ -433,73 +642,9 @@ final class NativeExportController: ObservableObject {
     }
   }
 
-  private func verifyWriteAccess(to outputURL: URL) -> Bool {
-    let targetDirectory = outputURL.deletingLastPathComponent()
-    guard fm.fileExists(atPath: targetDirectory.path) else { return false }
-
-    let scopeURL: URL?
-    if outputURL.startAccessingSecurityScopedResource() {
-      scopeURL = outputURL
-    } else if targetDirectory.startAccessingSecurityScopedResource() {
-      scopeURL = targetDirectory
-    } else {
-      scopeURL = nil
-    }
-
-    defer {
-      scopeURL?.stopAccessingSecurityScopedResource()
-    }
-
-    let probeURL = targetDirectory.appendingPathComponent(".teslacam-write-test-\(UUID().uuidString)")
-    let created = fm.createFile(atPath: probeURL.path, contents: Data())
-    if created {
-      try? fm.removeItem(at: probeURL)
-    }
-    return created
-  }
-
   private func endOutputScope() {
     activeOutputScopeURL?.stopAccessingSecurityScopedResource()
     activeOutputScopeURL = nil
-  }
-
-  private func estimatedRequiredDiskBytes(for request: ExportRequest) -> Int64 {
-    let seconds = max(1, request.totalDuration)
-    let bytesPerSecond: Double
-    switch request.preset {
-    case .editFriendlyProRes:
-      bytesPerSecond = 32 * 1024 * 1024
-    case .maxQualityHEVC:
-      bytesPerSecond = 8 * 1024 * 1024
-    case .fastHEVC:
-      bytesPerSecond = 4 * 1024 * 1024
-    }
-    let estimatedOutput = Int64((seconds * bytesPerSecond).rounded(.up))
-    return max(Self.minimumDiskHeadroomBytes, estimatedOutput + Self.minimumDiskHeadroomBytes)
-  }
-
-  private func availableDiskCapacity(forWritingTo outputURL: URL) -> Int64? {
-    let targetDirectory = outputURL.deletingLastPathComponent()
-    do {
-      let values = try targetDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-      if let important = values.volumeAvailableCapacityForImportantUsage {
-        return important
-      }
-      let fallback = try fm.attributesOfFileSystem(forPath: targetDirectory.path)
-      if let number = fallback[.systemFreeSize] as? NSNumber {
-        return number.int64Value
-      }
-      return fallback[.systemFreeSize] as? Int64
-    } catch {
-      return nil
-    }
-  }
-
-  private static func formatBytes(_ bytes: Int64) -> String {
-    let formatter = ByteCountFormatter()
-    formatter.allowedUnits = [.useMB, .useGB, .useTB]
-    formatter.countStyle = .file
-    return formatter.string(fromByteCount: bytes)
   }
 
   private func cleanupStaleTempDirectories(now: Date = Date()) {
@@ -532,12 +677,20 @@ final class NativeExportController: ObservableObject {
   }
 
   private func appendLog(_ text: String) {
+    appendLogToFile(text)
+    if Thread.isMainThread {
+      appendLogInMemory(text)
+    } else {
+      runOnMain { self.appendLogInMemory(text) }
+    }
+  }
+
+  private func appendLogInMemory(_ text: String) {
     let maxLen = 60000
     log.append(text)
     if log.count > maxLen {
       log = String(log.suffix(maxLen))
     }
-    appendLogToFile(text)
   }
 
   private func resetLogFile() {
@@ -652,87 +805,29 @@ private struct TimelineFrameLayout {
     useSixCam: Bool
   ) throws -> TimelineFrameLayout {
     let present = Set(sets.flatMap { $0.files.keys })
-    let visible = present.union(enabledCameras)
-
-    let hasClassicSides = !visible.intersection([.left_repeater, .right_repeater]).isEmpty
-    let hasSixCamSides = !visible.intersection([.left, .right, .left_pillar, .right_pillar]).isEmpty
-
-    let baseOrder: [Camera]
-    if hasClassicSides && !hasSixCamSides {
-      baseOrder = Camera.hw3ClassicOrder
-    } else if hasSixCamSides && !hasClassicSides {
-      baseOrder = Camera.hw4SixCamOrder
-    } else if hasClassicSides || hasSixCamSides {
-      baseOrder = Camera.mixedOrder
-    } else {
-      baseOrder = useSixCam ? Camera.hw4SixCamOrder : Camera.hw3ClassicOrder
-    }
-
-    var cameraOrder = baseOrder.filter { visible.contains($0) }
-    if cameraOrder.isEmpty {
-      cameraOrder = baseOrder
-    }
-
     let probe = TimelineFrameSizeProbe(sets: sets)
-    let tileSize = probe.tileSize(for: cameraOrder)
-
-    if baseOrder == Camera.hw4SixCamOrder {
-      let grid: [Camera: (row: Int, col: Int)] = [
-        .front: (0, 1),
-        .left: (1, 0),
-        .back: (1, 1),
-        .right: (1, 2),
-        .left_pillar: (2, 0),
-        .right_pillar: (2, 2)
-      ]
-      var bounds: [Camera: CGRect] = [:]
-      for camera in cameraOrder {
-        guard let position = grid[camera] else { continue }
-        bounds[camera] = CGRect(
-          x: CGFloat(position.col) * tileSize.width,
-          y: CGFloat(2 - position.row) * tileSize.height,
-          width: tileSize.width,
-          height: tileSize.height
-        )
-      }
-      return TimelineFrameLayout(
-        cameraOrder: cameraOrder,
-        canvasSize: CGSize(width: tileSize.width * 3, height: tileSize.height * 3),
-        tileSize: tileSize,
-        boundsByCamera: bounds
-      )
-    }
-
-    let columns: Int
-    switch cameraOrder.count {
-    case 0...1:
-      columns = 1
-    case 2...4:
-      columns = 2
-    case 5...6:
-      columns = 3
-    default:
-      columns = 4
-    }
-    let rows = max(1, Int(ceil(Double(max(cameraOrder.count, 1)) / Double(columns))))
-    let canvasSize = CGSize(width: tileSize.width * CGFloat(columns), height: tileSize.height * CGFloat(rows))
+    let plan = CameraLayoutPlan.build(
+      requestedProfile: useSixCam ? .sixcam : .auto,
+      detectedCameras: present,
+      enabledCameras: enabledCameras,
+      naturalSizes: probe.naturalSizes(for: Camera.mixedOrder)
+    )
 
     var bounds: [Camera: CGRect] = [:]
-    for (index, camera) in cameraOrder.enumerated() {
-      let col = index % columns
-      let row = index / columns
+    for camera in plan.renderOrder {
+      guard let cell = plan.cellByCamera[camera] else { continue }
       bounds[camera] = CGRect(
-        x: CGFloat(col) * tileSize.width,
-        y: CGFloat(rows - 1 - row) * tileSize.height,
-        width: tileSize.width,
-        height: tileSize.height
+        x: cell.minX,
+        y: plan.canvasSize.height - cell.maxY,
+        width: cell.width,
+        height: cell.height
       )
     }
 
     return TimelineFrameLayout(
-      cameraOrder: cameraOrder,
-      canvasSize: canvasSize,
-      tileSize: tileSize,
+      cameraOrder: plan.renderOrder,
+      canvasSize: plan.canvasSize,
+      tileSize: probe.tileSize(for: plan.renderOrder),
       boundsByCamera: bounds
     )
   }
@@ -774,6 +869,18 @@ private struct TimelineFrameSizeProbe {
     let fallbackWidth = max(maxWidth, 1280)
     let fallbackHeight = max(maxHeight, 960)
     return CGSize(width: fallbackWidth, height: fallbackHeight)
+  }
+
+  func naturalSizes(for cameras: [Camera]) -> [Camera: CGSize] {
+    var sizes: [Camera: CGSize] = [:]
+    for set in sets {
+      for camera in cameras where sizes[camera] == nil {
+        if let naturalSize = set.naturalSize(for: camera), naturalSize.width > 0, naturalSize.height > 0 {
+          sizes[camera] = naturalSize
+        }
+      }
+    }
+    return sizes
   }
 }
 

@@ -6,6 +6,278 @@ import UniformTypeIdentifiers
 import AppKit
 #endif
 
+struct TimelineStore {
+  private(set) var clipSets: [ClipSet] = []
+  private(set) var minDate: Date?
+  private(set) var maxDate: Date?
+  private(set) var selectedStart: Date = Date()
+  private(set) var selectedEnd: Date = Date()
+  private(set) var trimStartSeconds: Double = 0
+  private(set) var trimEndSeconds: Double = 0
+  private(set) var isDraggingTrim: Bool = false
+  private(set) var totalDuration: Double = 0
+  private(set) var gapRanges: [TimelineGapRange] = []
+
+  private var coverage = TimelineCoverageMap(sets: [])
+
+  mutating func clear() {
+    clipSets = []
+    minDate = nil
+    maxDate = nil
+    selectedStart = Date()
+    selectedEnd = Date()
+    trimStartSeconds = 0
+    trimEndSeconds = 0
+    isDraggingTrim = false
+    totalDuration = 0
+    gapRanges = []
+    coverage = TimelineCoverageMap(sets: [])
+  }
+
+  mutating func load(sets: [ClipSet], minDate: Date? = nil, maxDate: Date? = nil) {
+    guard !sets.isEmpty else {
+      clear()
+      return
+    }
+
+    clipSets = sets
+    coverage = TimelineCoverageMap(sets: sets)
+    totalDuration = coverage.totalDuration
+    gapRanges = coverage.gapRanges(minimumDuration: 5)
+    self.minDate = minDate ?? coverage.date(forGlobalSeconds: 0)
+    self.maxDate = maxDate ?? coverage.date(forGlobalSeconds: totalDuration)
+    setTrimRange(startSeconds: 0, endSeconds: totalDuration)
+  }
+
+  mutating func setDragging(_ dragging: Bool) {
+    isDraggingTrim = dragging
+  }
+
+  mutating func setFullRange() {
+    setTrimRange(startSeconds: 0, endSeconds: totalDuration, snapToMinute: true)
+  }
+
+  mutating func setCurrentMinuteRange(currentSeconds: Double) {
+    guard totalDuration > 0 else { return }
+    let start = floor(currentSeconds / 60.0) * 60.0
+    let end = min(totalDuration, start + 60.0)
+    setTrimRange(startSeconds: start, endSeconds: end, snapToMinute: true)
+  }
+
+  mutating func setRecentRange(minutes: Int) {
+    guard totalDuration > 0 else { return }
+    let window = Double(minutes * 60)
+    let end = totalDuration
+    let start = max(0, end - window)
+    setTrimRange(startSeconds: start, endSeconds: end, snapToMinute: true)
+  }
+
+  mutating func setTestExportRange(minutes: Int, currentSeconds: Double) {
+    guard totalDuration > 0 else { return }
+    let halfWindow = Double(minutes * 60) / 2
+    var start = max(0, currentSeconds - halfWindow)
+    var end = min(totalDuration, currentSeconds + halfWindow)
+    if end - start < Double(minutes * 60) {
+      if start == 0 {
+        end = min(totalDuration, Double(minutes * 60))
+      } else if end == totalDuration {
+        start = max(0, totalDuration - Double(minutes * 60))
+      }
+    }
+    setTrimRange(startSeconds: start, endSeconds: end, snapToMinute: true)
+  }
+
+  mutating func setTrimRange(startSeconds: Double, endSeconds: Double, snapToMinute: Bool = false) {
+    guard !clipSets.isEmpty else { return }
+    let upperBound = max(totalDuration, 1 / 30)
+    let clampedStart = max(0, min(startSeconds, upperBound))
+    let clampedEnd = max(clampedStart, min(endSeconds, upperBound))
+
+    var normalizedStart = clampedStart
+    var normalizedEnd = max(clampedEnd, normalizedStart + (1 / 30))
+
+    if snapToMinute {
+      normalizedStart = snappedTrimBoundary(clampedStart, roundsUp: false)
+      normalizedEnd = snappedTrimBoundary(clampedEnd, roundsUp: true)
+      normalizedEnd = max(normalizedEnd, normalizedStart + 1)
+      normalizedEnd = min(normalizedEnd, upperBound)
+      if normalizedEnd <= normalizedStart {
+        normalizedEnd = min(upperBound, normalizedStart + 1)
+      }
+    }
+
+    trimStartSeconds = normalizedStart
+    trimEndSeconds = normalizedEnd
+    selectedStart = trimStartDate
+    selectedEnd = trimEndDate
+  }
+
+  var trimStartDate: Date {
+    date(forGlobalSeconds: trimStartSeconds)
+  }
+
+  var trimEndDate: Date {
+    date(forGlobalSeconds: trimEndSeconds)
+  }
+
+  var selectedTrimDuration: Double {
+    max(0, trimEndSeconds - trimStartSeconds)
+  }
+
+  var selectedSetsForExport: [ClipSet] {
+    let startDate = trimStartDate
+    let endDate = trimEndDate
+    return clipSets.filter { set in
+      set.endDate > startDate && set.date < endDate
+    }
+  }
+
+  func currentGapRange(at seconds: Double) -> TimelineGapRange? {
+    gapRanges.first { $0.contains(seconds) }
+  }
+
+  func date(forGlobalSeconds seconds: Double) -> Date {
+    coverage.date(forGlobalSeconds: seconds) ?? Date()
+  }
+
+  func globalSeconds(for date: Date) -> Double {
+    coverage.globalSeconds(for: date)
+  }
+
+  func clipStartOffset(at index: Int) -> Double {
+    coverage.clipStartOffset(at: index)
+  }
+
+  func activeClipIndex(at globalSeconds: Double) -> Int? {
+    coverage.activeClipIndex(at: globalSeconds)
+  }
+
+  func nearestClipIndex(to globalSeconds: Double) -> Int {
+    coverage.nearestClipIndex(to: globalSeconds)
+  }
+
+  func playbackSegment(at globalSeconds: Double) -> TimelinePlaybackSegment {
+    coverage.playbackSegment(at: globalSeconds)
+  }
+
+  private func snappedTrimBoundary(_ seconds: Double, roundsUp: Bool) -> Double {
+    let minute = 60.0
+    let clamped = max(0, min(seconds, totalDuration))
+    let rounded = roundsUp
+      ? ceil(clamped / minute) * minute
+      : floor(clamped / minute) * minute
+    return max(0, min(rounded, totalDuration))
+  }
+}
+
+struct ExportStore {
+  var fileManager: FileManager = .default
+
+  func defaultFilename(
+    sets: [ClipSet],
+    preset: ExportPreset,
+    trimStartDate: Date,
+    trimEndDate: Date
+  ) -> String {
+    guard !sets.isEmpty else {
+      return "teslacam_\(preset.outputLabel).\(preset.defaultExtension)"
+    }
+    let suffix = "\(filenameStamp(trimStartDate))_to_\(filenameStamp(trimEndDate))"
+    return "teslacam_\(suffix)_\(preset.outputLabel).\(preset.defaultExtension)"
+  }
+
+  func resolvedOutputURL(
+    chosenURL: URL,
+    preferredFilename: String,
+    preset: ExportPreset
+  ) -> URL {
+    var outputURL = chosenURL
+    if (try? chosenURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+      outputURL = uniqueAvailableOutputURL(for: chosenURL.appendingPathComponent(preferredFilename))
+    }
+
+    let expectedExtension = preset.defaultExtension
+    if outputURL.pathExtension.lowercased() != expectedExtension {
+      outputURL.deletePathExtension()
+      outputURL.appendPathExtension(expectedExtension)
+    }
+    return uniqueAvailableOutputURL(for: outputURL)
+  }
+
+  func makeRequest(
+    sets: [ClipSet],
+    chosenURL: URL,
+    preset: ExportPreset,
+    enabledCameras: Set<Camera>,
+    trimStartSeconds: Double,
+    trimEndSeconds: Double,
+    trimStartDate: Date,
+    trimEndDate: Date,
+    selectedRangeText: String,
+    partialClipCount: Int
+  ) -> ExportRequest? {
+    guard !sets.isEmpty else { return nil }
+    let useExpandedGrid = enabledCameras.count > 4 || sets.contains { set in
+      !Set(set.files.keys).intersection([.left, .right, .left_pillar, .right_pillar]).isEmpty
+    }
+    return ExportRequest(
+      sets: sets,
+      outputURL: resolvedOutputURL(
+        chosenURL: chosenURL,
+        preferredFilename: defaultFilename(
+          sets: sets,
+          preset: preset,
+          trimStartDate: trimStartDate,
+          trimEndDate: trimEndDate
+        ),
+        preset: preset
+      ),
+      useSixCam: useExpandedGrid,
+      preset: preset,
+      enabledCameras: enabledCameras,
+      trimStartSeconds: trimStartSeconds,
+      trimEndSeconds: trimEndSeconds,
+      trimStartDate: trimStartDate,
+      trimEndDate: trimEndDate,
+      selectedRangeText: selectedRangeText,
+      partialClipCount: partialClipCount
+    )
+  }
+
+  private func uniqueAvailableOutputURL(for preferredURL: URL) -> URL {
+    guard fileManager.fileExists(atPath: preferredURL.path) else {
+      return preferredURL
+    }
+
+    let directory = preferredURL.deletingLastPathComponent()
+    let baseName = preferredURL.deletingPathExtension().lastPathComponent
+    let pathExtension = preferredURL.pathExtension
+
+    for suffix in 2...999 {
+      var candidate = directory.appendingPathComponent("\(baseName)-\(suffix)")
+      if !pathExtension.isEmpty {
+        candidate.appendPathExtension(pathExtension)
+      }
+      if !fileManager.fileExists(atPath: candidate.path) {
+        return candidate
+      }
+    }
+
+    var fallback = directory.appendingPathComponent("\(baseName)-\(UUID().uuidString.prefix(8))")
+    if !pathExtension.isEmpty {
+      fallback.appendPathExtension(pathExtension)
+    }
+    return fallback
+  }
+
+  private func filenameStamp(_ date: Date) -> String {
+    TeslaCamFormatters.fullDateTime
+      .string(from: date)
+      .replacingOccurrences(of: ":", with: "-")
+      .replacingOccurrences(of: " ", with: "_")
+  }
+}
+
 final class AppState: ObservableObject {
   private enum StorageKey {
     static let lastSourceBookmarks = "TeslaCam.lastSourceBookmarks"
@@ -57,7 +329,8 @@ final class AppState: ObservableObject {
   let playback = MultiCamPlaybackController()
   let exporter: NativeExportController
 
-  private var timelineCoverage = TimelineCoverageMap(sets: [])
+  private var timelineStore = TimelineStore()
+  private let exportStore = ExportStore()
   private var observers: Set<AnyCancellable> = []
   private var currentSegmentStartSeconds: Double = 0
   private var currentSegmentClipIndex: Int?
@@ -126,7 +399,7 @@ final class AppState: ObservableObject {
   }
 
   var currentGapRange: TimelineGapRange? {
-    timelineGapRanges.first { $0.contains(currentSeconds) }
+    timelineStore.currentGapRange(at: currentSeconds)
   }
 
   var trimSelection: TimelineTrimSelection {
@@ -279,38 +552,23 @@ final class AppState: ObservableObject {
   }
 
   func setFullRange() {
-    setTrimRange(startSeconds: 0, endSeconds: totalDuration, snapToMinute: true)
+    timelineStore.setFullRange()
+    applyTimelineStoreSnapshot()
   }
 
   func setCurrentMinuteRange() {
-    guard totalDuration > 0 else { return }
-    let start = floor(currentSeconds / 60.0) * 60.0
-    let end = min(totalDuration, start + 60.0)
-    setTrimRange(startSeconds: start, endSeconds: end, snapToMinute: true)
+    timelineStore.setCurrentMinuteRange(currentSeconds: currentSeconds)
+    applyTimelineStoreSnapshot()
   }
 
   func setRecentRange(minutes: Int) {
-    guard totalDuration > 0 else { return }
-    let window = Double(minutes * 60)
-    let end = totalDuration
-    let start = max(0, end - window)
-    setTrimRange(startSeconds: start, endSeconds: end, snapToMinute: true)
+    timelineStore.setRecentRange(minutes: minutes)
+    applyTimelineStoreSnapshot()
   }
 
   func setTestExportRange(minutes: Int = 3) {
-    guard totalDuration > 0 else { return }
-    let halfWindow = Double(minutes * 60) / 2
-    let center = currentSeconds
-    var start = max(0, center - halfWindow)
-    var end = min(totalDuration, center + halfWindow)
-    if end - start < Double(minutes * 60) {
-      if start == 0 {
-        end = min(totalDuration, Double(minutes * 60))
-      } else if end == totalDuration {
-        start = max(0, totalDuration - Double(minutes * 60))
-      }
-    }
-    setTrimRange(startSeconds: start, endSeconds: end, snapToMinute: true)
+    timelineStore.setTestExportRange(minutes: minutes, currentSeconds: currentSeconds)
+    applyTimelineStoreSnapshot()
   }
 
   func toggleExportCamera(_ camera: Camera, isEnabled: Bool) {
@@ -330,12 +588,10 @@ final class AppState: ObservableObject {
     debug("export open save panel: \(selectedRangeDescription)", category: "export")
 
 #if DEBUG
-    if let debugOutputURL = debugOutputURL() {
-      if let request = makeExportRequest(for: debugOutputURL),
-         exporter.preflightSummary(request: request).canExport {
-        exportRange(to: debugOutputURL)
-        return
-      }
+    let isAutomatedTest = ProcessInfo.processInfo.environment[DebugEnvironment.uiTestMode] != nil
+    if isAutomatedTest, let debugOutputURL = debugOutputURL() {
+      exportRange(to: debugOutputURL)
+      return
     }
 #endif
 
@@ -377,7 +633,8 @@ final class AppState: ObservableObject {
   }
 
   func beginTrimDrag() {
-    isDraggingTrim = true
+    timelineStore.setDragging(true)
+    applyTimelineStoreSnapshot()
   }
 
   func updateTrimRange(startSeconds: Double, endSeconds: Double, snapToMinute: Bool = false) {
@@ -385,7 +642,8 @@ final class AppState: ObservableObject {
   }
 
   func endTrimDrag(startSeconds: Double, endSeconds: Double) {
-    isDraggingTrim = false
+    timelineStore.setDragging(false)
+    applyTimelineStoreSnapshot()
     setTrimRange(startSeconds: startSeconds, endSeconds: endSeconds, snapToMinute: true)
   }
 
@@ -456,11 +714,7 @@ final class AppState: ObservableObject {
   }
 
   var selectedSetsForExport: [ClipSet] {
-    let startDate = trimStartDate
-    let endDate = trimEndDate
-    return clipSets.filter { set in
-      set.endDate > startDate && set.date < endDate
-    }
+    timelineStore.selectedSetsForExport
   }
 
   var totalMergedFileCount: Int {
@@ -498,15 +752,15 @@ final class AppState: ObservableObject {
   }
 
   var trimStartDate: Date {
-    date(forGlobalSeconds: trimStartSeconds)
+    timelineStore.trimStartDate
   }
 
   var trimEndDate: Date {
-    date(forGlobalSeconds: trimEndSeconds)
+    timelineStore.trimEndDate
   }
 
   var selectedTrimDuration: Double {
-    max(0, trimEndSeconds - trimStartSeconds)
+    timelineStore.selectedTrimDuration
   }
 
   var exportWarningsPreview: [String] {
@@ -546,17 +800,15 @@ final class AppState: ObservableObject {
 
   private func rebuildTimeline() {
     guard !clipSets.isEmpty else {
-      timelineCoverage = TimelineCoverageMap(sets: [])
-      totalDuration = 0
-      timelineGapRanges = []
+      timelineStore.clear()
+      applyTimelineStoreSnapshot()
       currentSegmentStartSeconds = 0
       currentSegmentClipIndex = nil
       return
     }
 
-    timelineCoverage = TimelineCoverageMap(sets: clipSets)
-    totalDuration = timelineCoverage.totalDuration
-    timelineGapRanges = timelineCoverage.gapRanges(minimumDuration: 5)
+    timelineStore.load(sets: clipSets, minDate: minDate, maxDate: maxDate)
+    applyTimelineStoreSnapshot()
     debug("timeline rebuilt: duration=\(Int(totalDuration)) gaps=\(timelineGapRanges.count)", category: "timeline")
     currentSegmentStartSeconds = 0
     currentSegmentClipIndex = clipSets.isEmpty ? nil : 0
@@ -566,62 +818,46 @@ final class AppState: ObservableObject {
     rebuildTimeline()
   }
 
-  private func setTrimRange(startSeconds: Double, endSeconds: Double, snapToMinute: Bool = false) {
-    guard !clipSets.isEmpty else { return }
-    let upperBound = max(totalDuration, 1 / 30)
-    let clampedStart = max(0, min(startSeconds, upperBound))
-    let clampedEnd = max(clampedStart, min(endSeconds, upperBound))
-
-    var normalizedStart = clampedStart
-    var normalizedEnd = max(clampedEnd, normalizedStart + (1 / 30))
-
-    if snapToMinute {
-      normalizedStart = snappedTrimBoundary(clampedStart, roundsUp: false)
-      normalizedEnd = snappedTrimBoundary(clampedEnd, roundsUp: true)
-      normalizedEnd = max(normalizedEnd, normalizedStart + 1)
-      normalizedEnd = min(normalizedEnd, upperBound)
-      if normalizedEnd <= normalizedStart {
-        normalizedEnd = min(upperBound, normalizedStart + 1)
-      }
-    }
-
-    trimStartSeconds = normalizedStart
-    trimEndSeconds = normalizedEnd
-    selectedStart = trimStartDate
-    selectedEnd = trimEndDate
+  private func applyTimelineStoreSnapshot() {
+    clipSets = timelineStore.clipSets
+    minDate = timelineStore.minDate
+    maxDate = timelineStore.maxDate
+    selectedStart = timelineStore.selectedStart
+    selectedEnd = timelineStore.selectedEnd
+    trimStartSeconds = timelineStore.trimStartSeconds
+    trimEndSeconds = timelineStore.trimEndSeconds
+    isDraggingTrim = timelineStore.isDraggingTrim
+    totalDuration = timelineStore.totalDuration
+    timelineGapRanges = timelineStore.gapRanges
   }
 
-  private func snappedTrimBoundary(_ seconds: Double, roundsUp: Bool) -> Double {
-    let minute = 60.0
-    let clamped = max(0, min(seconds, totalDuration))
-    let rounded = roundsUp
-      ? ceil(clamped / minute) * minute
-      : floor(clamped / minute) * minute
-    return max(0, min(rounded, totalDuration))
+  private func setTrimRange(startSeconds: Double, endSeconds: Double, snapToMinute: Bool = false) {
+    timelineStore.setTrimRange(startSeconds: startSeconds, endSeconds: endSeconds, snapToMinute: snapToMinute)
+    applyTimelineStoreSnapshot()
   }
 
   private func date(forGlobalSeconds seconds: Double) -> Date {
-    timelineCoverage.date(forGlobalSeconds: seconds) ?? Date()
+    timelineStore.date(forGlobalSeconds: seconds)
   }
 
   private func globalSeconds(for date: Date) -> Double {
-    timelineCoverage.globalSeconds(for: date)
+    timelineStore.globalSeconds(for: date)
   }
 
   private func clipStartOffset(at index: Int) -> Double {
-    timelineCoverage.clipStartOffset(at: index)
+    timelineStore.clipStartOffset(at: index)
   }
 
   private func activeClipIndex(at globalSeconds: Double) -> Int? {
-    timelineCoverage.activeClipIndex(at: globalSeconds)
+    timelineStore.activeClipIndex(at: globalSeconds)
   }
 
   private func nearestClipIndex(to globalSeconds: Double) -> Int {
-    timelineCoverage.nearestClipIndex(to: globalSeconds)
+    timelineStore.nearestClipIndex(to: globalSeconds)
   }
 
   private func timelineSegment(at globalSeconds: Double) -> TimelinePlaybackSegment {
-    timelineCoverage.playbackSegment(at: globalSeconds)
+    timelineStore.playbackSegment(at: globalSeconds)
   }
 
   private func advanceToNextTimelineSegment() {
@@ -877,11 +1113,12 @@ final class AppState: ObservableObject {
   }
 
   private func defaultExportFilename() -> String {
-    guard !clipSets.isEmpty else {
-      return "teslacam_\(exportPreset.outputLabel).\(exportPreset.defaultExtension)"
-    }
-    let suffix = "\(overlayFilenameStamp(trimStartDate))_to_\(overlayFilenameStamp(trimEndDate))"
-    return "teslacam_\(suffix)_\(exportPreset.outputLabel).\(exportPreset.defaultExtension)"
+    exportStore.defaultFilename(
+      sets: clipSets,
+      preset: exportPreset,
+      trimStartDate: trimStartDate,
+      trimEndDate: trimEndDate
+    )
   }
 
   private func exportRange(to chosenURL: URL) {
@@ -892,8 +1129,7 @@ final class AppState: ObservableObject {
     }
     let preflight = exporter.preflightSummary(request: request)
     if !preflight.canExport {
-      errorMessage = preflight.blockingIssues.map(\.message).joined(separator: "\n")
-      showError = true
+      exporter.export(request: request)
       return
     }
     debug("export request: preset=\(request.preset.rawValue) cameras=\(request.enabledCameras.map { $0.rawValue }.sorted().joined(separator: ",")) duration=\(String(format: "%.2f", request.totalDuration))", category: "export")
@@ -905,17 +1141,11 @@ final class AppState: ObservableObject {
   }
 
   private func buildOutputURL(from chosenURL: URL) -> URL {
-    var outputURL = chosenURL
-    if (try? chosenURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-      outputURL = firstAvailableOutputURL(in: chosenURL, preferredFilename: defaultExportFilename())
-    }
-
-    let expectedExtension = exportPreset.defaultExtension
-    if outputURL.pathExtension.lowercased() != expectedExtension {
-      outputURL.deletePathExtension()
-      outputURL.appendPathExtension(expectedExtension)
-    }
-    return uniqueAvailableOutputURL(for: outputURL)
+    exportStore.resolvedOutputURL(
+      chosenURL: chosenURL,
+      preferredFilename: defaultExportFilename(),
+      preset: exportPreset
+    )
   }
 
   func resolvedExportURL(forTesting chosenURL: URL) -> URL {
@@ -923,49 +1153,28 @@ final class AppState: ObservableObject {
   }
 
   private func firstAvailableOutputURL(in directory: URL, preferredFilename: String) -> URL {
-    uniqueAvailableOutputURL(for: directory.appendingPathComponent(preferredFilename))
+    exportStore.resolvedOutputURL(
+      chosenURL: directory,
+      preferredFilename: preferredFilename,
+      preset: exportPreset
+    )
   }
 
   private func uniqueAvailableOutputURL(for preferredURL: URL) -> URL {
-    let fileManager = FileManager.default
-    guard fileManager.fileExists(atPath: preferredURL.path) else {
-      return preferredURL
-    }
-
-    let directory = preferredURL.deletingLastPathComponent()
-    let baseName = preferredURL.deletingPathExtension().lastPathComponent
-    let pathExtension = preferredURL.pathExtension
-
-    for suffix in 2...999 {
-      var candidate = directory.appendingPathComponent("\(baseName)-\(suffix)")
-      if !pathExtension.isEmpty {
-        candidate.appendPathExtension(pathExtension)
-      }
-      if !fileManager.fileExists(atPath: candidate.path) {
-        return candidate
-      }
-    }
-
-    var fallback = directory.appendingPathComponent("\(baseName)-\(UUID().uuidString.prefix(8))")
-    if !pathExtension.isEmpty {
-      fallback.appendPathExtension(pathExtension)
-    }
-    return fallback
+    exportStore.resolvedOutputURL(
+      chosenURL: preferredURL,
+      preferredFilename: preferredURL.lastPathComponent,
+      preset: exportPreset
+    )
   }
 
   private func makeExportRequest(for chosenURL: URL) -> ExportRequest? {
     let sets = selectedSetsForExport
-    guard !sets.isEmpty else { return nil }
-    let enabled = activeExportCameras
-    let useExpandedGrid = enabled.count > 4 || sets.contains { set in
-      !Set(set.files.keys).intersection([.left, .right, .left_pillar, .right_pillar]).isEmpty
-    }
-    return ExportRequest(
+    return exportStore.makeRequest(
       sets: sets,
-      outputURL: buildOutputURL(from: chosenURL),
-      useSixCam: useExpandedGrid,
+      chosenURL: chosenURL,
       preset: exportPreset,
-      enabledCameras: enabled,
+      enabledCameras: activeExportCameras,
       trimStartSeconds: trimStartSeconds,
       trimEndSeconds: trimEndSeconds,
       trimStartDate: trimStartDate,
@@ -1149,6 +1358,8 @@ final class AppState: ObservableObject {
     overlayText = formatDateTime(base)
     rebuildTimeline()
     setTrimRange(startSeconds: 0, endSeconds: totalDuration, snapToMinute: true)
+    currentSeconds = 0
+    seekToGlobalTime(0, exact: true)
   }
 
   private func durationString(seconds: Double) -> String {
@@ -1161,10 +1372,4 @@ final class AppState: ObservableObject {
     return "\(hours)h \(minutes)m total"
   }
 
-  private func overlayFilenameStamp(_ date: Date) -> String {
-    TeslaCamFormatters.fullDateTime
-      .string(from: date)
-      .replacingOccurrences(of: ":", with: "-")
-      .replacingOccurrences(of: " ", with: "_")
-  }
 }

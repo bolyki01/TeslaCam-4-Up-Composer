@@ -52,6 +52,8 @@ front, back, left_repeater, right_repeater, left, right, left_pillar, right_pill
 
 `auto` chooses the 6-camera layout when any of `left`, `right`, `left_pillar`, or `right_pillar` are present. Otherwise it chooses the 4-camera layout.
 
+Layout plans expose a requested profile, expected cameras, render order, hidden cameras, canvas size, and cell rectangles. Missing expected cameras render as black placeholders. Present cameras outside the selected profile are listed as hidden cameras instead of silently changing the grid. For mixed HW3/HW4 inputs, `auto` uses the 6-camera layout and records classic repeater cameras as hidden.
+
 ## Output naming and conflicts
 
 Default CLI output names use:
@@ -75,3 +77,7 @@ Output conflicts are handled by policy:
 Dry-run manifests are JSON objects with `schema_version: 1`. They are intended for fixture parity checks and user-visible preflight output. They include scan summary, duplicate counts, selected range, selected clip sets, layout, dimensions, output path, duplicate policy, and output conflict policy.
 
 Both Swift and Python implementations must keep the fixture cases under `fixtures/domain/cases` passing before domain behavior changes are accepted.
+
+## Implementation ownership
+
+Python owns the portable CLI scan, plan, and ffmpeg render adapters. Swift owns the native app scan, timeline, preview, preflight, and native export path. Shared fixtures are the source of truth when behavior overlaps.

@@ -327,53 +327,25 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
     encoder.setFragmentSamplerState(sampler, index: 0)
 
-    let cams = cameraOrder
-    let count = cams.count
-    let usesHw4Grid = Set(cams).isSubset(of: Set(Camera.hw4SixCamOrder)) && !Set(cams).intersection([.left, .right, .left_pillar, .right_pillar]).isEmpty
-    let columns = usesHw4Grid ? 3 : (count > 4 ? 3 : 2)
-    let rows = usesHw4Grid ? 3 : 2
-
+    let detected = Set(cameraOrder)
+    let layout = CameraLayoutPlan.build(
+      requestedProfile: .auto,
+      detectedCameras: detected,
+      enabledCameras: detected,
+      naturalSizes: [:]
+    )
     let w = Double(view.drawableSize.width)
     let h = Double(view.drawableSize.height)
-    let tileW = w / Double(columns)
-    let tileH = h / Double(rows)
+    let scaleX = w / max(1, Double(layout.canvasSize.width))
+    let scaleY = h / max(1, Double(layout.canvasSize.height))
 
-    for (idx, camera) in cams.enumerated() {
-      let col: Int
-      let row: Int
-      if usesHw4Grid {
-        switch camera {
-        case .front:
-          row = 0
-          col = 1
-        case .left:
-          row = 1
-          col = 0
-        case .back:
-          row = 1
-          col = 1
-        case .right:
-          row = 1
-          col = 2
-        case .left_pillar:
-          row = 2
-          col = 0
-        case .right_pillar:
-          row = 2
-          col = 2
-        default:
-          row = idx / columns
-          col = idx % columns
-        }
-      } else {
-        col = idx % columns
-        row = idx / columns
-      }
+    for camera in layout.renderOrder {
+      guard let cell = layout.cellByCamera[camera] else { continue }
       let tileViewport = MTLViewport(
-        originX: Double(col) * tileW,
-        originY: Double(row) * tileH,
-        width: tileW,
-        height: tileH,
+        originX: Double(cell.minX) * scaleX,
+        originY: Double(cell.minY) * scaleY,
+        width: Double(cell.width) * scaleX,
+        height: Double(cell.height) * scaleY,
         znear: 0,
         zfar: 1
       )

@@ -1,0 +1,302 @@
+{
+  "description": "Mixed classic repeater and HW4 side cameras choose the six-camera contract layout and record hidden classic-only cameras.",
+  "expected_layout": {
+    "auto": {
+      "canvas": {
+        "height": 2880,
+        "width": 3840
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "left": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "left_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 1920
+        },
+        "right": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 960
+        },
+        "right_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 1920
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "hidden_cameras": [
+        "left_repeater"
+      ],
+      "kind": "6up",
+      "profile": "auto",
+      "render_order": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ]
+    },
+    "legacy4": {
+      "canvas": {
+        "height": 1920,
+        "width": 2560
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 0
+        },
+        "left_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "right_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "hidden_cameras": [
+        "left",
+        "right_pillar"
+      ],
+      "kind": "4up",
+      "profile": "legacy4",
+      "render_order": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ]
+    },
+    "sixcam": {
+      "canvas": {
+        "height": 2880,
+        "width": 3840
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "left": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "left_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 1920
+        },
+        "right": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 960
+        },
+        "right_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 1920
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "hidden_cameras": [
+        "left_repeater"
+      ],
+      "kind": "6up",
+      "profile": "sixcam",
+      "render_order": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ]
+    }
+  },
+  "expected_scan": {
+    "keep-all": {
+      "cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "left",
+        "right_pillar"
+      ],
+      "clip_set_count": 1,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "left",
+            "right_pillar"
+          ],
+          "files": {
+            "back": "Mixed/2026-01-01_00-00-00-rear.mp4",
+            "front": "Mixed/2026-01-01_00-00-00-front.mp4",
+            "left": "Mixed/2026-01-01_00-00-00-left.mp4",
+            "left_repeater": "Mixed/2026-01-01_00-00-00-left_repeater.mp4",
+            "right_pillar": "Mixed/2026-01-01_00-00-00-right_pillar.mp4"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "merge-by-time": {
+      "cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "left",
+        "right_pillar"
+      ],
+      "clip_set_count": 1,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "left",
+            "right_pillar"
+          ],
+          "files": {
+            "back": "Mixed/2026-01-01_00-00-00-rear.mp4",
+            "front": "Mixed/2026-01-01_00-00-00-front.mp4",
+            "left": "Mixed/2026-01-01_00-00-00-left.mp4",
+            "left_repeater": "Mixed/2026-01-01_00-00-00-left_repeater.mp4",
+            "right_pillar": "Mixed/2026-01-01_00-00-00-right_pillar.mp4"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "prefer-newest": {
+      "cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "left",
+        "right_pillar"
+      ],
+      "clip_set_count": 1,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "left",
+            "right_pillar"
+          ],
+          "files": {
+            "back": "Mixed/2026-01-01_00-00-00-rear.mp4",
+            "front": "Mixed/2026-01-01_00-00-00-front.mp4",
+            "left": "Mixed/2026-01-01_00-00-00-left.mp4",
+            "left_repeater": "Mixed/2026-01-01_00-00-00-left_repeater.mp4",
+            "right_pillar": "Mixed/2026-01-01_00-00-00-right_pillar.mp4"
+          },
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    }
+  },
+  "files": [
+    {
+      "path": "Mixed/2026-01-01_00-00-00-front.mp4"
+    },
+    {
+      "path": "Mixed/2026-01-01_00-00-00-rear.mp4"
+    },
+    {
+      "path": "Mixed/2026-01-01_00-00-00-left_repeater.mp4"
+    },
+    {
+      "path": "Mixed/2026-01-01_00-00-00-left.mp4"
+    },
+    {
+      "path": "Mixed/2026-01-01_00-00-00-right_pillar.mp4"
+    }
+  ],
+  "name": "mixed_hw3_hw4",
+  "schema_version": 1
+}
