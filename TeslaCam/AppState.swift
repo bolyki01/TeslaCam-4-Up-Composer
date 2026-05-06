@@ -768,11 +768,14 @@ final class AppState: ObservableObject {
     if partialSelectedSetCount > 0 {
       warnings.append("\(partialSelectedSetCount) selected clip span(s) are missing one or more enabled cameras and will use black placeholders.")
     }
-    let hidden = camerasDetected.filter { !activeExportCameras.contains($0) }
-    if !hidden.isEmpty {
-      warnings.append("Hidden cameras will export as black tiles: \(hidden.map(\.displayName).joined(separator: ", ")).")
+    if !hiddenExportCameraNames.isEmpty {
+      warnings.append("Hidden cameras will export as black tiles: \(hiddenExportCameraNames.joined(separator: ", ")).")
     }
     return warnings
+  }
+
+  var hiddenExportCameraNames: [String] {
+    camerasDetected.filter { !activeExportCameras.contains($0) }.map(\.displayName)
   }
 
   var activeExportCameras: Set<Camera> {

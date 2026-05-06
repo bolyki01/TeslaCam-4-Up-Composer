@@ -17,3 +17,7 @@ Rules:
 - Leave `TeslaCam/Resources/LICENSES.md` and other vendor or runtime assets alone unless the task is about licensing or packaging.
 - Native export is the shipping app path. Do not reintroduce a CLI-only export assumption into the mac app.
 - `_legacy/` stays reference-only unless the task explicitly targets it.
+
+## Telemetry
+
+- Do not add Sentry or external crash telemetry. Keep diagnostics local unless a repo runbook says otherwise.

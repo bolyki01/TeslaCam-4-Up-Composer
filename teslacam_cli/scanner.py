@@ -4,7 +4,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Dict, Iterable, Iterator, List, Optional, Set
 
 from .models import Camera, ClipSet, DuplicatePolicy, ScanResult
 
@@ -60,7 +60,7 @@ def scan_source(
     duplicate_policy: DuplicatePolicy = DuplicatePolicy.MERGE_BY_TIME,
 ) -> ScanResult:
     if not root.exists() or not root.is_dir():
-        raise FileNotFoundError(f"Source directory does not exist: {root}")
+        raise FileNotFoundError(f"Source directory does not exist: {_safe_path_for_error(root)}")
 
     grouped: Dict[str, Dict[Camera, Path]] = {}
     dates: Dict[str, datetime] = {}
@@ -71,13 +71,7 @@ def scan_source(
     duplicate_timestamp_count = 0
     seen_duplicate_timestamps: Set[str] = set()
 
-    for path in sorted(root.rglob("*")):
-        if _is_hidden_path(path, root):
-            continue
-        if not path.is_file():
-            continue
-        if path.suffix.lower() not in {".mp4", ".mov"}:
-            continue
+    for path in _candidate_clip_paths(root):
         match = _FILENAME_RE.match(path.name)
         if not match:
             continue
@@ -138,7 +132,7 @@ def scan_source(
         ]
     clip_sets.sort(key=lambda item: (item.start_time, item.timestamp, tuple(sorted(str(path) for path in item.files.values()))))
     if not clip_sets:
-        raise RuntimeError(f"No TeslaCam clips found under: {root}")
+        raise RuntimeError(f"No TeslaCam clips found under: {_safe_path_for_error(root)}")
     return ScanResult(
         clip_sets=clip_sets,
         cameras=cameras_found,
@@ -156,6 +150,48 @@ def cameras_in_sets(clip_sets: Iterable[ClipSet]) -> Set[Camera]:
     for clip_set in clip_sets:
         cameras.update(clip_set.files.keys())
     return cameras
+
+
+def _candidate_clip_paths(root: Path) -> Iterator[Path]:
+    root = root.resolve()
+    candidates: List[str] = []
+    stack: List[str] = [str(root)]
+
+    while stack:
+        directory = stack.pop()
+        try:
+            entries = list(os.scandir(directory))
+        except OSError:
+            continue
+
+        child_dirs: List[str] = []
+        for entry in entries:
+            name = entry.name
+            if not name or name.startswith("."):
+                continue
+
+            try:
+                if entry.is_symlink():
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    child_dirs.append(entry.path)
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+            except OSError:
+                continue
+
+            if _FILENAME_RE.match(name) is None:
+                continue
+            candidates.append(entry.path)
+
+        stack.extend(sorted(child_dirs, reverse=True))
+
+    for path_text in sorted(candidates):
+        path = Path(path_text)
+        if _is_hidden_path(path, root):
+            continue
+        yield path
 
 
 def _resolve_duplicate_path(existing: Path, candidate: Path, duplicate_policy: DuplicatePolicy) -> Path:
@@ -186,3 +222,11 @@ def _is_hidden_path(path: Path, root: Path) -> bool:
     except ValueError:
         relative = path
     return any(part.startswith(".") for part in relative.parts)
+
+
+def _safe_path_for_error(path: Path, max_chars: int = 240) -> str:
+    text = str(path)
+    text = "".join(ch if ch >= " " and ch != "\x7f" else "?" for ch in text)
+    if len(text) > max_chars:
+        return "..." + text[-max_chars:]
+    return text

@@ -31,43 +31,91 @@ final class ClipIndexer {
     duplicatePolicy: DuplicateClipPolicy = .mergeByTime,
     progress: @escaping (Int) -> Void
   ) throws -> ClipIndex {
-    let fm = FileManager.default
-    let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .nameKey, .isHiddenKey]
+    try measure("clip_index_full") {
+      let fm = FileManager.default
+      let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .nameKey, .isHiddenKey]
 
-    var map: [String: IndexedClipSetBuilder] = [:]
-    var keepAllSets: [ClipSet] = []
-    var keepAllPrimaryIndexByTimestamp: [String: Int] = [:]
-    var camerasFound = Set<Camera>()
-    var duplicateFileCount = 0
-    var duplicateTimestampCount = 0
-    var scanned = 0
-    var seenDuplicateTimestamps = Set<String>()
-    var metadataCache: [String: ClipAssetProbe] = [:]
+      var map: [String: IndexedClipSetBuilder] = [:]
+      var keepAllSets: [ClipSet] = []
+      var keepAllPrimaryIndexByTimestamp: [String: Int] = [:]
+      var camerasFound = Set<Camera>()
+      var duplicateFileCount = 0
+      var duplicateTimestampCount = 0
+      var scanned = 0
+      var seenDuplicateTimestamps = Set<String>()
+      var metadataCache: [String: ClipAssetProbe] = [:]
 
-    let normalizedInputs = normalizeInputs(inputURLs)
-    guard !normalizedInputs.isEmpty else {
-      throw ClipIndexError.noClipsFound
-    }
+      let normalizedInputs = normalizeInputs(inputURLs)
+      guard !normalizedInputs.isEmpty else {
+        throw ClipIndexError.noClipsFound
+      }
 
-    for input in normalizedInputs {
-      let values = try? input.resourceValues(forKeys: Set(keys))
-      let isDir = values?.isDirectory ?? false
+      for input in normalizedInputs {
+        let values = try? input.resourceValues(forKeys: Set(keys))
+        let isDir = values?.isDirectory ?? false
 
-      if isDir {
-        guard let enumerator = fm.enumerator(
-          at: input,
-          includingPropertiesForKeys: keys,
-          options: [.skipsHiddenFiles]
-        ) else {
-          continue
-        }
-        let fileURLs = enumerator.compactMap { item -> URL? in
-          guard let fileURL = item as? URL else { return nil }
-          return fileURL.standardizedFileURL
-        }.sorted { $0.path < $1.path }
-        for fileURL in fileURLs {
+        if isDir {
+          guard let enumerator = fm.enumerator(
+            at: input,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
+          ) else {
+            continue
+          }
+
+          var fileURLs: [URL] = []
+          while let item = enumerator.nextObject() as? URL {
+            let fileURL = item.standardizedFileURL
+            let resourceValues = try? fileURL.resourceValues(forKeys: Set(keys))
+
+            if hasHiddenPathComponent(fileURL, relativeTo: input) {
+              if resourceValues?.isDirectory == true {
+                enumerator.skipDescendants()
+              }
+              continue
+            }
+
+            if resourceValues?.isSymbolicLink == true {
+              if resourceValues?.isDirectory == true {
+                enumerator.skipDescendants()
+              }
+              continue
+            }
+
+            if resourceValues?.isDirectory == true {
+              continue
+            }
+
+            guard resourceValues?.isRegularFile == true else {
+              continue
+            }
+
+            fileURLs.append(fileURL)
+          }
+
+          fileURLs.sort { $0.path < $1.path }
+          for fileURL in fileURLs {
+            parseClipFile(
+              fileURL,
+              duplicatePolicy: duplicatePolicy,
+              into: &map,
+              keepAllSets: &keepAllSets,
+              keepAllPrimaryIndexByTimestamp: &keepAllPrimaryIndexByTimestamp,
+              camerasFound: &camerasFound,
+              duplicateFileCount: &duplicateFileCount,
+              duplicateTimestampCount: &duplicateTimestampCount,
+              seenDuplicateTimestamps: &seenDuplicateTimestamps,
+              scanned: &scanned,
+              metadataCache: &metadataCache,
+              progress: progress
+            )
+          }
+        } else {
+          if values?.isSymbolicLink == true || values?.isRegularFile != true {
+            continue
+          }
           parseClipFile(
-            fileURL,
+            input,
             duplicatePolicy: duplicatePolicy,
             into: &map,
             keepAllSets: &keepAllSets,
@@ -81,70 +129,64 @@ final class ClipIndexer {
             progress: progress
           )
         }
+      }
+
+      var sets: [ClipSet]
+      if duplicatePolicy == .keepAll {
+        sets = keepAllSets
       } else {
-        parseClipFile(
-          input,
-          duplicatePolicy: duplicatePolicy,
-          into: &map,
-          keepAllSets: &keepAllSets,
-          keepAllPrimaryIndexByTimestamp: &keepAllPrimaryIndexByTimestamp,
-          camerasFound: &camerasFound,
-          duplicateFileCount: &duplicateFileCount,
-          duplicateTimestampCount: &duplicateTimestampCount,
-          seenDuplicateTimestamps: &seenDuplicateTimestamps,
-          scanned: &scanned,
-          metadataCache: &metadataCache,
-          progress: progress
-        )
-      }
-    }
-
-    var sets: [ClipSet]
-    if duplicatePolicy == .keepAll {
-      sets = keepAllSets
-    } else {
-      sets = []
-      sets.reserveCapacity(map.count)
-      for (_, entry) in map {
-        sets.append(entry.makeClipSet())
-      }
-    }
-    sets.sort { lhs, rhs in
-      if lhs.date == rhs.date {
-        if lhs.timestamp == rhs.timestamp {
-          let lhsPaths = lhs.files.values.map(\.path).sorted()
-          let rhsPaths = rhs.files.values.map(\.path).sorted()
-          if lhsPaths == rhsPaths {
-            return lhs.id < rhs.id
-          }
-          return lhsPaths.lexicographicallyPrecedes(rhsPaths)
+        sets = []
+        sets.reserveCapacity(map.count)
+        for (_, entry) in map {
+          sets.append(entry.makeClipSet())
         }
-        return lhs.timestamp < rhs.timestamp
       }
-      return lhs.date < rhs.date
-    }
+      sets.sort { lhs, rhs in
+        if lhs.date == rhs.date {
+          if lhs.timestamp == rhs.timestamp {
+            let lhsPaths = lhs.files.values.map(\.path).sorted()
+            let rhsPaths = rhs.files.values.map(\.path).sorted()
+            if lhsPaths == rhsPaths {
+              return lhs.id < rhs.id
+            }
+            return lhsPaths.lexicographicallyPrecedes(rhsPaths)
+          }
+          return lhs.timestamp < rhs.timestamp
+        }
+        return lhs.date < rhs.date
+      }
 
-    guard let first = sets.first, let last = sets.last else {
-      throw ClipIndexError.noClipsFound
-    }
+      guard let first = sets.first, let last = sets.last else {
+        throw ClipIndexError.noClipsFound
+      }
 
-    let maxEnd = sets.map(\.endDate).max() ?? last.endDate
-    let totalDuration = max(0.1, maxEnd.timeIntervalSince(first.date))
-    let overlapMinuteCount = overlapCount(in: sets)
+      let maxEnd = sets.map(\.endDate).max() ?? last.endDate
+      let totalDuration = max(0.1, maxEnd.timeIntervalSince(first.date))
+      let overlapMinuteCount = overlapCount(in: sets)
 
-    return ClipIndex(
-      sets: sets,
-      minDate: first.date,
-      maxDate: maxEnd,
-      totalDuration: totalDuration,
-      camerasFound: camerasFound,
-      layoutProfile: detectLayoutProfile(camerasFound: camerasFound),
-      duplicateSummary: DuplicateResolutionSummary(
-        duplicateFileCount: duplicateFileCount,
-        duplicateTimestampCount: duplicateTimestampCount,
-        overlapMinuteCount: overlapMinuteCount
+      return ClipIndex(
+        sets: sets,
+        minDate: first.date,
+        maxDate: maxEnd,
+        totalDuration: totalDuration,
+        camerasFound: camerasFound,
+        layoutProfile: detectLayoutProfile(camerasFound: camerasFound),
+        duplicateSummary: DuplicateResolutionSummary(
+          duplicateFileCount: duplicateFileCount,
+          duplicateTimestampCount: duplicateTimestampCount,
+          overlapMinuteCount: overlapMinuteCount
+        )
       )
-    )
+    }
+  }
+
+  private static func measure<T>(_ name: String, _ work: () throws -> T) rethrows -> T {
+    let start = ContinuousClock.now
+    defer {
+      let elapsed = start.duration(to: .now)
+      NSLog("[perf] %@ took %@", name, String(describing: elapsed))
+    }
+    return try work()
   }
 
   private static func normalizeInputs(_ inputs: [URL]) -> [URL] {
@@ -159,6 +201,18 @@ final class ClipIndexer {
       out.append(url)
     }
     return out
+  }
+
+  private static func hasHiddenPathComponent(_ url: URL, relativeTo root: URL) -> Bool {
+    let rootPath = root.standardizedFileURL.path
+    let filePath = url.standardizedFileURL.path
+    let relativePath: String
+    if filePath.hasPrefix(rootPath) {
+      relativePath = String(filePath.dropFirst(rootPath.count))
+    } else {
+      relativePath = filePath
+    }
+    return relativePath.split(separator: "/").contains { $0.hasPrefix(".") }
   }
 
   private static func parseClipFile(

@@ -81,7 +81,7 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(result.duplicate_file_count, 1)
         self.assertEqual(result.duplicate_timestamp_count, 1)
         self.assertEqual(len(result.clip_sets), 1)
-        self.assertEqual(result.clip_sets[0].files[Camera.FRONT], newer)
+        self.assertEqual(result.clip_sets[0].files[Camera.FRONT].resolve(), newer.resolve())
 
     def test_duplicate_policy_keep_all_preserves_duplicate_entries(self):
         with TemporaryDirectory() as temp_dir:
@@ -102,9 +102,21 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(result.duplicate_file_count, 1)
         self.assertEqual(result.duplicate_timestamp_count, 1)
         self.assertEqual(len(result.clip_sets), 2)
-        self.assertEqual(result.clip_sets[0].files[Camera.BACK], rear)
-        self.assertTrue(any(clip_set.files.get(Camera.FRONT) == front_a for clip_set in result.clip_sets))
-        self.assertTrue(any(clip_set.files.get(Camera.FRONT) == front_b for clip_set in result.clip_sets))
+        self.assertEqual(result.clip_sets[0].files[Camera.BACK].resolve(), rear.resolve())
+        self.assertTrue(
+            any(
+                clip_set.files.get(Camera.FRONT) is not None
+                and clip_set.files[Camera.FRONT].resolve() == front_a.resolve()
+                for clip_set in result.clip_sets
+            )
+        )
+        self.assertTrue(
+            any(
+                clip_set.files.get(Camera.FRONT) is not None
+                and clip_set.files[Camera.FRONT].resolve() == front_b.resolve()
+                for clip_set in result.clip_sets
+            )
+        )
 
     def test_scan_ignores_hidden_path_components(self):
         with TemporaryDirectory() as temp_dir:
