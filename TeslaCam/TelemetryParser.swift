@@ -69,9 +69,133 @@ final class TelemetryParser {
   }
 }
 
+enum SafeBinaryReaderError: Error, Equatable {
+  case outOfBounds(offset: Int, requested: Int, count: Int)
+  case invalidLength(Int)
+  case nonAdvancingBox(offset: Int)
+}
+
+struct SafeBinaryReader {
+  private let data: Data
+  private(set) var offset: Int
+  let end: Int
+
+  init(data: Data, offset: Int = 0, end: Int? = nil) throws {
+    let resolvedEnd = end ?? data.count
+    guard offset >= 0, resolvedEnd >= offset, resolvedEnd <= data.count else {
+      throw SafeBinaryReaderError.outOfBounds(offset: offset, requested: 0, count: data.count)
+    }
+    self.data = data
+    self.offset = offset
+    self.end = resolvedEnd
+  }
+
+  var isAtEnd: Bool { offset >= end }
+
+  mutating func readUInt8() throws -> UInt8 {
+    try require(1)
+    let value = data[offset]
+    offset += 1
+    return value
+  }
+
+  mutating func readUInt16BE() throws -> UInt16 {
+    try require(2)
+    let value = (UInt16(data[offset]) << 8) | UInt16(data[offset + 1])
+    offset += 2
+    return value
+  }
+
+  mutating func readUInt32BE() throws -> UInt32 {
+    try require(4)
+    let value = (UInt32(data[offset]) << 24)
+      | (UInt32(data[offset + 1]) << 16)
+      | (UInt32(data[offset + 2]) << 8)
+      | UInt32(data[offset + 3])
+    offset += 4
+    return value
+  }
+
+  mutating func readUInt64BE() throws -> UInt64 {
+    try require(8)
+    var value: UInt64 = 0
+    for index in 0..<8 {
+      value = (value << 8) | UInt64(data[offset + index])
+    }
+    offset += 8
+    return value
+  }
+
+  mutating func skip(_ count: Int) throws {
+    guard count >= 0 else { throw SafeBinaryReaderError.invalidLength(count) }
+    try require(count)
+    offset += count
+  }
+
+  func slice(start: Int, length: Int) throws -> Data.SubSequence {
+    guard length >= 0 else { throw SafeBinaryReaderError.invalidLength(length) }
+    guard start >= 0, start + length <= data.count, start + length >= start else {
+      throw SafeBinaryReaderError.outOfBounds(offset: start, requested: length, count: data.count)
+    }
+    return data[start..<(start + length)]
+  }
+
+  private func require(_ count: Int) throws {
+    guard count >= 0, offset + count <= end, offset + count >= offset else {
+      throw SafeBinaryReaderError.outOfBounds(offset: offset, requested: count, count: data.count)
+    }
+  }
+}
+
+struct SafeMP4BoxHeader: Equatable {
+  let type: String
+  let contentStart: Int
+  let contentEnd: Int
+  let boxEnd: Int
+}
+
+extension SafeBinaryReader {
+  mutating func readMP4BoxHeader(parentEnd: Int) throws -> SafeMP4BoxHeader? {
+    guard offset + 8 <= parentEnd else { return nil }
+    let boxStart = offset
+    let size32 = try readUInt32BE()
+    let typeBytesStart = offset
+    try skip(4)
+    let type = String(bytes: try slice(start: typeBytesStart, length: 4), encoding: .ascii) ?? "????"
+
+    let headerSize: Int
+    let boxSize: UInt64
+    if size32 == 1 {
+      headerSize = 16
+      boxSize = try readUInt64BE()
+    } else if size32 == 0 {
+      headerSize = 8
+      boxSize = UInt64(parentEnd - boxStart)
+    } else {
+      headerSize = 8
+      boxSize = UInt64(size32)
+    }
+
+    guard boxSize >= UInt64(headerSize), boxSize <= UInt64(Int.max) else {
+      throw SafeBinaryReaderError.invalidLength(Int(min(boxSize, UInt64(Int.max))))
+    }
+    let boxEnd = boxStart + Int(boxSize)
+    guard boxEnd > boxStart, boxEnd <= parentEnd else {
+      throw SafeBinaryReaderError.nonAdvancingBox(offset: boxStart)
+    }
+    return SafeMP4BoxHeader(
+      type: type,
+      contentStart: boxStart + headerSize,
+      contentEnd: boxEnd,
+      boxEnd: boxEnd
+    )
+  }
+}
+
 // MARK: - MP4 parsing and SEI extraction
 
 private final class DashcamMP4 {
+  private static let maxDurationSamples = 1_000_000
   private let data: Data
 
   init(data: Data) {
@@ -92,11 +216,11 @@ private final class DashcamMP4 {
     var frameIndex = 0
 
     while cursor + 4 <= end {
-      let len = Int(readUInt32BE(at: cursor))
+      let len = Int(try readUInt32BE(at: cursor))
       cursor += 4
       if len < 1 || cursor + len > end { break }
 
-      let type = data[cursor] & 0x1F
+      let type = try readUInt8(at: cursor) & 0x1F
       let nal = data.subdata(in: cursor..<(cursor + len))
 
       if type == 6 {
@@ -128,36 +252,40 @@ private final class DashcamMP4 {
     let avcC = try findBox(start: avc1.start + 78, end: avc1.end, name: "avcC")
 
     let o = avcC.start
-    _ = readUInt8(at: o + 1) // profile
+    _ = try readUInt8(at: o + 1) // profile
 
     // Extract SPS/PPS length (unused but matches JS config layout)
     var p = o + 6
-    let spsLen = Int(readUInt16BE(at: p))
+    let spsLen = Int(try readUInt16BE(at: p))
     p += 2 + spsLen + 1
-    let _ = Int(readUInt16BE(at: p))
+    let _ = Int(try readUInt16BE(at: p))
 
     let mdhd = try findBox(start: mdia.start, end: mdia.end, name: "mdhd")
-    let mdhdVersion = readUInt8(at: mdhd.start)
+    let mdhdVersion = try readUInt8(at: mdhd.start)
     let timescale: UInt32
     if mdhdVersion == 1 {
-      timescale = readUInt32BE(at: mdhd.start + 20)
+      timescale = try readUInt32BE(at: mdhd.start + 20)
     } else {
-      timescale = readUInt32BE(at: mdhd.start + 12)
+      timescale = try readUInt32BE(at: mdhd.start + 12)
     }
 
     let stts = try findBox(start: stbl.start, end: stbl.end, name: "stts")
-    let entryCount = Int(readUInt32BE(at: stts.start + 4))
+    let entryCount = Int(try readUInt32BE(at: stts.start + 4))
     var durations: [Double] = []
-    durations.reserveCapacity(2048)
+    durations.reserveCapacity(min(2048, Self.maxDurationSamples))
 
     var pos = stts.start + 8
     for _ in 0..<entryCount {
-      let count = Int(readUInt32BE(at: pos))
-      let delta = Int(readUInt32BE(at: pos + 4))
+      let count = Int(try readUInt32BE(at: pos))
+      let delta = Int(try readUInt32BE(at: pos + 4))
       let ms = (Double(delta) / Double(timescale)) * 1000.0
       if count > 0 {
-        for _ in 0..<count {
+        let allowed = min(count, Self.maxDurationSamples - durations.count)
+        for _ in 0..<max(0, allowed) {
           durations.append(ms)
+        }
+        if durations.count >= Self.maxDurationSamples {
+          break
         }
       }
       pos += 8
@@ -172,26 +300,16 @@ private final class DashcamMP4 {
   }
 
   private func findBox(start: Int, end: Int, name: String) throws -> (start: Int, end: Int, size: Int) {
-    var pos = start
-    while pos + 8 <= end {
-      var size = Int(readUInt32BE(at: pos))
-      let type = readAscii(at: pos + 4, len: 4)
-      let headerSize = (size == 1) ? 16 : 8
-
-      if size == 1 {
-        let high = UInt64(readUInt32BE(at: pos + 8))
-        let low = UInt64(readUInt32BE(at: pos + 12))
-        size = Int((high << 32) | low)
-      } else if size == 0 {
-        size = end - pos
+    var reader = try SafeBinaryReader(data: data, offset: start, end: end)
+    while let header = try reader.readMP4BoxHeader(parentEnd: end) {
+      if header.type == name {
+        return (
+          start: header.contentStart,
+          end: header.contentEnd,
+          size: header.contentEnd - header.contentStart
+        )
       }
-
-      if type == name {
-        let contentStart = pos + headerSize
-        let contentEnd = pos + size
-        return (start: contentStart, end: contentEnd, size: size - headerSize)
-      }
-      pos += size
+      reader = try SafeBinaryReader(data: data, offset: header.boxEnd, end: end)
     }
     throw NSError(domain: "DashcamMP4", code: 1, userInfo: [NSLocalizedDescriptionKey: "Box not found: \(name)"])
   }
@@ -222,28 +340,21 @@ private final class DashcamMP4 {
     return Data(out)
   }
 
-  private func readUInt8(at offset: Int) -> UInt8 {
-    return data[offset]
+  private func readUInt8(at offset: Int) throws -> UInt8 {
+    var reader = try SafeBinaryReader(data: data, offset: offset, end: data.count)
+    return try reader.readUInt8()
   }
 
-  private func readUInt16BE(at offset: Int) -> UInt16 {
-    let b0 = UInt16(data[offset]) << 8
-    let b1 = UInt16(data[offset + 1])
-    return b0 | b1
+  private func readUInt16BE(at offset: Int) throws -> UInt16 {
+    var reader = try SafeBinaryReader(data: data, offset: offset, end: data.count)
+    return try reader.readUInt16BE()
   }
 
-  private func readUInt32BE(at offset: Int) -> UInt32 {
-    let b0 = UInt32(data[offset]) << 24
-    let b1 = UInt32(data[offset + 1]) << 16
-    let b2 = UInt32(data[offset + 2]) << 8
-    let b3 = UInt32(data[offset + 3])
-    return b0 | b1 | b2 | b3
+  private func readUInt32BE(at offset: Int) throws -> UInt32 {
+    var reader = try SafeBinaryReader(data: data, offset: offset, end: data.count)
+    return try reader.readUInt32BE()
   }
 
-  private func readAscii(at offset: Int, len: Int) -> String {
-    guard offset + len <= data.count else { return "" }
-    return String(bytes: data[offset..<(offset + len)], encoding: .ascii) ?? ""
-  }
 }
 
 private struct MP4Config {

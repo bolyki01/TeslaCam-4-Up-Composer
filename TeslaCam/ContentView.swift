@@ -519,6 +519,13 @@ private struct TimelineExportCard: View {
       // ── Row 4: Camera toggles ────────────────────────────
       CameraToggleRow(state: state)
 
+      ExportConfidenceStrip(
+        duplicateSummaryText: state.duplicateSummaryText,
+        partialSelectedSetCount: state.partialSelectedSetCount,
+        hiddenCameraNames: state.hiddenExportCameraNames,
+        gapCount: state.timelineGapRanges.count
+      )
+
       // ── Row 5: Quick range + Duplicate + Export ───────────
       HStack(alignment: .top, spacing: 10) {
         // Quick range row
@@ -561,6 +568,7 @@ private struct TimelineExportCard: View {
           .labelsHidden()
           .pickerStyle(.menu)
           .fixedSize()
+          .accessibilityHint("Changes how clips with the same timestamp and camera are resolved.")
         }
 
         // Export button
@@ -685,9 +693,87 @@ private struct CameraToggleRow: View {
         .buttonStyle(.plain)
         .accessibilityLabel(camera.displayName)
         .accessibilityValue(state.activeExportCameras.contains(camera) ? "Included" : "Excluded")
+        .accessibilityHint("Toggles whether this camera appears in the export.")
         .accessibilityIdentifier("camera-\(camera.rawValue)")
       }
     }
+  }
+}
+
+private struct ExportConfidenceStrip: View {
+  let duplicateSummaryText: String
+  let partialSelectedSetCount: Int
+  let hiddenCameraNames: [String]
+  let gapCount: Int
+
+  var body: some View {
+    HStack(spacing: 8) {
+      ExportConfidenceChip(
+        title: "Gaps",
+        value: "\(gapCount)",
+        systemImage: gapCount == 0 ? "checkmark.circle" : "waveform.path.ecg"
+      )
+
+      ExportConfidenceChip(
+        title: "Partial",
+        value: "\(partialSelectedSetCount)",
+        systemImage: partialSelectedSetCount == 0 ? "checkmark.circle" : "rectangle.split.2x1"
+      )
+
+      ExportConfidenceChip(
+        title: "Hidden",
+        value: hiddenCameraNames.isEmpty ? "0" : "\(hiddenCameraNames.count)",
+        systemImage: hiddenCameraNames.isEmpty ? "eye" : "eye.slash"
+      )
+
+      if !duplicateSummaryText.isEmpty {
+        ExportConfidenceChip(
+          title: "Dupes",
+          value: duplicateSummaryText,
+          systemImage: "square.on.square"
+        )
+      }
+    }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(accessibilitySummary)
+    .animation(.easeInOut(duration: 0.18), value: partialSelectedSetCount)
+    .animation(.easeInOut(duration: 0.18), value: hiddenCameraNames)
+  }
+
+  private var accessibilitySummary: String {
+    var parts = ["\(gapCount) gaps", "\(partialSelectedSetCount) partial spans"]
+    if !hiddenCameraNames.isEmpty {
+      parts.append("Hidden cameras: \(hiddenCameraNames.joined(separator: ", "))")
+    }
+    if !duplicateSummaryText.isEmpty {
+      parts.append("Duplicates: \(duplicateSummaryText)")
+    }
+    return parts.joined(separator: ". ")
+  }
+}
+
+private struct ExportConfidenceChip: View {
+  let title: String
+  let value: String
+  let systemImage: String
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: systemImage)
+        .font(.system(size: 11, weight: .semibold))
+      VStack(alignment: .leading, spacing: 1) {
+        Text(title.uppercased())
+          .font(.system(size: 8, weight: .semibold))
+          .foregroundColor(TeslaCamTheme.Colors.textTertiary)
+        Text(value)
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundColor(TeslaCamTheme.Colors.textSecondary)
+          .lineLimit(1)
+      }
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 8)
+    .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.compactCorner)
   }
 }
 

@@ -6,8 +6,10 @@ from pathlib import Path
 from tempfile import mkdtemp
 from typing import Dict, Iterable, List, Optional, Protocol, Union
 
-from .ffmpeg_tools import FfmpegRunner, MediaProbe, ffconcat_path
+from .concat_safety import ffconcat_path
+from .ffmpeg_tools import FfmpegRunner, MediaProbe
 from .models import Camera, ClipSet, ComposePlan, Dimensions, LayoutSpec, MIXED_CAMERA_ORDER, SelectedSet
+from .safe_output import atomic_output_target
 
 
 @dataclass(frozen=True)
@@ -206,26 +208,28 @@ def compose(plan: ComposePlan) -> Path:
             handle.write(f"file '{ffconcat_path(part_path)}'\n")
 
     plan.output_file.parent.mkdir(parents=True, exist_ok=True)
-    concat_command = [
-        str(plan.ffmpeg),
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        plan.loglevel,
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        str(concat_file),
-        "-c",
-        "copy",
-        "-movflags",
-        "+faststart",
-        str(plan.output_file),
-    ]
-    emit_render_event(reporter, RenderConcatStarted())
-    runner.run(concat_command)
+    with atomic_output_target(plan.output_file, suffix=plan.output_file.suffix or ".tmp") as temp_output_file:
+        concat_command = [
+            str(plan.ffmpeg),
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            plan.loglevel,
+            "-nostdin",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_file),
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(temp_output_file),
+        ]
+        emit_render_event(reporter, RenderConcatStarted())
+        runner.run(concat_command)
     return plan.output_file
 
 
@@ -297,6 +301,7 @@ def build_part_command(
         "-hide_banner",
         "-loglevel",
         plan.loglevel,
+        "-nostdin",
         *input_args,
         "-filter_complex",
         ";".join(filter_parts),

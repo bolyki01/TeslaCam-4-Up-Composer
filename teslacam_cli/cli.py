@@ -36,6 +36,7 @@ from .models import (
     ScanResult,
     SelectedSet,
 )
+from .probe_cache import RunProbeCache
 from .scanner import cameras_in_sets, format_clip_timestamp, parse_clip_timestamp, scan_source
 
 
@@ -294,7 +295,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         repo_root = Path(__file__).resolve().parent.parent
         interactive = args.interactive or args.source is None
         presenter = CliPresenter()
-        media_probe = MediaProbe()
+        media_probe = MediaProbe(probe_cache=RunProbeCache())
         ffmpeg, ffprobe = resolve_tools(repo_root, args.ffmpeg, args.ffprobe)
         duplicate_policy = DuplicatePolicy(args.duplicate_policy)
         output_conflict = OutputConflictPolicy(args.output_conflict)

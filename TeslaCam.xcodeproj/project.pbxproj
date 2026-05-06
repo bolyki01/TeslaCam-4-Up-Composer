@@ -12,7 +12,6 @@
 		16112D2E1E4A55F25A463C45 /* TelemetryParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685472F3526330073314B /* TelemetryParser.swift */; };
 		195FACF22EF24C7709F0D524 /* Indexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685402F3526330073314B /* Indexer.swift */; };
 		2EB20178CD3CD202893526D6 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685452F3526330073314B /* Models.swift */; };
-		4332EA1E01F6C112946450C2 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = FA647A41F9F05CDD4576EFFD /* Sentry */; };
 		43856EFDACD28E283764B079 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 50C6855D2F3526330073314B /* Assets.xcassets */; };
 		4AC0833CC400B8B020F17BB1 /* PlatformFileAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B9A79DBE9E309C323846661 /* PlatformFileAccess.swift */; };
 		4FC3EC1D1A403F7C27D9DAC2 /* Utils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685482F3526330073314B /* Utils.swift */; };
@@ -40,7 +39,6 @@
 		C31C5F6B1CDA0C816258DD9A /* MetalPlayerView_iPad.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7761E775BC37CD7C35A556C /* MetalPlayerView_iPad.swift */; };
 		CDDBB87778F9005CECFA36F5 /* PlatformFileAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B9A79DBE9E309C323846661 /* PlatformFileAccess.swift */; };
 		DF1527E9A5192CB26430404E /* MetalShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 50C685442F3526330073314B /* MetalShaders.metal */; };
-		FC3ECE942B0AD8B8311860E5 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 302D254C6CD39577326DE9E5 /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -109,7 +107,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				4332EA1E01F6C112946450C2 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -132,7 +129,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				5E18ECCAC9BDFE1995BB9F3C /* Foundation.framework in Frameworks */,
-				FC3ECE942B0AD8B8311860E5 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -227,9 +223,6 @@
 			dependencies = (
 			);
 			name = TeslaCam;
-			packageProductDependencies = (
-				FA647A41F9F05CDD4576EFFD /* Sentry */,
-			);
 			productName = TeslaCam;
 			productReference = 508F32862F35259D005B7A80 /* TeslaCam.app */;
 			productType = "com.apple.product-type.application";
@@ -289,9 +282,6 @@
 			dependencies = (
 			);
 			name = "TeslaCam iPad";
-			packageProductDependencies = (
-				302D254C6CD39577326DE9E5 /* Sentry */,
-			);
 			productName = "TeslaCam iPad";
 			productReference = 3027438A524246CA2FBF0C46 /* TeslaCam iPad.app */;
 			productType = "com.apple.product-type.application";
@@ -328,9 +318,6 @@
 			);
 			mainGroup = 508F327D2F35259D005B7A80;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-				FDAB9FB4DEBCF1502ADE66DB /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
-			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 508F32872F35259D005B7A80 /* Products */;
 			projectDirPath = "";
@@ -465,7 +452,6 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_SENTRY_DSN = "https://26a1eb0acb40578b6e80f306ac374eda@o4511264196788224.ingest.de.sentry.io/4511291411988560";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait";
 				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
@@ -629,7 +615,6 @@
 				ENABLE_USER_SELECTED_FILES = "read-write";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_SENTRY_DSN = "https://26a1eb0acb40578b6e80f306ac374eda@o4511264196788224.ingest.de.sentry.io/4511291411988560";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -664,7 +649,6 @@
 				ENABLE_USER_SELECTED_FILES = "read-write";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_SENTRY_DSN = "https://26a1eb0acb40578b6e80f306ac374eda@o4511264196788224.ingest.de.sentry.io/4511291411988560";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -780,7 +764,6 @@
 				DEVELOPMENT_TEAM = 3T84D5XQXL;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_SENTRY_DSN = "https://26a1eb0acb40578b6e80f306ac374eda@o4511264196788224.ingest.de.sentry.io/4511291411988560";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait";
 				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
@@ -855,30 +838,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		FDAB9FB4DEBCF1502ADE66DB /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
-			requirement = {
-				kind = exactVersion;
-				version = 8.58.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		302D254C6CD39577326DE9E5 /* Sentry */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = FDAB9FB4DEBCF1502ADE66DB /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
-			productName = Sentry;
-		};
-		FA647A41F9F05CDD4576EFFD /* Sentry */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = FDAB9FB4DEBCF1502ADE66DB /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
-			productName = Sentry;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 508F327E2F35259D005B7A80 /* Project object */;
 }

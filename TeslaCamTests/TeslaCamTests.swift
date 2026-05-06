@@ -131,6 +131,18 @@ struct TeslaCamTests {
     #expect(controller.isStatusPresented)
   }
 
+  @Test func preflightWriteCheckDoesNotMutateExistingOutputFile() async throws {
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+    let output = root.url.appendingPathComponent("existing.mp4")
+    try Data("original".utf8).write(to: output)
+
+    let access = FileManagerExportPreflightFileAccess()
+    #expect(access.canWrite(to: output))
+    let data = try Data(contentsOf: output)
+    #expect(String(data: data, encoding: .utf8) == "original")
+  }
+
   @Test func healthSummaryMixedCoverageFlagReflectsCounts() async throws {
     let summary = ExportHealthSummary(
       totalMinutes: 12,
@@ -281,6 +293,39 @@ struct TeslaCamTests {
     #expect(index.sets.count == 2)
     #expect(index.sets.contains { $0.file(for: .front)?.lastPathComponent == frontOlder.lastPathComponent })
     #expect(index.sets.contains { $0.file(for: .front)?.lastPathComponent == frontNewer.lastPathComponent })
+  }
+
+  @Test func indexSkipsSymlinkedDirectoriesAndFiles() async throws {
+    let root = try TemporaryDirectory.make()
+    let external = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+    defer { try? external.remove() }
+
+    let front = root.url.appendingPathComponent("2026-01-01_00-00-00-front.mp4")
+    let externalRear = external.url.appendingPathComponent("2026-01-01_00-00-00-rear.mp4")
+    try "front".write(to: front, atomically: true, encoding: .utf8)
+    try "rear".write(to: externalRear, atomically: true, encoding: .utf8)
+
+    let linkDir = root.url.appendingPathComponent("linked_dir", isDirectory: true)
+    try FileManager.default.createSymbolicLink(at: linkDir, withDestinationURL: external.url)
+    let linkRear = root.url.appendingPathComponent("2026-01-01_00-00-00-rear.mp4")
+    try FileManager.default.createSymbolicLink(at: linkRear, withDestinationURL: externalRear)
+
+    let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: .mergeByTime) { _ in }
+    #expect(index.sets.count == 1)
+    #expect(index.sets[0].files[.front] != nil)
+    #expect(index.sets[0].files[.back] == nil)
+  }
+
+  @Test func telemetryParserRejectsMalformedData() async throws {
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+    let sample = root.url.appendingPathComponent("bad.mp4")
+    try Data([0x00, 0x01, 0x02, 0x03]).write(to: sample)
+
+    #expect(throws: Error.self) {
+      try TelemetryParser.parseTimeline(url: sample)
+    }
   }
 
   @Test func sharedDomainFixturesMatchNativeScanManifestsForAllDuplicatePolicies() async throws {

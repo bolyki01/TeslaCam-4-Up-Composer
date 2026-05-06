@@ -54,6 +54,9 @@ class FakeRunner:
 
     def run(self, args, cwd=None):
         self.commands.append((list(args), cwd))
+        command = list(args)
+        if "-f" in command and "concat" in command:
+            Path(command[-1]).write_bytes(b"fake")
 
 
 class FakeReporter:

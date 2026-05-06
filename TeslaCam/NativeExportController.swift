@@ -100,27 +100,37 @@ struct FileManagerExportPreflightFileAccess: ExportPreflightFileAccess {
   var fileManager: FileManager = .default
 
   func canWrite(to outputURL: URL) -> Bool {
-    let scopeURL: URL?
-    if outputURL.startAccessingSecurityScopedResource() {
-      scopeURL = outputURL
-    } else {
-      let targetDirectory = outputURL.deletingLastPathComponent()
-      if targetDirectory.startAccessingSecurityScopedResource() {
-        scopeURL = targetDirectory
-      } else {
-        scopeURL = nil
-      }
-    }
+    let targetDirectory = outputURL.deletingLastPathComponent()
+    let scopeURL = beginSecurityScope(outputURL: outputURL, targetDirectory: targetDirectory)
+    var probeURL: URL?
 
     defer {
+      if let probeURL {
+        try? fileManager.removeItem(at: probeURL)
+      }
       scopeURL?.stopAccessingSecurityScopedResource()
     }
 
-    let created = fileManager.createFile(atPath: outputURL.path, contents: Data())
-    if created {
-      try? fileManager.removeItem(at: outputURL)
+    do {
+      let values = try targetDirectory.resourceValues(forKeys: [.isDirectoryKey])
+      guard values.isDirectory == true else { return false }
+      let tempProbe = targetDirectory.appendingPathComponent(
+        ".teslacam-write-test-\(UUID().uuidString).tmp",
+        isDirectory: false
+      )
+      probeURL = tempProbe
+      let created = fileManager.createFile(
+        atPath: tempProbe.path,
+        contents: Data(),
+        attributes: [.posixPermissions: NSNumber(value: Int16(0o600))]
+      )
+      guard created else { return false }
+      try fileManager.removeItem(at: tempProbe)
+      probeURL = nil
+      return true
+    } catch {
+      return false
     }
-    return created
   }
 
   func availableCapacity(forWritingTo outputURL: URL) -> Int64? {
@@ -138,6 +148,16 @@ struct FileManagerExportPreflightFileAccess: ExportPreflightFileAccess {
     } catch {
       return nil
     }
+  }
+
+  private func beginSecurityScope(outputURL: URL, targetDirectory: URL) -> URL? {
+    if outputURL.startAccessingSecurityScopedResource() {
+      return outputURL
+    }
+    if targetDirectory.startAccessingSecurityScopedResource() {
+      return targetDirectory
+    }
+    return nil
   }
 }
 
@@ -444,111 +464,122 @@ final class NativeExportController: ObservableObject {
   }
 
   private func performExport(request: ExportRequest) throws {
-    let plan = try ExportPlan(request: request)
-    let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory())
-      .appendingPathComponent("teslacam_export_\(UUID().uuidString)", isDirectory: true)
-    try fm.createDirectory(at: tempRoot, withIntermediateDirectories: true)
-    let logRoot = tempRoot.appendingPathComponent("logs", isDirectory: true)
-    try fm.createDirectory(at: logRoot, withIntermediateDirectories: true)
+    try measure("native_export_full") {
+      let plan = try ExportPlan(request: request)
+      let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("teslacam_export_\(UUID().uuidString)", isDirectory: true)
+      try fm.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+      let logRoot = tempRoot.appendingPathComponent("logs", isDirectory: true)
+      try fm.createDirectory(at: logRoot, withIntermediateDirectories: true)
 
-    runOnMain {
-      self.updateSession {
-        $0.tempRootURL = tempRoot
-        $0.canRevealWorkingFiles = true
-        $0.phase = .preparing
-        $0.phaseLabel = "Preparing clips"
-        $0.progress = 0.05
-        $0.isIndeterminate = false
-      }
-    }
-
-    let frameProvider = TimelineFrameProvider(
-      sets: plan.sets,
-      trimStartDate: plan.trimStartDate,
-      trimEndDate: plan.trimEndDate
-    )
-    let layout = plan.layout
-    appendLog("Canvas: \(Int(layout.canvasSize.width))x\(Int(layout.canvasSize.height))\n")
-    debug("layout cameras=\(layout.cameraOrder.map(\.rawValue).joined(separator: ",")) canvas=\(Int(layout.canvasSize.width))x\(Int(layout.canvasSize.height))", category: "export")
-
-    let writer = try NativeMovieWriter(outputURL: plan.outputURL, size: plan.canvasSize, preset: plan.preset)
-    try writer.start()
-
-    runOnMain {
-      self.updateSession {
-        $0.phase = .renderingParts
-        $0.phaseLabel = "Rendering timeline"
-        $0.progress = 0.10
-      }
-    }
-
-    let composer = TimelineFrameComposer(layout: layout, enabledCameras: plan.enabledCameras)
-    let fps: Double = 30
-    let frameCount = max(1, Int((frameProvider.totalDuration * fps).rounded(.up)))
-
-    for frameIndex in 0..<frameCount {
-      if cancelRequested {
-        throw ExportError.cancelled
-      }
-
-      let renderSeconds = Double(frameIndex) / fps
-      let context = frameProvider.context(for: renderSeconds)
-
-      if frameIndex == 0 || frameIndex % Int(max(1, fps / 2)) == 0 {
-        let completedParts = min(
-          request.totalParts,
-          max(frameProvider.completedSetCount(at: renderSeconds), (context.clipIndex.map { $0 + 1 } ?? 0))
-        )
-        runOnMain {
-          self.updateSession {
-            $0.completedParts = completedParts
-            $0.completedDuration = min(renderSeconds, request.totalDuration)
-            $0.phase = .renderingParts
-            $0.phaseLabel = "Rendering timeline"
-            $0.progress = self.renderProgress(completed: renderSeconds, total: request.totalDuration)
-          }
+      runOnMain {
+        self.updateSession {
+          $0.tempRootURL = tempRoot
+          $0.canRevealWorkingFiles = true
+          $0.phase = .preparing
+          $0.phaseLabel = "Preparing clips"
+          $0.progress = 0.05
+          $0.isIndeterminate = false
         }
       }
 
-      let buffer = try composer.makeFrameBuffer(at: context.localSeconds, set: context.set)
-      try writer.append(buffer: buffer, at: CMTime(seconds: renderSeconds, preferredTimescale: 600))
-    }
+      let frameProvider = TimelineFrameProvider(
+        sets: plan.sets,
+        trimStartDate: plan.trimStartDate,
+        trimEndDate: plan.trimEndDate
+      )
+      let layout = plan.layout
+      appendLog("Canvas: \(Int(layout.canvasSize.width))x\(Int(layout.canvasSize.height))\n")
+      debug("layout cameras=\(layout.cameraOrder.map(\.rawValue).joined(separator: ",")) canvas=\(Int(layout.canvasSize.width))x\(Int(layout.canvasSize.height))", category: "export")
 
-    runOnMain {
-      self.updateSession {
-        $0.phase = .finishing
-        $0.phaseLabel = "Finalizing movie"
-        $0.completedParts = request.totalParts
-        $0.completedDuration = request.totalDuration
-        $0.progress = 0.98
+      let writer = try NativeMovieWriter(outputURL: plan.outputURL, size: plan.canvasSize, preset: plan.preset)
+      try writer.start()
+
+      runOnMain {
+        self.updateSession {
+          $0.phase = .renderingParts
+          $0.phaseLabel = "Rendering timeline"
+          $0.progress = 0.10
+        }
+      }
+
+      let composer = TimelineFrameComposer(layout: layout, enabledCameras: plan.enabledCameras)
+      let fps: Double = 30
+      let frameCount = max(1, Int((frameProvider.totalDuration * fps).rounded(.up)))
+
+      for frameIndex in 0..<frameCount {
+        if cancelRequested {
+          throw ExportError.cancelled
+        }
+
+        let renderSeconds = Double(frameIndex) / fps
+        let context = frameProvider.context(for: renderSeconds)
+
+        if frameIndex == 0 || frameIndex % Int(max(1, fps / 2)) == 0 {
+          let completedParts = min(
+            request.totalParts,
+            max(frameProvider.completedSetCount(at: renderSeconds), (context.clipIndex.map { $0 + 1 } ?? 0))
+          )
+          runOnMain {
+            self.updateSession {
+              $0.completedParts = completedParts
+              $0.completedDuration = min(renderSeconds, request.totalDuration)
+              $0.phase = .renderingParts
+              $0.phaseLabel = "Rendering timeline"
+              $0.progress = self.renderProgress(completed: renderSeconds, total: request.totalDuration)
+            }
+          }
+        }
+
+        let buffer = try composer.makeFrameBuffer(at: context.localSeconds, set: context.set)
+        try writer.append(buffer: buffer, at: CMTime(seconds: renderSeconds, preferredTimescale: 600))
+      }
+
+      runOnMain {
+        self.updateSession {
+          $0.phase = .finishing
+          $0.phaseLabel = "Finalizing movie"
+          $0.completedParts = request.totalParts
+          $0.completedDuration = request.totalDuration
+          $0.progress = 0.98
+        }
+      }
+
+      try writer.finishWriting()
+      try? fm.removeItem(at: tempRoot)
+
+      runOnMain {
+        self.updateSession {
+          $0.phase = .completed
+          $0.phaseLabel = "Export complete"
+          $0.progress = 1.0
+          $0.finishedAt = Date()
+          $0.completedParts = request.totalParts
+          $0.completedDuration = request.totalDuration
+          $0.isTerminal = true
+          $0.canRevealOutput = true
+          $0.canRevealWorkingFiles = false
+          $0.tempRootURL = nil
+          $0.canRetry = true
+          $0.isIndeterminate = false
+        }
+        self.appendLog("\nDone: \(request.outputURL.path)\n")
+        self.appendStructuredLogEvent("export_completed", fields: ["output": request.outputURL.path])
+        self.debug("completed \(request.outputURL.lastPathComponent)", category: "export")
+        self.endOutputScope()
+        self.publishCurrentSession()
+        self.isStatusPresented = true
       }
     }
+  }
 
-    try writer.finishWriting()
-    try? fm.removeItem(at: tempRoot)
-
-    runOnMain {
-      self.updateSession {
-        $0.phase = .completed
-        $0.phaseLabel = "Export complete"
-        $0.progress = 1.0
-        $0.finishedAt = Date()
-        $0.completedParts = request.totalParts
-        $0.completedDuration = request.totalDuration
-        $0.isTerminal = true
-        $0.canRevealOutput = true
-        $0.canRevealWorkingFiles = false
-        $0.tempRootURL = nil
-        $0.canRetry = true
-        $0.isIndeterminate = false
-      }
-      self.appendLog("\nDone: \(request.outputURL.path)\n")
-      self.appendStructuredLogEvent("export_completed", fields: ["output": request.outputURL.path])
-      self.debug("completed \(request.outputURL.lastPathComponent)", category: "export")
-      self.endOutputScope()
-      self.publishCurrentSession()
-      self.isStatusPresented = true
+  private func measure<T>(_ name: String, _ work: () throws -> T) rethrows -> T {
+    let start = ContinuousClock.now
+    defer {
+      let elapsed = start.duration(to: .now)
+      NSLog("[perf] %@ took %@", name, String(describing: elapsed))
     }
+    return try work()
   }
 
   private func finishFailure(error: Error) {
