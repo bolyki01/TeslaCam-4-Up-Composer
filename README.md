@@ -2,6 +2,8 @@
 
 Teslacam ships two developer surfaces from one repo:
 
+Built by [Magrathean UK](https://magrathean.uk).
+
 - a native macOS app for browsing and exporting TeslaCam footage on Apple Silicon Macs
 - a separate cross-platform Python CLI for scripted or interactive exports on macOS, Linux, and Windows
 
@@ -71,4 +73,3 @@ teslacam-cli /path/to/TeslaCam --dry-run-json -
 - `./teslacam-cli` is the primary CLI command; wrappers are compatibility adapters.
 - `_legacy/` is non-canonical and should not drive new work.
 
-Built by [Magrathean UK](https://magrathean.uk).
