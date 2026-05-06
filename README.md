@@ -70,3 +70,5 @@ teslacam-cli /path/to/TeslaCam --dry-run-json -
 - Native export is the shipping app path.
 - `./teslacam-cli` is the primary CLI command; wrappers are compatibility adapters.
 - `_legacy/` is non-canonical and should not drive new work.
+
+Built by [Magrathean UK](https://magrathean.uk).
