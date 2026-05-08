@@ -14,16 +14,22 @@ final class SourceStore {
   private let bookmarkKey: String
   private let userDefaults: UserDefaults
   private let fileManager: FileManager
+  private let bookmarkCreationOptions: URL.BookmarkCreationOptions
+  private let bookmarkResolutionOptions: URL.BookmarkResolutionOptions
   private var activeSecurityScopedURLs: [URL] = []
 
   init(
     bookmarkKey: String = SourceStore.defaultBookmarkKey,
     userDefaults: UserDefaults = .standard,
-    fileManager: FileManager = .default
+    fileManager: FileManager = .default,
+    bookmarkCreationOptions: URL.BookmarkCreationOptions = PlatformFileAccess.bookmarkCreationOptions,
+    bookmarkResolutionOptions: URL.BookmarkResolutionOptions = PlatformFileAccess.bookmarkResolutionOptions
   ) {
     self.bookmarkKey = bookmarkKey
     self.userDefaults = userDefaults
     self.fileManager = fileManager
+    self.bookmarkCreationOptions = bookmarkCreationOptions
+    self.bookmarkResolutionOptions = bookmarkResolutionOptions
   }
 
   /// Standardizes paths, drops missing entries, and de-duplicates while preserving order.
@@ -46,7 +52,7 @@ final class SourceStore {
   func rememberBookmarks(for urls: [URL]) {
     let bookmarks = urls.compactMap { url -> Data? in
       try? url.bookmarkData(
-        options: PlatformFileAccess.bookmarkCreationOptions,
+        options: bookmarkCreationOptions,
         includingResourceValuesForKeys: nil,
         relativeTo: nil
       )
@@ -73,7 +79,7 @@ final class SourceStore {
       guard
         let url = try? URL(
           resolvingBookmarkData: bookmark,
-          options: PlatformFileAccess.bookmarkResolutionOptions,
+          options: bookmarkResolutionOptions,
           relativeTo: nil,
           bookmarkDataIsStale: &stale
         ),

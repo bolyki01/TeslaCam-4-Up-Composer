@@ -493,11 +493,22 @@ struct TeslaCamTests {
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
 
+    // Plain bookmarks (not security-scoped) so the test runs without app signing.
     let key = "TeslaCam.lastSourceBookmarks.under-test"
-    let writeStore = SourceStore(bookmarkKey: key, userDefaults: defaults)
+    let writeStore = SourceStore(
+      bookmarkKey: key,
+      userDefaults: defaults,
+      bookmarkCreationOptions: [],
+      bookmarkResolutionOptions: []
+    )
     writeStore.rememberBookmarks(for: [folder])
 
-    let readStore = SourceStore(bookmarkKey: key, userDefaults: defaults)
+    let readStore = SourceStore(
+      bookmarkKey: key,
+      userDefaults: defaults,
+      bookmarkCreationOptions: [],
+      bookmarkResolutionOptions: []
+    )
     let restored = readStore.restoreBookmarkedURLs()
 
     #expect(restored.map(\.path) == [folder.standardizedFileURL.path])
