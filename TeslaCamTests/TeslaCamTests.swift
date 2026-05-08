@@ -424,6 +424,50 @@ struct TeslaCamTests {
     }
   }
 
+  @Test func telemetryProcessorRoutePointsCollapsesSameSecondAndStationaryFrames() async throws {
+    var moving = SeiMetadata()
+    moving.latitudeDeg = 51.5
+    moving.longitudeDeg = -0.1
+    moving.vehicleSpeedMps = 12
+    var samePoint = SeiMetadata()
+    samePoint.latitudeDeg = 51.5
+    samePoint.longitudeDeg = -0.1
+    var nextPoint = SeiMetadata()
+    nextPoint.latitudeDeg = 51.501
+    nextPoint.longitudeDeg = -0.099
+    nextPoint.vehicleSpeedMps = 14
+
+    let timeline = TelemetryTimeline(frames: [
+      TelemetryFrame(timestampMs: 0, sei: moving),
+      TelemetryFrame(timestampMs: 250, sei: moving),     // same whole second → dropped
+      TelemetryFrame(timestampMs: 1100, sei: samePoint), // same coordinate → dropped
+      TelemetryFrame(timestampMs: 2100, sei: nextPoint)
+    ])
+
+    let route = TelemetryProcessor.routePoints(from: timeline)
+    #expect(route.count == 2)
+    #expect(route[0].coordinate.latitude == 51.5)
+    #expect(route[1].coordinate.latitude == 51.501)
+  }
+
+  @Test func telemetryProcessorDurationStringFormatsHoursAndMinutes() async throws {
+    #expect(TelemetryProcessor.durationString(seconds: 0) == "0m total")
+    #expect(TelemetryProcessor.durationString(seconds: 540) == "9m total")
+    #expect(TelemetryProcessor.durationString(seconds: 3 * 3600 + 7 * 60) == "3h 7m total")
+  }
+
+  @Test func telemetryProcessorExpectedCoverageHonorsLayoutProfileWhenAmbiguous() async throws {
+    let frontOnly = ClipSet(timestamp: "_", date: Date(), duration: 1, files: [.front: URL(fileURLWithPath: "/x")])
+    #expect(TelemetryProcessor.expectedCoverageCameras(for: frontOnly, layoutProfile: .hw3FourCam) == Set(Camera.hw3ClassicOrder))
+    #expect(TelemetryProcessor.expectedCoverageCameras(for: frontOnly, layoutProfile: .hw4SixCam) == Set(Camera.hw4SixCamOrder))
+
+    let hw3Set = ClipSet(timestamp: "_", date: Date(), duration: 1, files: [
+      .front: URL(fileURLWithPath: "/a"),
+      .left_repeater: URL(fileURLWithPath: "/b")
+    ])
+    #expect(TelemetryProcessor.expectedCoverageCameras(for: hw3Set, layoutProfile: .hw4SixCam) == Set(Camera.hw3ClassicOrder))
+  }
+
   @Test func sourceStoreNormalizeDeduplicatesAndDropsMissingFiles() async throws {
     let root = try TemporaryDirectory.make()
     defer { try? root.remove() }

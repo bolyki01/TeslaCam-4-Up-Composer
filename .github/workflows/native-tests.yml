@@ -32,6 +32,7 @@ jobs:
             -parallel-testing-enabled NO \
             -maximum-parallel-testing-workers 1 \
             MACOSX_DEPLOYMENT_TARGET=14.0 \
+            SWIFT_STRICT_CONCURRENCY=minimal \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -50,6 +51,7 @@ jobs:
             -maximum-parallel-testing-workers 1 \
             -only-testing:TeslaCamTests \
             MACOSX_DEPLOYMENT_TARGET=14.0 \
+            SWIFT_STRICT_CONCURRENCY=minimal \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
