@@ -34,7 +34,7 @@ Steps:
 3. Keep vendor binaries and license assets untouched unless packaging/licensing is the task. **Honored.**
 4. Pick one primary CLI command in docs; list other wrappers as compatibility Adapters. **Done** — `RUNBOOK.md` and `README.md` both name `./teslacam-cli` as the primary command and call out `teslacam.py` / `teslacam.sh` as adapters.
 5. Add a small test lane doc: Python, native unit, native UI, contract fixtures. **Done** — `RUNBOOK.md` lists the Python lanes and `script/test_native.sh` for the native unit + UI lane; `CLAUDE.md` summarizes the lanes for agents.
-6. Add CI follow-up plan after local lanes are stable. **Started** — `.github/workflows/python-tests.yml` runs the full `python -m unittest discover tests` suite on Ubuntu (Python 3.10 + 3.12) with `ffmpeg` installed so the integration test isn't skipped. A native macOS lane on GitHub-hosted runners is the remaining gap.
+6. Add CI follow-up plan after local lanes are stable. **Done** — `.github/workflows/python-tests.yml` covers the Python lanes on Ubuntu (Python 3.10 + 3.12, ffmpeg installed); `.github/workflows/native-tests.yml` runs `TeslaCamTests` on `macos-15` with code signing disabled. UI tests stay out of CI for now (slow + flaky) and run via `script/test_native.sh` locally.
 
 Tests:
 - `git status --short` should not show generated build output after clean.

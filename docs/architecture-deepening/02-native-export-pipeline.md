@@ -28,7 +28,7 @@ Steps:
 2. Move preflight checks into `ExportPreflight`; keep messages stable for UI. **Done** — `ExportPreflight` owns disk-headroom math, write-access check, and warnings.
 3. Move `TimelineFrameLayout` and size probing out of the controller or behind a layout Module. **Partial** — `TimelineFrameLayout` is its own type but still lives inside the controller file.
 4. Replace per-frame `AVAssetImageGenerator` export with composition/reader/writer pipeline from the approved spec. **Deferred** — needs real footage testing; not safe for autopilot. Tracked separately.
-5. Replace `runOnMain` with normal main-queue publishing. **TODO**.
+5. Replace `runOnMain` with normal main-queue publishing. **Tried + reverted.** `runOnMain` uses `CFRunLoopPerformBlock(commonModes)` which IS drained by `RunLoop.current.run(until:)`. `DispatchQueue.main.async` is not — GCD main-queue blocks only drain under `dispatch_main()` or the AppKit/UIKit event loop. Swapping them broke `nativeExportWritesMovieForSampleTimeline` and `nativeExportWritesOverlaySidecars` because their wait loops use `RunLoop.current.run(until:)` and the export got stuck in `.preparing`. Future fix: either (a) migrate the export pipeline off main-queue publishing onto a `@MainActor` annotated controller and rewrite tests against that contract, or (b) keep `runOnMain` and rename it `MainRunLoopPublisher` so its semantics are explicit. Don't replace blindly.
 6. Make log events structured at the source, then render text for UI. **Partial** — `appendStructuredLogEvent(_:fields:)` is in use across the controller; the UI still consumes the rendered string only.
 7. Keep `NativeExportController.export(request:)` as the compatibility shell until callers migrate. **N/A yet — there are no other callers.**
 
