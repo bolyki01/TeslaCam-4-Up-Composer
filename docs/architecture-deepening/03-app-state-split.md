@@ -25,13 +25,13 @@ Target shape:
 - `AppState` becomes orchestration glue during migration.
 
 Steps:
-1. Extract pure `TimelineStore` first; keep public methods on `AppState` forwarding to it.
-2. Move output naming and `makeExportRequest` into `ExportStore`.
-3. Move source bookmark and security scope into `SourceStore`.
-4. Move duplicate resolver and health summary into `IndexingStore`.
-5. Move telemetry load and overlay formatting into `PlaybackStore`.
-6. Change views to observe only the Store they need.
-7. Keep old `AppState` properties as compatibility shims until views are migrated.
+1. Extract pure `TimelineStore` first; keep public methods on `AppState` forwarding to it. **Done** — `TimelineStore` is a value type at the top of `AppState.swift`, and AppState forwards to it for trim, gap, and clip-set queries.
+2. Move output naming and `makeExportRequest` into `ExportStore`. **Done** — `ExportStore` owns `defaultFilename`, `resolvedOutputURL`, and `makeRequest` in `AppState.swift`.
+3. Move source bookmark and security scope into `SourceStore`. **TODO** — source URL state, bookmark serialization (`StorageKey.lastSourceBookmarks`), and the `activeSecurityScopedURLs` lifecycle still live on `AppState`.
+4. Move duplicate resolver and health summary into `IndexingStore`. **TODO** — `duplicateSummary`, `healthSummary`, and the resolver presentation flags still live on `AppState`.
+5. Move telemetry load and overlay formatting into `PlaybackStore`. **Partial** — pure helpers (`routePoints`, `formatTelemetryCompact`, `loadEventSummary`, `buildEventSummaries`, `buildClipHealthFacts`, `expectedCoverageCameras`, `durationString`) extracted into `TelemetryProcessor.swift`. Stateful pieces — `telemetryTimeline`, `telemetryURL`, `telemetryRouteByURL`, `loadTelemetry(for:)`, and `updateOverlayAndTelemetry(...)` — still live on `AppState`.
+6. Change views to observe only the Store they need. **TODO** — `ContentView.swift` still observes `AppState` directly; deferring until 3/4/5 land so views move once.
+7. Keep old `AppState` properties as compatibility shims until views are migrated. **N/A until step 6.**
 
 Tests:
 - Existing timeline unit tests move to `TimelineStore`.

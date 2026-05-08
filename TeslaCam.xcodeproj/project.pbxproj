@@ -12,6 +12,7 @@
 		16112D2E1E4A55F25A463C45 /* TelemetryParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685472F3526330073314B /* TelemetryParser.swift */; };
 		195FACF22EF24C7709F0D524 /* Indexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685402F3526330073314B /* Indexer.swift */; };
 		2EB20178CD3CD202893526D6 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685452F3526330073314B /* Models.swift */; };
+		31E19FA2404A5A723BC406D1 /* TelemetryProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B832DA43FCA85C989EFF678 /* TelemetryProcessor.swift */; };
 		43856EFDACD28E283764B079 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 50C6855D2F3526330073314B /* Assets.xcassets */; };
 		4AC0833CC400B8B020F17BB1 /* PlatformFileAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B9A79DBE9E309C323846661 /* PlatformFileAccess.swift */; };
 		4FC3EC1D1A403F7C27D9DAC2 /* Utils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685482F3526330073314B /* Utils.swift */; };
@@ -34,6 +35,7 @@
 		7651D245D03D9627B0901116 /* NativeExportController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C6855C2F3526330073314B /* NativeExportController.swift */; };
 		8878B92A5590887F535BD892 /* IPadMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53FEA6CD4150968355138666 /* IPadMain.swift */; };
 		9D396087622135F7A72945A3 /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685462F3526330073314B /* PlaybackController.swift */; };
+		B4FFA09213F66C171AF20512 /* TelemetryProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B832DA43FCA85C989EFF678 /* TelemetryProcessor.swift */; };
 		B582B85BBFA5AFDD00630B73 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C6853E2F3526330073314B /* ContentView.swift */; };
 		C310E15FCC440A1D947222CD /* MetalPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685422F3526330073314B /* MetalPlayerView.swift */; };
 		C31C5F6B1CDA0C816258DD9A /* MetalPlayerView_iPad.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7761E775BC37CD7C35A556C /* MetalPlayerView_iPad.swift */; };
@@ -80,6 +82,7 @@
 		50C6855C2F3526330073314B /* NativeExportController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeExportController.swift; sourceTree = "<group>"; };
 		50C6855D2F3526330073314B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		53FEA6CD4150968355138666 /* IPadMain.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IPadMain.swift; sourceTree = "<group>"; };
+		5B832DA43FCA85C989EFF678 /* TelemetryProcessor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TelemetryProcessor.swift; sourceTree = "<group>"; };
 		9B9A79DBE9E309C323846661 /* PlatformFileAccess.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlatformFileAccess.swift; sourceTree = "<group>"; };
 		E7761E775BC37CD7C35A556C /* MetalPlayerView_iPad.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetalPlayerView_iPad.swift; sourceTree = "<group>"; };
 		F6752ADD69F7C76B881977D4 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
@@ -195,6 +198,7 @@
 				E7761E775BC37CD7C35A556C /* MetalPlayerView_iPad.swift */,
 				53FEA6CD4150968355138666 /* IPadMain.swift */,
 				3615C866A634FF23B9D53ACE /* TeslaCam_iPad.entitlements */,
+				5B832DA43FCA85C989EFF678 /* TelemetryProcessor.swift */,
 			);
 			path = TeslaCam;
 			sourceTree = "<group>";
@@ -385,6 +389,7 @@
 				16112D2E1E4A55F25A463C45 /* TelemetryParser.swift in Sources */,
 				4FC3EC1D1A403F7C27D9DAC2 /* Utils.swift in Sources */,
 				8878B92A5590887F535BD892 /* IPadMain.swift in Sources */,
+				31E19FA2404A5A723BC406D1 /* TelemetryProcessor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -405,6 +410,7 @@
 				50C685542F3526330073314B /* Utils.swift in Sources */,
 				50C6855A2F3526330073314B /* NativeExportController.swift in Sources */,
 				CDDBB87778F9005CECFA36F5 /* PlatformFileAccess.swift in Sources */,
+				B4FFA09213F66C171AF20512 /* TelemetryProcessor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
