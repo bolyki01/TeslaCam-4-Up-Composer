@@ -27,6 +27,7 @@ enum TeslaCamFormatters {
   static let timelineTwoDay = makeFormatter("d/MM/yy-HH:mm")
   static let timelineMultiDay = makeFormatter("d/MM/yy")
   static let selectedRange = makeFormatter("d/MM/yy-HH:mm:ss")
+  static let eventTimestamp = makeFormatter("yyyy-MM-dd'T'HH:mm:ss")
 }
 
 func formatDateTime(_ date: Date) -> String {
@@ -90,26 +91,55 @@ enum TeslaCamTheme {
   }
 
   enum Metrics {
-    static let controlHeight: CGFloat = 56
-    static let cardCorner: CGFloat = 18
-    static let controlCorner: CGFloat = 14
+    /// Primary action button height. Honors Apple HIG 44pt minimum tap target.
+    static let controlHeight: CGFloat = 44
+    /// Compact / icon button height. 44 on iOS, slightly tighter is acceptable on macOS but we keep 44 for parity.
+    static let compactControlHeight: CGFloat = 44
+    /// Standard chrome strip height (toolbars, status bars).
+    static let toolbarHeight: CGFloat = 52
+
+    static let cardCorner: CGFloat = 16
+    static let controlCorner: CGFloat = 12
     static let compactCorner: CGFloat = 10
-    static let cardPadding: CGFloat = 18
-    static let contentPadding: CGFloat = 20
+
+    /// Padding inside a primary content card (e.g. TimelineExportCard, PreviewPanelCard).
+    static let cardPadding: CGFloat = 20
+    /// Padding inside a secondary / compact card (e.g. StatCard, RangeControlCard, TelemetryMetric).
+    static let cardPaddingCompact: CGFloat = 14
+    /// Padding inside a small inline pill (chips, info banners).
+    static let pillPaddingHorizontal: CGFloat = 12
+    static let pillPaddingVertical: CGFloat = 8
+
+    /// Outer screen-edge padding for top-level content.
+    static let contentPadding: CGFloat = 24
   }
 
+  /// 4pt grid. Use semantic helpers (`cardGap`, `rowGap`, `inlineGap`) by preference.
   enum Spacing {
-    static let xs: CGFloat = 6
-    static let s: CGFloat = 10
-    static let m: CGFloat = 14
-    static let l: CGFloat = 18
-    static let xl: CGFloat = 24
-    static let screen: CGFloat = 20
-    static let section: CGFloat = 28
+    static let xs: CGFloat = 4
+    static let s: CGFloat = 8
+    static let m: CGFloat = 12
+    static let l: CGFloat = 16
+    static let xl: CGFloat = 20
+    static let xxl: CGFloat = 24
+
+    /// Gap between sibling cards in a vertical stack (or between major sections of a screen).
+    static let cardGap: CGFloat = 16
+    /// Gap between rows of content inside a card.
+    static let rowGap: CGFloat = 12
+    /// Gap between inline elements in an HStack (icon + text, button group, etc.).
+    static let inlineGap: CGFloat = 8
+    /// Tight gap for closely-coupled inline elements (icon+label inside a chip).
+    static let tightGap: CGFloat = 6
+
+    /// Outer screen-edge padding (matches `Metrics.contentPadding`).
+    static let screen: CGFloat = 24
+    /// Vertical separation between major page sections.
+    static let section: CGFloat = 32
   }
 
   enum Layout {
-    static let toolbarHeight: CGFloat = 48
+    static let toolbarHeight: CGFloat = Metrics.toolbarHeight
     static let narrowPanelWidth: CGFloat = 470
     static let overlayCardWidth: CGFloat = 580
     static let overlayContentWidth: CGFloat = 520
@@ -118,12 +148,17 @@ enum TeslaCamTheme {
 
   enum Typography {
     static let heroTitle = Font.system(size: 30, weight: .bold)
-    static let panelTitle = Font.system(size: 24, weight: .bold)
+    static let panelTitle = Font.system(size: 22, weight: .bold)
     static let panelSubtitle = Font.system(size: 15)
     static let sectionTitle = Font.system(size: 13, weight: .semibold)
     static let body = Font.system(size: 14)
-    static let monoDetail = Font.system(size: 11, weight: .medium, design: .monospaced)
+    static let bodySmall = Font.system(size: 13)
+    /// Eyebrow / overline label (uppercased small caps style).
+    static let label = Font.system(size: 11, weight: .semibold)
+    static let monoDetail = Font.system(size: 12, weight: .medium, design: .monospaced)
+    static let monoSmall = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let numericBody = Font.system(size: 15, weight: .semibold, design: .monospaced)
+    static let numericLarge = Font.system(size: 18, weight: .semibold, design: .monospaced)
   }
 }
 
