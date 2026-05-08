@@ -2,8 +2,12 @@
 
 ## This Project
 
-No top-level license file is present. The application is treated as proprietary
-unless a licence is added explicitly.
+Teslacam is **proprietary software** owned by Magrathean UK Ltd.
+
+> See [`LICENSE`](./LICENSE) for the full proprietary licence text.
+> Copyright © 2026 Magrathean UK Ltd. All rights reserved.
+
+This file (`LICENSE.md`) is the **third-party notice and component inventory** for Teslacam, supplemented by `TeslaCam/Resources/LICENSES.md`. The Teslacam source itself is governed exclusively by [`LICENSE`](./LICENSE).
 
 ---
 

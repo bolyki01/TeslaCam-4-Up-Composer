@@ -73,3 +73,24 @@ teslacam-cli /path/to/TeslaCam --dry-run-json -
 - `./teslacam-cli` is the primary CLI command; wrappers are compatibility adapters.
 - `_legacy/` is non-canonical and should not drive new work.
 
+## Legal
+
+Copyright © 2026 Magrathean UK Ltd. All rights reserved.
+
+Teslacam is proprietary software. See [`LICENSE`](./LICENSE) for the full licence text. Third-party components and their licences are listed in [`LICENSE.md`](./LICENSE.md) and `TeslaCam/Resources/LICENSES.md`. Public availability of this repository does not grant any right to copy, modify, redistribute, or use the software outside the licence terms.
+
+### User-supplied recordings and privacy
+
+Teslacam processes video and audio recordings from your Tesla's TeslaCam and Sentry Mode storage. **You are solely responsible for the lawful collection, retention, export, and onward sharing of those recordings**, which may contain personal data of identifiable individuals (drivers, passengers, pedestrians, neighbours, members of the public). Compliance with the **UK GDPR**, the **Data Protection Act 2018**, applicable surveillance and broadcast laws, and any tenancy or premises rules around camera placement is your responsibility. Magrathean UK Ltd. accepts no responsibility for how recordings processed by Teslacam are used.
+
+### Trademarks and disclaimers
+
+Tesla, the Tesla logo, TeslaCam, and Sentry Mode are trademarks or registered trademarks of Tesla, Inc. FFmpeg is a trademark of the FFmpeg developers. Apple, the Apple logo, iOS, macOS, and Swift are trademarks of Apple Inc.
+
+Teslacam is **not affiliated with, endorsed by, sponsored by, or in any way officially connected to** Tesla, Inc., the FFmpeg project, or Apple Inc. References to these names exist solely for descriptive interoperability. All trademarks remain the property of their respective owners.
+
+For licensing or commercial enquiries, email <contact@magrathean.uk>.
+
+---
+
+Magrathean UK Ltd. is a company registered in England and Wales (Company No. 16955343) with registered office at 16 Caledonian Court West Street, Watford, England, WD17 1RY.
