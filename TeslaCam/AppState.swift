@@ -1325,55 +1325,7 @@ final class AppState: ObservableObject {
   }
 
   private func buildHealthSummary(from sets: [ClipSet]) -> ExportHealthSummary {
-    var gapCount = 0
-    var partialSetCount = 0
-    var four = 0
-    var six = 0
-    var missingCameraCounts: [Camera: Int] = [:]
-
-    for (index, set) in sets.enumerated() {
-      let expected = expectedCoverageCameras(for: set)
-      let present = Set(set.files.keys)
-
-      if expected == Set(Camera.hw3ClassicOrder) {
-        four += 1
-      } else if expected == Set(Camera.hw4SixCamOrder) {
-        six += 1
-      }
-
-      if !expected.isEmpty {
-        let missing = expected.subtracting(present)
-        if !missing.isEmpty {
-          partialSetCount += 1
-          for camera in missing {
-            missingCameraCounts[camera, default: 0] += 1
-          }
-        }
-      }
-
-      if let next = sets[safe: index + 1] {
-        let delta = next.date.timeIntervalSince(set.endDate)
-        if delta > 1 {
-          gapCount += 1
-        }
-      }
-    }
-
-    let timelineMinutes: Int
-    if let minStart = sets.map(\.date).min(), let maxEnd = sets.map(\.endDate).max() {
-      timelineMinutes = max(1, Int((maxEnd.timeIntervalSince(minStart) / 60).rounded(.up)))
-    } else {
-      timelineMinutes = max(1, Int((sets.reduce(0) { $0 + $1.duration } / 60).rounded(.up)))
-    }
-
-    return ExportHealthSummary(
-      totalMinutes: timelineMinutes,
-      gapCount: gapCount,
-      partialSetCount: partialSetCount,
-      fourCameraSetCount: four,
-      sixCameraSetCount: six,
-      missingCameraCounts: missingCameraCounts
-    )
+    TelemetryProcessor.buildHealthSummary(from: sets, layoutProfile: layoutProfile)
   }
 
   private func buildClipHealthFacts(from sets: [ClipSet]) -> [ClipHealthFact] {
