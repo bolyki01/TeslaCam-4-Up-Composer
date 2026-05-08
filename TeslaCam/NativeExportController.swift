@@ -3,6 +3,10 @@ import Combine
 import AVFoundation
 import CoreVideo
 import CoreGraphics
+import CoreText
+import CoreImage
+import ImageIO
+import UniformTypeIdentifiers
 
 #if canImport(AppKit)
 import AppKit
@@ -38,12 +42,16 @@ struct ExportPlan {
   let useSixCam: Bool
   let preset: ExportPreset
   let enabledCameras: Set<Camera>
+  let layoutRequest: CameraLayoutRequest
+  let overlayOptions: ExportOverlayOptions
   let trimStartSeconds: Double
   let trimEndSeconds: Double
   let trimStartDate: Date
   let trimEndDate: Date
   let selectedRangeText: String
   let partialClipCount: Int
+  let cameraTrack: CameraTrack
+  let isPreviewSample: Bool
   fileprivate let layout: TimelineFrameLayout
 
   var totalParts: Int { sets.count }
@@ -67,7 +75,8 @@ struct ExportPlan {
     let layout = try TimelineFrameLayout.build(
       sets: request.sets,
       enabledCameras: request.enabledCameras,
-      useSixCam: request.useSixCam
+      useSixCam: request.useSixCam,
+      layoutRequest: request.layoutRequest
     )
     guard layout.canvasSize.width.isFinite,
           layout.canvasSize.height.isFinite,
@@ -81,12 +90,16 @@ struct ExportPlan {
     self.useSixCam = request.useSixCam
     self.preset = request.preset
     self.enabledCameras = request.enabledCameras
+    self.layoutRequest = request.layoutRequest
+    self.overlayOptions = request.overlayOptions
     self.trimStartSeconds = request.trimStartSeconds
     self.trimEndSeconds = request.trimEndSeconds
     self.trimStartDate = request.trimStartDate
     self.trimEndDate = request.trimEndDate
     self.selectedRangeText = request.selectedRangeText
     self.partialClipCount = request.partialClipCount
+    self.cameraTrack = request.cameraTrack
+    self.isPreviewSample = request.isPreviewSample
     self.layout = layout
   }
 }
@@ -229,6 +242,10 @@ struct ExportPreflight {
       bytesPerSecond = 8 * 1024 * 1024
     case .fastHEVC:
       bytesPerSecond = 4 * 1024 * 1024
+    case .socialShareHEVC:
+      bytesPerSecond = 2 * 1024 * 1024
+    case .proxyHEVC:
+      bytesPerSecond = 1 * 1024 * 1024
     }
     let estimatedOutput = Int64((seconds * bytesPerSecond).rounded(.up))
     return max(Self.minimumDiskHeadroomBytes, estimatedOutput + Self.minimumDiskHeadroomBytes)
@@ -249,6 +266,7 @@ final class NativeExportController: ObservableObject {
   @Published var lastError: String = ""
   @Published var currentJob: ExportJobSnapshot?
   @Published var exportHistory: [ExportJobSnapshot] = []
+  @Published var queuedRequests: [ExportRequest] = []
   @Published var isStatusPresented: Bool = false
 
   weak var debugLog: DebugLogSink?
@@ -302,7 +320,10 @@ final class NativeExportController: ObservableObject {
   }
 
   func export(request: ExportRequest) {
-    guard !isExporting else { return }
+    guard !isExporting else {
+      enqueue(request: request)
+      return
+    }
     cleanupStaleTempDirectories()
     beginOutputScope(for: request.outputURL)
     debug("start \(request.outputURL.lastPathComponent) preset=\(request.preset.rawValue)", category: "export")
@@ -311,6 +332,7 @@ final class NativeExportController: ObservableObject {
     guard preflight.canExport else {
       publishBlockedPreflight(request: request, preflight: preflight)
       endOutputScope()
+      startNextQueuedExportIfIdle()
       return
     }
 
@@ -376,6 +398,16 @@ final class NativeExportController: ObservableObject {
         }
       }
     }
+  }
+
+  func enqueue(request: ExportRequest) {
+    queuedRequests.append(request)
+    appendStructuredLogEvent("export_queued", fields: ["output": request.outputURL.path])
+    startNextQueuedExportIfIdle()
+  }
+
+  func clearQueue() {
+    queuedRequests.removeAll()
   }
 
   private func publishBlockedPreflight(request: ExportRequest, preflight: ExportPreflightSummary) {
@@ -490,6 +522,7 @@ final class NativeExportController: ObservableObject {
       )
       let layout = plan.layout
       appendLog("Canvas: \(Int(layout.canvasSize.width))x\(Int(layout.canvasSize.height))\n")
+      appendLog("Graph: \(NativeFilterGraphSummary(plan: plan).description)\n")
       debug("layout cameras=\(layout.cameraOrder.map(\.rawValue).joined(separator: ",")) canvas=\(Int(layout.canvasSize.width))x\(Int(layout.canvasSize.height))", category: "export")
 
       let writer = try NativeMovieWriter(outputURL: plan.outputURL, size: plan.canvasSize, preset: plan.preset)
@@ -503,7 +536,11 @@ final class NativeExportController: ObservableObject {
         }
       }
 
-      let composer = TimelineFrameComposer(layout: layout, enabledCameras: plan.enabledCameras)
+      let composer = TimelineFrameComposer(
+        layout: layout,
+        enabledCameras: plan.enabledCameras,
+        overlayOptions: plan.overlayOptions
+      )
       let fps: Double = 30
       let frameCount = max(1, Int((frameProvider.totalDuration * fps).rounded(.up)))
 
@@ -514,6 +551,7 @@ final class NativeExportController: ObservableObject {
 
         let renderSeconds = Double(frameIndex) / fps
         let context = frameProvider.context(for: renderSeconds)
+        let cameraOverride = plan.cameraTrack.camera(at: request.trimStartSeconds + renderSeconds)
 
         if frameIndex == 0 || frameIndex % Int(max(1, fps / 2)) == 0 {
           let completedParts = min(
@@ -531,7 +569,11 @@ final class NativeExportController: ObservableObject {
           }
         }
 
-        let buffer = try composer.makeFrameBuffer(at: context.localSeconds, set: context.set)
+        let buffer = try composer.makeFrameBuffer(
+          at: context.localSeconds,
+          set: context.set,
+          cameraOverride: cameraOverride
+        )
         try writer.append(buffer: buffer, at: CMTime(seconds: renderSeconds, preferredTimescale: 600))
       }
 
@@ -546,6 +588,9 @@ final class NativeExportController: ObservableObject {
       }
 
       try writer.finishWriting()
+      if plan.overlayOptions.needsSidecars {
+        generateSidecarArtifacts(plan: plan, composer: composer, frameProvider: frameProvider)
+      }
       try? fm.removeItem(at: tempRoot)
 
       runOnMain {
@@ -569,8 +614,102 @@ final class NativeExportController: ObservableObject {
         self.endOutputScope()
         self.publishCurrentSession()
         self.isStatusPresented = true
+        self.startNextQueuedExportIfIdle()
       }
     }
+  }
+
+  private func generateSidecarArtifacts(
+    plan: ExportPlan,
+    composer: TimelineFrameComposer,
+    frameProvider: TimelineFrameProvider
+  ) {
+    let outputBase = plan.outputURL.deletingPathExtension()
+    if plan.overlayOptions.includeScreenshot {
+      let screenshotURL = outputBase.appendingPathExtension("poster.png")
+      do {
+        let context = frameProvider.context(for: 0)
+        let buffer = try composer.makeFrameBuffer(
+          at: context.localSeconds,
+          set: context.set,
+          cameraOverride: plan.cameraTrack.camera(at: plan.trimStartSeconds)
+        )
+        try writePNG(from: buffer, to: screenshotURL)
+        appendStructuredLogEvent("export_screenshot_written", fields: ["path": screenshotURL.path])
+      } catch {
+        appendStructuredLogEvent("export_screenshot_failed", fields: ["message": error.localizedDescription])
+      }
+    }
+
+    if plan.overlayOptions.includeReport {
+      let reportURL = outputBase.appendingPathExtension("report.pdf")
+      do {
+        try writeReport(plan: plan, to: reportURL)
+        appendStructuredLogEvent("export_report_written", fields: ["path": reportURL.path])
+      } catch {
+        appendStructuredLogEvent("export_report_failed", fields: ["message": error.localizedDescription])
+      }
+    }
+  }
+
+  private func writePNG(from buffer: CVPixelBuffer, to url: URL) throws {
+    let image = CIImage(cvPixelBuffer: buffer)
+    let context = CIContext()
+    guard let cgImage = context.createCGImage(image, from: image.extent) else {
+      throw NSError(domain: "TeslaCam", code: 8, userInfo: [NSLocalizedDescriptionKey: "Failed to create export screenshot."])
+    }
+    guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+      throw NSError(domain: "TeslaCam", code: 9, userInfo: [NSLocalizedDescriptionKey: "Failed to open screenshot destination."])
+    }
+    CGImageDestinationAddImage(destination, cgImage, nil)
+    guard CGImageDestinationFinalize(destination) else {
+      throw NSError(domain: "TeslaCam", code: 10, userInfo: [NSLocalizedDescriptionKey: "Failed to write screenshot."])
+    }
+  }
+
+  private func writeReport(plan: ExportPlan, to url: URL) throws {
+    var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+    guard let context = CGContext(url as CFURL, mediaBox: &mediaBox, nil) else {
+      throw NSError(domain: "TeslaCam", code: 11, userInfo: [NSLocalizedDescriptionKey: "Failed to create report."])
+    }
+    context.beginPDFPage(nil)
+    drawReportLine("TeslaCam Export Report", y: 730, size: 22, context: context, mediaBox: mediaBox)
+    drawReportLine("Range: \(plan.selectedRangeText)", y: 690, size: 12, context: context, mediaBox: mediaBox)
+    drawReportLine("Duration: \(formatHMS(plan.totalDuration))", y: 670, size: 12, context: context, mediaBox: mediaBox)
+    drawReportLine("Cameras: \(plan.enabledCameras.sorted { $0.rawValue < $1.rawValue }.map(\.displayName).joined(separator: ", "))", y: 650, size: 12, context: context, mediaBox: mediaBox)
+    drawReportLine("Preset: \(plan.preset.displayName)", y: 630, size: 12, context: context, mediaBox: mediaBox)
+    drawReportLine("Output: \(plan.outputURL.lastPathComponent)", y: 610, size: 12, context: context, mediaBox: mediaBox)
+    drawReportLine("Clip spans: \(plan.sets.count)", y: 590, size: 12, context: context, mediaBox: mediaBox)
+    drawReportLine("Graph: \(NativeFilterGraphSummary(plan: plan).description)", y: 570, size: 10, context: context, mediaBox: mediaBox)
+    if plan.isPreviewSample {
+      drawReportLine("Type: Preview sample", y: 550, size: 12, context: context, mediaBox: mediaBox)
+    }
+    if !plan.cameraTrack.isEmpty {
+      drawReportLine("Camera cuts: \(plan.cameraTrack.keyframes.count)", y: plan.isPreviewSample ? 530 : 550, size: 12, context: context, mediaBox: mediaBox)
+    }
+    if plan.partialClipCount > 0 {
+      drawReportLine("Partial spans: \(plan.partialClipCount)", y: 510, size: 12, context: context, mediaBox: mediaBox)
+    }
+    context.endPDFPage()
+    context.closePDF()
+  }
+
+  private func drawReportLine(
+    _ text: String,
+    y: CGFloat,
+    size: CGFloat,
+    context: CGContext,
+    mediaBox: CGRect
+  ) {
+    let rect = CGRect(x: 54, y: y, width: mediaBox.width - 108, height: 28)
+    ExportOverlayDrawing.drawText(
+      text,
+      in: rect,
+      context: context,
+      canvasHeight: mediaBox.height,
+      size: size,
+      color: CGColor(gray: 0.1, alpha: 1)
+    )
   }
 
   private func measure<T>(_ name: String, _ work: () throws -> T) rethrows -> T {
@@ -628,6 +767,13 @@ final class NativeExportController: ObservableObject {
     endOutputScope()
     publishCurrentSession()
     isStatusPresented = true
+    startNextQueuedExportIfIdle()
+  }
+
+  private func startNextQueuedExportIfIdle() {
+    guard !isExporting, !queuedRequests.isEmpty else { return }
+    let next = queuedRequests.removeFirst()
+    export(request: next)
   }
 
   private func updateSession(_ update: (inout MutableExportSession) -> Void) {
@@ -774,6 +920,28 @@ private struct TimelineFrameContext {
   let localSeconds: Double
 }
 
+private struct NativeFilterGraphSummary {
+  let steps: [String]
+
+  init(plan: ExportPlan) {
+    var steps = [
+      "read",
+      "scale",
+      plan.cameraTrack.isEmpty ? "stack" : "camera-cut",
+      "overlay"
+    ]
+    if plan.overlayOptions.needsTelemetry {
+      steps.append("telemetry")
+    }
+    steps.append(plan.preset.defaultExtension == "mov" ? "prores" : "hevc")
+    self.steps = steps
+  }
+
+  var description: String {
+    steps.joined(separator: " -> ")
+  }
+}
+
 private struct TimelineFrameProvider {
   let sets: [ClipSet]
   let trimStartDate: Date
@@ -833,12 +1001,19 @@ private struct TimelineFrameLayout {
   static func build(
     sets: [ClipSet],
     enabledCameras: Set<Camera>,
-    useSixCam: Bool
+    useSixCam: Bool,
+    layoutRequest: CameraLayoutRequest = .auto
   ) throws -> TimelineFrameLayout {
     let present = Set(sets.flatMap { $0.files.keys })
     let probe = TimelineFrameSizeProbe(sets: sets)
+    let requestedProfile: CameraLayoutRequest
+    if layoutRequest == .auto {
+      requestedProfile = useSixCam ? .sixcam : .auto
+    } else {
+      requestedProfile = layoutRequest
+    }
     let plan = CameraLayoutPlan.build(
-      requestedProfile: useSixCam ? .sixcam : .auto,
+      requestedProfile: requestedProfile,
       detectedCameras: present,
       enabledCameras: enabledCameras,
       naturalSizes: probe.naturalSizes(for: Camera.mixedOrder)
@@ -963,15 +1138,42 @@ private actor ExportPreviewImageGeneratorBox {
 private final class TimelineFrameComposer {
   let layout: TimelineFrameLayout
   let enabledCameras: Set<Camera>
+  let overlayOptions: ExportOverlayOptions
   private var generators: [URL: ExportPreviewImageGeneratorBox] = [:]
   private var lastImages: [URL: CGImage] = [:]
+  private var telemetryCache: [URL: TelemetryTimeline] = [:]
+  private var telemetryFailures = Set<URL>()
+  private var routeCache: [URL: [TelemetryRoutePoint]] = [:]
+  private let pixelBufferPool: CVPixelBufferPool?
 
-  init(layout: TimelineFrameLayout, enabledCameras: Set<Camera>) {
+  init(layout: TimelineFrameLayout, enabledCameras: Set<Camera>, overlayOptions: ExportOverlayOptions = ExportOverlayOptions()) {
     self.layout = layout
     self.enabledCameras = enabledCameras
+    self.overlayOptions = overlayOptions
+    let width = Int(layout.canvasSize.width.rounded(.up))
+    let height = Int(layout.canvasSize.height.rounded(.up))
+    let poolAttributes: [String: Any] = [
+      kCVPixelBufferPoolMinimumBufferCountKey as String: 8
+    ]
+    let pixelAttributes: [String: Any] = [
+      kCVPixelBufferCGImageCompatibilityKey as String: true,
+      kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+      kCVPixelBufferMetalCompatibilityKey as String: true,
+      kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+      kCVPixelBufferWidthKey as String: width,
+      kCVPixelBufferHeightKey as String: height
+    ]
+    var pool: CVPixelBufferPool?
+    CVPixelBufferPoolCreate(
+      kCFAllocatorDefault,
+      poolAttributes as CFDictionary,
+      pixelAttributes as CFDictionary,
+      &pool
+    )
+    pixelBufferPool = pool
   }
 
-  func makeFrameBuffer(at localSeconds: Double, set: ClipSet?) throws -> CVPixelBuffer {
+  func makeFrameBuffer(at localSeconds: Double, set: ClipSet?, cameraOverride: Camera? = nil) throws -> CVPixelBuffer {
     let width = Int(layout.canvasSize.width.rounded(.up))
     let height = Int(layout.canvasSize.height.rounded(.up))
     let attributes: [String: Any] = [
@@ -981,7 +1183,12 @@ private final class TimelineFrameComposer {
       kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
     ]
     var buffer: CVPixelBuffer?
-    let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, attributes as CFDictionary, &buffer)
+    let status: CVReturn
+    if let pixelBufferPool {
+      status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pixelBufferPool, &buffer)
+    } else {
+      status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, attributes as CFDictionary, &buffer)
+    }
     guard status == kCVReturnSuccess, let buffer else {
       throw NSError(domain: "TeslaCam", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate frame buffer."])
     }
@@ -1014,21 +1221,94 @@ private final class TimelineFrameComposer {
       return buffer
     }
 
-    for camera in layout.cameraOrder {
-      guard enabledCameras.contains(camera),
-            let rect = layout.boundsByCamera[camera],
-            let url = set.file(for: camera) else {
-        continue
-      }
+    let focusRect = CGRect(origin: .zero, size: layout.canvasSize)
+    let drawFocusCamera = cameraOverride.flatMap { camera in
+      enabledCameras.contains(camera) && set.file(for: camera) != nil ? camera : nil
+    }
+
+    if let camera = drawFocusCamera, let url = set.file(for: camera) {
       if let duration = set.duration(for: camera), localSeconds > duration + (1.0 / 30.0) {
-        continue
+        return buffer
       }
-      guard let image = image(for: url, seconds: localSeconds) else { continue }
-      let fitted = AVMakeRect(aspectRatio: CGSize(width: image.width, height: image.height), insideRect: rect)
-      context.draw(image, in: fitted)
+      if let image = image(for: url, seconds: localSeconds) {
+        let fitted = AVMakeRect(aspectRatio: CGSize(width: image.width, height: image.height), insideRect: focusRect)
+        context.draw(image, in: fitted)
+      }
+    } else {
+      for camera in layout.cameraOrder {
+        guard enabledCameras.contains(camera),
+              let rect = layout.boundsByCamera[camera],
+              let url = set.file(for: camera) else {
+          continue
+        }
+        if let duration = set.duration(for: camera), localSeconds > duration + (1.0 / 30.0) {
+          continue
+        }
+        guard let image = image(for: url, seconds: localSeconds) else { continue }
+        let fitted = AVMakeRect(aspectRatio: CGSize(width: image.width, height: image.height), insideRect: rect)
+        context.draw(image, in: fitted)
+      }
+    }
+
+    if overlayOptions.privacyMask {
+      ExportOverlayDrawing.drawPrivacyMask(
+        context: context,
+        canvasSize: layout.canvasSize,
+        tileRects: drawFocusCamera == nil ? layout.boundsByCamera.values.map { $0 } : [focusRect]
+      )
+    }
+
+    if overlayOptions.needsTelemetry {
+      let telemetryURL = telemetrySourceURL(for: set)
+      let timeline = telemetryURL.flatMap { telemetryTimeline(for: $0) }
+      let frame = timeline?.closest(to: max(0, localSeconds) * 1000.0)
+      let telemetry = frame.map { TelemetryDisplayModel(sei: $0.sei) }
+      let route = telemetryURL.flatMap { routePoints(for: $0, timeline: timeline) } ?? []
+      ExportOverlayDrawing.drawTelemetryOverlay(
+        options: overlayOptions,
+        telemetry: telemetry,
+        route: route,
+        localSeconds: localSeconds,
+        context: context,
+        canvasSize: layout.canvasSize
+      )
     }
 
     return buffer
+  }
+
+  private func telemetrySourceURL(for set: ClipSet) -> URL? {
+    set.file(for: .front) ?? set.file(for: .back) ?? set.files.values.sorted { $0.path < $1.path }.first
+  }
+
+  private func telemetryTimeline(for url: URL) -> TelemetryTimeline? {
+    if let cached = telemetryCache[url] {
+      return cached
+    }
+    if telemetryFailures.contains(url) {
+      return nil
+    }
+    do {
+      let timeline = try TelemetryParser.parseTimeline(url: url)
+      telemetryCache[url] = timeline
+      return timeline
+    } catch {
+      telemetryFailures.insert(url)
+      return nil
+    }
+  }
+
+  private func routePoints(for url: URL, timeline: TelemetryTimeline?) -> [TelemetryRoutePoint] {
+    if let cached = routeCache[url] {
+      return cached
+    }
+    guard let timeline else {
+      routeCache[url] = []
+      return []
+    }
+    let points = ExportOverlayDrawing.routePoints(from: timeline)
+    routeCache[url] = points
+    return points
   }
 
   private func image(for url: URL, seconds: Double) -> CGImage? {
@@ -1069,6 +1349,161 @@ private final class TimelineFrameComposer {
   }
 }
 
+private enum ExportOverlayDrawing {
+  static func drawTelemetryOverlay(
+    options: ExportOverlayOptions,
+    telemetry: TelemetryDisplayModel?,
+    route: [TelemetryRoutePoint],
+    localSeconds: Double,
+    context: CGContext,
+    canvasSize: CGSize
+  ) {
+    if options.routeMap, !route.isEmpty {
+      drawRouteMap(route: route, currentSeconds: localSeconds, context: context, canvasSize: canvasSize)
+    }
+
+    guard options.telemetryHUD, let telemetry else { return }
+    let panel = CGRect(x: 26, y: 26, width: min(540, canvasSize.width * 0.34), height: 174)
+    context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.58))
+    context.fill(panel)
+    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.16))
+    context.stroke(panel, width: 1)
+
+    let lines = [
+      "Speed  \(telemetry.speedText)",
+      "Pedal  \(telemetry.acceleratorText)    Brake  \(telemetry.brakeApplied ? "On" : "Off")",
+      "Steer  \(telemetry.steeringText)    Gear  \(telemetry.gear)",
+      "AP     \(telemetry.autopilot)",
+      "Head   \(telemetry.headingText)"
+    ]
+    for (index, line) in lines.enumerated() {
+      drawText(
+        line,
+        in: CGRect(x: panel.minX + 18, y: panel.minY + 18 + CGFloat(index * 28), width: panel.width - 36, height: 24),
+        context: context,
+        canvasHeight: canvasSize.height,
+        size: index == 0 ? 23 : 17,
+        color: CGColor(red: 1, green: 1, blue: 1, alpha: index == 0 ? 0.95 : 0.78)
+      )
+    }
+  }
+
+  static func drawPrivacyMask(context: CGContext, canvasSize: CGSize, tileRects: [CGRect]) {
+    context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.76))
+    let topBand = CGRect(x: 0, y: canvasSize.height - 96, width: canvasSize.width, height: 96)
+    context.fill(topBand)
+    for rect in tileRects {
+      let bandHeight = max(54, rect.height * 0.16)
+      context.fill(CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: bandHeight))
+    }
+  }
+
+  static func routePoints(from timeline: TelemetryTimeline) -> [TelemetryRoutePoint] {
+    var points: [TelemetryRoutePoint] = []
+    points.reserveCapacity(min(240, timeline.frames.count))
+    var lastWholeSecond = -1
+    var lastCoordinate: TelemetryCoordinate?
+    for frame in timeline.frames {
+      let seconds = Int((frame.timestampMs / 1000.0).rounded(.down))
+      guard seconds != lastWholeSecond else { continue }
+      lastWholeSecond = seconds
+      let coordinate = TelemetryCoordinate(latitude: frame.sei.latitudeDeg, longitude: frame.sei.longitudeDeg)
+      guard coordinate.isUsable, coordinate != lastCoordinate else { continue }
+      lastCoordinate = coordinate
+      points.append(
+        TelemetryRoutePoint(
+          id: points.count,
+          seconds: frame.timestampMs / 1000.0,
+          coordinate: coordinate,
+          speedKmh: Double(frame.sei.vehicleSpeedMps) * 3.6,
+          headingDeg: frame.sei.headingDeg
+        )
+      )
+    }
+    return points
+  }
+
+  private static func drawRouteMap(
+    route: [TelemetryRoutePoint],
+    currentSeconds: Double,
+    context: CGContext,
+    canvasSize: CGSize
+  ) {
+    let side = min(310, min(canvasSize.width, canvasSize.height) * 0.28)
+    let panel = CGRect(x: canvasSize.width - side - 26, y: 26, width: side, height: side)
+    context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.58))
+    context.fill(panel)
+    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.18))
+    context.stroke(panel, width: 1)
+
+    let points = route.map(\.coordinate)
+    let latitudes = points.map(\.latitude)
+    let longitudes = points.map(\.longitude)
+    guard let minLat = latitudes.min(),
+          let maxLat = latitudes.max(),
+          let minLon = longitudes.min(),
+          let maxLon = longitudes.max() else { return }
+
+    let latSpan = max(0.00001, maxLat - minLat)
+    let lonSpan = max(0.00001, maxLon - minLon)
+    let inset: CGFloat = 22
+    let drawRect = panel.insetBy(dx: inset, dy: inset)
+    func point(for coordinate: TelemetryCoordinate) -> CGPoint {
+      let x = drawRect.minX + CGFloat((coordinate.longitude - minLon) / lonSpan) * drawRect.width
+      let y = drawRect.minY + CGFloat((coordinate.latitude - minLat) / latSpan) * drawRect.height
+      return CGPoint(x: x, y: y)
+    }
+
+    let path = CGMutablePath()
+    for (index, item) in route.enumerated() {
+      let p = point(for: item.coordinate)
+      if index == 0 {
+        path.move(to: p)
+      } else {
+        path.addLine(to: p)
+      }
+    }
+    context.setStrokeColor(CGColor(red: 0.22, green: 0.58, blue: 1, alpha: 0.95))
+    context.setLineWidth(max(3, side * 0.012))
+    context.addPath(path)
+    context.strokePath()
+
+    let current = route.last { $0.seconds <= currentSeconds } ?? route.first
+    if let current {
+      let p = point(for: current.coordinate)
+      context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.96))
+      context.fillEllipse(in: CGRect(x: p.x - 6, y: p.y - 6, width: 12, height: 12))
+    }
+  }
+
+  static func drawText(
+    _ text: String,
+    in rect: CGRect,
+    context: CGContext,
+    canvasHeight: CGFloat,
+    size: CGFloat,
+    color: CGColor
+  ) {
+    context.saveGState()
+    context.textMatrix = .identity
+    context.translateBy(x: 0, y: canvasHeight)
+    context.scaleBy(x: 1, y: -1)
+    let font = CTFontCreateWithName("HelveticaNeue-Medium" as CFString, size, nil)
+    let attributed = NSAttributedString(
+      string: text,
+      attributes: [
+        .font: font,
+        .foregroundColor: color
+      ]
+    )
+    let framesetter = CTFramesetterCreateWithAttributedString(attributed)
+    let path = CGPath(rect: rect, transform: nil)
+    let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: attributed.length), path, nil)
+    CTFrameDraw(frame, context)
+    context.restoreGState()
+  }
+}
+
 private final class NativeMovieWriter {
   private let writer: AVAssetWriter
   private let input: AVAssetWriterInput
@@ -1086,10 +1521,7 @@ private final class NativeMovieWriter {
     case .editFriendlyProRes:
       codec = .proRes422HQ
       compression = preset.nativeCompressionProperties(for: size)
-    case .maxQualityHEVC:
-      codec = .hevc
-      compression = preset.nativeCompressionProperties(for: size)
-    case .fastHEVC:
+    case .maxQualityHEVC, .fastHEVC, .socialShareHEVC, .proxyHEVC:
       codec = .hevc
       compression = preset.nativeCompressionProperties(for: size)
     }

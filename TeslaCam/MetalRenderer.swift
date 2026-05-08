@@ -212,6 +212,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
   private let frameCache: PreviewFrameCaching
 
   var cameraOrder: [Camera] = []
+  var layoutRequest: CameraLayoutRequest = .auto
+  var previewLayoutMode: PreviewLayoutMode = .grid
+  var focusedCamera: Camera?
   var itemTimeProvider: (() -> CMTime)?
   var fileURLsProvider: (() -> [Camera: URL])?
   var cameraDurationsProvider: (() -> [Camera: Double])?
@@ -327,28 +330,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
     encoder.setFragmentSamplerState(sampler, index: 0)
 
-    let detected = Set(cameraOrder)
-    let layout = CameraLayoutPlan.build(
-      requestedProfile: .auto,
-      detectedCameras: detected,
-      enabledCameras: detected,
-      naturalSizes: [:]
-    )
     let w = Double(view.drawableSize.width)
     let h = Double(view.drawableSize.height)
-    let scaleX = w / max(1, Double(layout.canvasSize.width))
-    let scaleY = h / max(1, Double(layout.canvasSize.height))
+    let viewSize = CGSize(width: w, height: h)
+    let viewports = previewViewports(in: viewSize)
 
-    for camera in layout.renderOrder {
-      guard let cell = layout.cellByCamera[camera] else { continue }
-      let tileViewport = MTLViewport(
-        originX: Double(cell.minX) * scaleX,
-        originY: Double(cell.minY) * scaleY,
-        width: Double(cell.width) * scaleX,
-        height: Double(cell.height) * scaleY,
-        znear: 0,
-        zfar: 1
-      )
+    for (camera, tileViewport) in viewports {
       let texture = lastTextures[camera] ?? blackTexture
       let viewport = aspectFitViewport(
         tile: tileViewport,
@@ -363,6 +350,96 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     encoder.endEncoding()
     commandBuffer.present(drawable)
     commandBuffer.commit()
+  }
+
+  private func previewViewports(in size: CGSize) -> [(Camera, MTLViewport)] {
+    let width = max(1, Double(size.width))
+    let height = max(1, Double(size.height))
+    let cameras = cameraOrder.filter { camera in
+      cameraOrder.contains(camera)
+    }
+    let visible = cameras.isEmpty ? Camera.hw3ClassicOrder : cameras
+
+    switch previewLayoutMode {
+    case .focus:
+      let camera = focusedCamera.flatMap { visible.contains($0) ? $0 : nil } ?? visible[0]
+      return [(camera, fullViewport(width: width, height: height))]
+
+    case .frontRear:
+      let pair = [.front, .back].filter { visible.contains($0) }
+      let shown = pair.isEmpty ? Array(visible.prefix(2)) : pair
+      guard shown.count > 1 else {
+        return [(shown.first ?? visible[0], fullViewport(width: width, height: height))]
+      }
+      return [
+        (shown[0], MTLViewport(originX: 0, originY: 0, width: width / 2, height: height, znear: 0, zfar: 1)),
+        (shown[1], MTLViewport(originX: width / 2, originY: 0, width: width / 2, height: height, znear: 0, zfar: 1))
+      ]
+
+    case .horizontal:
+      let tileWidth = width / Double(max(1, visible.count))
+      return visible.enumerated().map { index, camera in
+        (
+          camera,
+          MTLViewport(
+            originX: Double(index) * tileWidth,
+            originY: 0,
+            width: tileWidth,
+            height: height,
+            znear: 0,
+            zfar: 1
+          )
+        )
+      }
+
+    case .pictureInPicture:
+      let main = focusedCamera.flatMap { visible.contains($0) ? $0 : nil } ?? visible.first ?? .front
+      var result: [(Camera, MTLViewport)] = [(main, fullViewport(width: width, height: height))]
+      let extras = visible.filter { $0 != main }
+      let pipWidth = width * 0.22
+      let pipHeight = height * 0.22
+      let gap = max(8, min(width, height) * 0.012)
+      for (index, camera) in extras.prefix(4).enumerated() {
+        let x = width - pipWidth - gap
+        let y = gap + Double(index) * (pipHeight + gap)
+        result.append(
+          (
+            camera,
+            MTLViewport(originX: x, originY: y, width: pipWidth, height: pipHeight, znear: 0, zfar: 1)
+          )
+        )
+      }
+      return result
+
+    case .grid:
+      let detected = Set(visible)
+      let layout = CameraLayoutPlan.build(
+        requestedProfile: layoutRequest,
+        detectedCameras: detected,
+        enabledCameras: detected,
+        naturalSizes: [:]
+      )
+      let scaleX = width / max(1, Double(layout.canvasSize.width))
+      let scaleY = height / max(1, Double(layout.canvasSize.height))
+      return layout.renderOrder.compactMap { camera in
+        guard detected.contains(camera), let cell = layout.cellByCamera[camera] else { return nil }
+        return (
+          camera,
+          MTLViewport(
+            originX: Double(cell.minX) * scaleX,
+            originY: Double(cell.minY) * scaleY,
+            width: Double(cell.width) * scaleX,
+            height: Double(cell.height) * scaleY,
+            znear: 0,
+            zfar: 1
+          )
+        )
+      }
+    }
+  }
+
+  private func fullViewport(width: Double, height: Double) -> MTLViewport {
+    MTLViewport(originX: 0, originY: 0, width: width, height: height, znear: 0, zfar: 1)
   }
 
   private func aspectFitViewport(tile: MTLViewport, textureWidth: Int, textureHeight: Int) -> MTLViewport {

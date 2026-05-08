@@ -12,6 +12,7 @@ final class MultiCamPlaybackController: ObservableObject {
   private(set) var files: [Camera: URL] = [:]
   private(set) var cameraDurations: [Camera: Double] = [:]
   private(set) var currentDuration: Double = 0
+  var playbackRate: Double = 1.0
   private var currentSecondsValue: Double = 0
   private var timer: Timer?
   private var lastTickHostTime: CFTimeInterval = 0
@@ -78,7 +79,7 @@ final class MultiCamPlaybackController: ObservableObject {
     let now = CACurrentMediaTime()
     let delta = max(0, now - lastTickHostTime)
     lastTickHostTime = now
-    currentSecondsValue = min(currentDuration, currentSecondsValue + delta)
+    currentSecondsValue = min(currentDuration, currentSecondsValue + (delta * max(0.1, playbackRate)))
     onTimeUpdate?(currentSecondsValue)
 
     if currentSecondsValue >= currentDuration {

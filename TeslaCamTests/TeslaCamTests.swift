@@ -22,6 +22,91 @@ struct TeslaCamTests {
     #expect(ExportPreset.editFriendlyProRes.defaultExtension == "mov")
   }
 
+  @Test func exportPresetsIncludeReviewSocialAndProxyChoices() async throws {
+    let names = ExportPreset.allCases.map(\.displayName)
+
+    #expect(names.contains("Evidence HEVC"))
+    #expect(names.contains("Fast Review HEVC"))
+    #expect(names.contains("Social 25 MB HEVC"))
+    #expect(names.contains("Proxy HEVC"))
+    #expect(names.contains("Master ProRes"))
+    #expect(ExportPreset.socialShareHEVC.defaultExtension == "mp4")
+    #expect(ExportPreset.proxyHEVC.defaultExtension == "mp4")
+  }
+
+  @Test func cameraTrackResolvesLatestCutAtTimelineSecond() async throws {
+    let track = CameraTrack(
+      keyframes: [
+        CameraTrackKeyframe(seconds: 10, camera: .front),
+        CameraTrackKeyframe(seconds: 20, camera: .back),
+        CameraTrackKeyframe(seconds: 15, camera: .left_repeater)
+      ]
+    )
+
+    #expect(track.camera(at: 9.99) == nil)
+    #expect(track.camera(at: 10) == .front)
+    #expect(track.camera(at: 16) == .left_repeater)
+    #expect(track.camera(at: 25) == .back)
+    #expect(track.normalized.keyframes.map(\.seconds) == [10, 15, 20])
+  }
+
+  @Test func exportRequestCarriesCameraTrackAndPreviewFlag() async throws {
+    let track = CameraTrack(keyframes: [CameraTrackKeyframe(seconds: 4, camera: .front)])
+    let request = exportRequestForPlan(cameraTrack: track, isPreviewSample: true)
+
+    #expect(request.cameraTrack == track.normalized)
+    #expect(request.isPreviewSample)
+  }
+
+  @Test func telemetryTimelineBuildsEventMarkers() async throws {
+    var first = SeiMetadata()
+    first.brakeApplied = true
+    first.blinkerLeft = true
+    var second = SeiMetadata()
+    second.acceleratorPedalPosition = 80
+    second.steeringWheelAngle = -52
+    second.autopilotState = .autosteer
+    second.linearAccelX = 0.7
+    second.linearAccelY = 0.8
+    let timeline = TelemetryTimeline(
+      frames: [
+        TelemetryFrame(timestampMs: 0, sei: first),
+        TelemetryFrame(timestampMs: 1100, sei: second)
+      ]
+    )
+
+    let kinds = Set(TelemetryEventMarker.markers(from: timeline).map(\.kind))
+
+    #expect(kinds.contains(.brake))
+    #expect(kinds.contains(.leftBlinker))
+    #expect(kinds.contains(.accelerator))
+    #expect(kinds.contains(.steering))
+    #expect(kinds.contains(.autopilot))
+    #expect(kinds.contains(.gForce))
+  }
+
+  @Test func layoutPresetRoundTripsCameraTrackAndOverlayOptions() async throws {
+    let preset = CustomLayoutPreset(
+      name: "Evidence",
+      layoutRequest: .sixcam,
+      previewLayoutMode: .focus,
+      focusedCamera: .front,
+      overlayOptions: ExportOverlayOptions(
+        telemetryHUD: true,
+        routeMap: true,
+        privacyMask: false,
+        includeReport: true,
+        includeScreenshot: true
+      ),
+      cameraTrack: CameraTrack(keyframes: [CameraTrackKeyframe(seconds: 12, camera: .back)])
+    )
+
+    let data = try CustomLayoutPresetCodec.encode(preset)
+    let decoded = try CustomLayoutPresetCodec.decode(data)
+
+    #expect(decoded == preset)
+  }
+
   @Test func nativeHEVCBitrateScalesWithCanvasSize() async throws {
     let hd = CGSize(width: 1920, height: 1080)
     let hw4 = CGSize(width: 5760, height: 3240)
@@ -129,6 +214,17 @@ struct TeslaCamTests {
     #expect(controller.currentJob?.phase == .failed)
     #expect(controller.currentJob?.failureReason == "Select at least one camera to export.")
     #expect(controller.isStatusPresented)
+  }
+
+  @Test func exportQueueStartsNextRequestWhenIdle() async throws {
+    let controller = NativeExportController()
+    let request = exportRequestForPlan(enabledCameras: [])
+
+    controller.enqueue(request: request)
+
+    #expect(controller.queuedRequests.isEmpty)
+    #expect(controller.currentJob?.phase == .failed)
+    #expect(controller.currentJob?.request.id == request.id)
   }
 
   @Test func preflightWriteCheckDoesNotMutateExistingOutputFile() async throws {
@@ -749,6 +845,57 @@ struct TeslaCamTests {
     #expect(size > 0)
   }
 
+  @Test func nativeExportWritesOverlaySidecars() async throws {
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+
+    let outputURL = root.url.appendingPathComponent("overlay_export.mov")
+    let base = Date(timeIntervalSince1970: 1_775_650_200)
+    let request = ExportRequest(
+      sets: [
+        ClipSet(timestamp: "sample_1", date: base, duration: 1, files: [:])
+      ],
+      outputURL: outputURL,
+      useSixCam: false,
+      preset: .editFriendlyProRes,
+      enabledCameras: [.front, .back, .left_repeater, .right_repeater],
+      overlayOptions: ExportOverlayOptions(
+        telemetryHUD: true,
+        routeMap: true,
+        privacyMask: true,
+        includeReport: true,
+        includeScreenshot: true
+      ),
+      trimStartSeconds: 0,
+      trimEndSeconds: 1,
+      trimStartDate: base,
+      trimEndDate: base.addingTimeInterval(1),
+      selectedRangeText: "overlay",
+      partialClipCount: 0
+    )
+
+    let controller = NativeExportController()
+    controller.export(request: request)
+
+    let deadline = Date().addingTimeInterval(30)
+    while Date() < deadline {
+      if controller.currentJob?.isTerminal == true {
+        break
+      }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+
+    #expect(controller.currentJob?.phase == .completed)
+    let poster = outputURL.deletingPathExtension().appendingPathExtension("poster.png")
+    let report = outputURL.deletingPathExtension().appendingPathExtension("report.pdf")
+    #expect(FileManager.default.fileExists(atPath: poster.path))
+    #expect(FileManager.default.fileExists(atPath: report.path))
+    let posterSize = (try? poster.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+    let reportSize = (try? report.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+    #expect(posterSize > 0)
+    #expect(reportSize > 0)
+  }
+
   @Test func nativeExportUsesThreeByThreeCanvasForHw4Composite() async throws {
     let root = try TemporaryDirectory.make()
     defer { try? root.remove() }
@@ -850,7 +997,9 @@ private func exportRequestForPlan(
   files: [Camera: URL] = [.front: URL(fileURLWithPath: "/tmp/front.mov")],
   naturalSizes: [Camera: CGSize] = [.front: CGSize(width: 1920, height: 1080)],
   trimStart: Date = Date(timeIntervalSince1970: 100),
-  trimEnd: Date = Date(timeIntervalSince1970: 102)
+  trimEnd: Date = Date(timeIntervalSince1970: 102),
+  cameraTrack: CameraTrack = .empty,
+  isPreviewSample: Bool = false
 ) -> ExportRequest {
   ExportRequest(
     sets: [
@@ -872,7 +1021,9 @@ private func exportRequestForPlan(
     trimStartDate: trimStart,
     trimEndDate: trimEnd,
     selectedRangeText: "sample",
-    partialClipCount: 0
+    partialClipCount: 0,
+    cameraTrack: cameraTrack,
+    isPreviewSample: isPreviewSample
   )
 }
 

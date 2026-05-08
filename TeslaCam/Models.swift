@@ -4,7 +4,7 @@ import Combine
 import OSLog
 import AVFoundation
 
-enum Camera: String, CaseIterable, Hashable {
+enum Camera: String, CaseIterable, Hashable, Codable {
   case front
   case back
   case left_repeater
@@ -99,10 +99,50 @@ enum CameraLayoutProfile: String, CaseIterable, Identifiable {
   }
 }
 
-enum CameraLayoutRequest: String, CaseIterable {
+enum CameraLayoutRequest: String, CaseIterable, Codable {
   case auto
   case legacy4
   case sixcam
+
+  var displayName: String {
+    switch self {
+    case .auto:
+      return "Auto"
+    case .legacy4:
+      return "4-Cam"
+    case .sixcam:
+      return "6-Cam"
+    }
+  }
+}
+
+extension CameraLayoutRequest: Identifiable {
+  var id: String { rawValue }
+}
+
+enum PreviewLayoutMode: String, CaseIterable, Identifiable, Codable {
+  case grid
+  case focus
+  case frontRear
+  case horizontal
+  case pictureInPicture
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .grid:
+      return "Grid"
+    case .focus:
+      return "Focus"
+    case .frontRear:
+      return "Front/Rear"
+    case .horizontal:
+      return "Strip"
+    case .pictureInPicture:
+      return "PiP"
+    }
+  }
 }
 
 enum CameraLayoutKind: String {
@@ -311,6 +351,8 @@ private extension Sequence where Element == Camera {
 enum ExportPreset: String, CaseIterable, Identifiable {
   case maxQualityHEVC
   case fastHEVC
+  case socialShareHEVC
+  case proxyHEVC
   case editFriendlyProRes
 
   private static let referenceCanvasPixels = 1_920.0 * 1_080.0
@@ -321,11 +363,15 @@ enum ExportPreset: String, CaseIterable, Identifiable {
   var displayName: String {
     switch self {
     case .maxQualityHEVC:
-      return "Max Quality HEVC"
+      return "Evidence HEVC"
     case .fastHEVC:
-      return "Fast HEVC"
+      return "Fast Review HEVC"
+    case .socialShareHEVC:
+      return "Social 25 MB HEVC"
+    case .proxyHEVC:
+      return "Proxy HEVC"
     case .editFriendlyProRes:
-      return "Edit-Friendly ProRes"
+      return "Master ProRes"
     }
   }
 
@@ -335,6 +381,10 @@ enum ExportPreset: String, CaseIterable, Identifiable {
       return "HEVC_CPU_MAX"
     case .fastHEVC:
       return "HEVC_MAX"
+    case .socialShareHEVC:
+      return "HEVC_SOCIAL"
+    case .proxyHEVC:
+      return "HEVC_PROXY"
     case .editFriendlyProRes:
       return "PRORES_HQ"
     }
@@ -344,7 +394,7 @@ enum ExportPreset: String, CaseIterable, Identifiable {
     switch self {
     case .editFriendlyProRes:
       return "mov"
-    case .maxQualityHEVC, .fastHEVC:
+    case .maxQualityHEVC, .fastHEVC, .socialShareHEVC, .proxyHEVC:
       return "mp4"
     }
   }
@@ -352,11 +402,15 @@ enum ExportPreset: String, CaseIterable, Identifiable {
   var outputLabel: String {
     switch self {
     case .maxQualityHEVC:
-      return "hevc_max_quality"
+      return "evidence_hevc"
     case .fastHEVC:
-      return "hevc_fast"
+      return "fast_review_hevc"
+    case .socialShareHEVC:
+      return "social_25mb_hevc"
+    case .proxyHEVC:
+      return "proxy_hevc"
     case .editFriendlyProRes:
-      return "prores_hq"
+      return "master_prores"
     }
   }
 
@@ -382,6 +436,28 @@ enum ExportPreset: String, CaseIterable, Identifiable {
           referenceBitRate: 20_000_000,
           scalingExponent: 0.78,
           maximumBitRate: 120_000_000
+        ),
+        AVVideoExpectedSourceFrameRateKey: Int(Self.defaultFrameRate),
+        AVVideoMaxKeyFrameIntervalKey: Int(Self.defaultFrameRate)
+      ]
+    case .socialShareHEVC:
+      return [
+        AVVideoAverageBitRateKey: scaledHEVCBitRate(
+          for: canvasSize,
+          referenceBitRate: 8_000_000,
+          scalingExponent: 0.72,
+          maximumBitRate: 35_000_000
+        ),
+        AVVideoExpectedSourceFrameRateKey: Int(Self.defaultFrameRate),
+        AVVideoMaxKeyFrameIntervalKey: Int(Self.defaultFrameRate)
+      ]
+    case .proxyHEVC:
+      return [
+        AVVideoAverageBitRateKey: scaledHEVCBitRate(
+          for: canvasSize,
+          referenceBitRate: 4_000_000,
+          scalingExponent: 0.70,
+          maximumBitRate: 18_000_000
         ),
         AVVideoExpectedSourceFrameRateKey: Int(Self.defaultFrameRate),
         AVVideoMaxKeyFrameIntervalKey: Int(Self.defaultFrameRate)
@@ -460,12 +536,50 @@ struct ExportRequest: Identifiable {
   let useSixCam: Bool
   let preset: ExportPreset
   let enabledCameras: Set<Camera>
+  let layoutRequest: CameraLayoutRequest
+  let overlayOptions: ExportOverlayOptions
   let trimStartSeconds: Double
   let trimEndSeconds: Double
   let trimStartDate: Date
   let trimEndDate: Date
   let selectedRangeText: String
   let partialClipCount: Int
+  let cameraTrack: CameraTrack
+  let isPreviewSample: Bool
+
+  init(
+    sets: [ClipSet],
+    outputURL: URL,
+    useSixCam: Bool,
+    preset: ExportPreset,
+    enabledCameras: Set<Camera>,
+    layoutRequest: CameraLayoutRequest = .auto,
+    overlayOptions: ExportOverlayOptions = ExportOverlayOptions(),
+    trimStartSeconds: Double,
+    trimEndSeconds: Double,
+    trimStartDate: Date,
+    trimEndDate: Date,
+    selectedRangeText: String,
+    partialClipCount: Int,
+    cameraTrack: CameraTrack = .empty,
+    isPreviewSample: Bool = false
+  ) {
+    self.sets = sets
+    self.outputURL = outputURL
+    self.useSixCam = useSixCam
+    self.preset = preset
+    self.enabledCameras = enabledCameras
+    self.layoutRequest = layoutRequest
+    self.overlayOptions = overlayOptions
+    self.trimStartSeconds = trimStartSeconds
+    self.trimEndSeconds = trimEndSeconds
+    self.trimStartDate = trimStartDate
+    self.trimEndDate = trimEndDate
+    self.selectedRangeText = selectedRangeText
+    self.partialClipCount = partialClipCount
+    self.cameraTrack = cameraTrack.normalized
+    self.isPreviewSample = isPreviewSample
+  }
 
   var totalParts: Int {
     sets.count
@@ -502,6 +616,311 @@ struct TimelineTrimSelection: Equatable {
   var startSeconds: Double
   var endSeconds: Double
   var isDragging: Bool
+}
+
+struct ExportOverlayOptions: Codable, Equatable, Hashable {
+  var telemetryHUD: Bool = false
+  var routeMap: Bool = false
+  var privacyMask: Bool = false
+  var includeReport: Bool = false
+  var includeScreenshot: Bool = false
+
+  var needsTelemetry: Bool {
+    telemetryHUD || routeMap || includeReport
+  }
+
+  var needsSidecars: Bool {
+    includeReport || includeScreenshot
+  }
+}
+
+struct CameraTrackKeyframe: Codable, Equatable, Hashable, Identifiable {
+  let seconds: Double
+  let camera: Camera
+
+  var id: String {
+    "\(seconds)-\(camera.rawValue)"
+  }
+}
+
+struct CameraTrack: Codable, Equatable, Hashable {
+  static let empty = CameraTrack(keyframes: [])
+
+  let keyframes: [CameraTrackKeyframe]
+
+  var normalized: CameraTrack {
+    CameraTrack(
+      keyframes: keyframes.sorted {
+        if abs($0.seconds - $1.seconds) < 0.001 {
+          return $0.camera.rawValue < $1.camera.rawValue
+        }
+        return $0.seconds < $1.seconds
+      }
+    )
+  }
+
+  var isEmpty: Bool {
+    keyframes.isEmpty
+  }
+
+  func camera(at seconds: Double) -> Camera? {
+    var active: Camera?
+    for keyframe in normalized.keyframes {
+      guard keyframe.seconds <= seconds + 0.001 else { break }
+      active = keyframe.camera
+    }
+    return active
+  }
+
+  func addingCut(seconds: Double, camera: Camera) -> CameraTrack {
+    let rounded = (max(0, seconds) * 10).rounded() / 10
+    let filtered = keyframes.filter { abs($0.seconds - rounded) >= 0.25 }
+    return CameraTrack(keyframes: filtered + [CameraTrackKeyframe(seconds: rounded, camera: camera)]).normalized
+  }
+}
+
+enum TelemetryEventKind: String, Codable, CaseIterable, Identifiable {
+  case brake
+  case accelerator
+  case leftBlinker
+  case rightBlinker
+  case steering
+  case autopilot
+  case gForce
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .brake: return "Brake"
+    case .accelerator: return "Gas"
+    case .leftBlinker: return "Left"
+    case .rightBlinker: return "Right"
+    case .steering: return "Steer"
+    case .autopilot: return "AP"
+    case .gForce: return "G"
+    }
+  }
+}
+
+struct TelemetryEventMarker: Equatable, Hashable, Identifiable {
+  let seconds: Double
+  let kind: TelemetryEventKind
+  let intensity: Double
+
+  var id: String {
+    "\(Int(seconds * 10))-\(kind.rawValue)"
+  }
+
+  static func markers(from timeline: TelemetryTimeline) -> [TelemetryEventMarker] {
+    var markers: [TelemetryEventMarker] = []
+    var seen = Set<String>()
+
+    func append(second: Double, kind: TelemetryEventKind, intensity: Double) {
+      let wholeSecond = floor(max(0, second))
+      let key = "\(Int(wholeSecond))-\(kind.rawValue)"
+      guard seen.insert(key).inserted else { return }
+      markers.append(
+        TelemetryEventMarker(
+          seconds: wholeSecond,
+          kind: kind,
+          intensity: min(1, max(0, intensity))
+        )
+      )
+    }
+
+    for frame in timeline.frames {
+      let seconds = frame.timestampMs / 1000.0
+      let sei = frame.sei
+      if sei.brakeApplied {
+        append(second: seconds, kind: .brake, intensity: 1)
+      }
+      if sei.blinkerLeft {
+        append(second: seconds, kind: .leftBlinker, intensity: 1)
+      }
+      if sei.blinkerRight {
+        append(second: seconds, kind: .rightBlinker, intensity: 1)
+      }
+      let pedal = Double(sei.acceleratorPedalPosition)
+      if pedal >= 35 {
+        append(second: seconds, kind: .accelerator, intensity: pedal / 100.0)
+      }
+      let steering = abs(Double(sei.steeringWheelAngle))
+      if steering >= 35 {
+        append(second: seconds, kind: .steering, intensity: min(1, steering / 90.0))
+      }
+      if sei.autopilotState != .none {
+        append(second: seconds, kind: .autopilot, intensity: 1)
+      }
+      let g = sqrt(
+        (sei.linearAccelX * sei.linearAccelX)
+        + (sei.linearAccelY * sei.linearAccelY)
+        + (sei.linearAccelZ * sei.linearAccelZ)
+      )
+      if g >= 0.7 {
+        append(second: seconds, kind: .gForce, intensity: min(1, g / 2.0))
+      }
+    }
+
+    return markers.sorted {
+      if abs($0.seconds - $1.seconds) < 0.001 {
+        return $0.kind.rawValue < $1.kind.rawValue
+      }
+      return $0.seconds < $1.seconds
+    }
+  }
+}
+
+struct CustomLayoutPreset: Codable, Equatable, Hashable {
+  let name: String
+  let layoutRequest: CameraLayoutRequest
+  let previewLayoutMode: PreviewLayoutMode
+  let focusedCamera: Camera?
+  let overlayOptions: ExportOverlayOptions
+  let cameraTrack: CameraTrack
+}
+
+enum CustomLayoutPresetCodec {
+  static func encode(_ preset: CustomLayoutPreset) throws -> Data {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    return try encoder.encode(preset)
+  }
+
+  static func decode(_ data: Data) throws -> CustomLayoutPreset {
+    try JSONDecoder().decode(CustomLayoutPreset.self, from: data)
+  }
+}
+
+struct TelemetryCoordinate: Equatable, Hashable {
+  let latitude: Double
+  let longitude: Double
+
+  var isUsable: Bool {
+    abs(latitude) > 0.0001 && abs(longitude) > 0.0001
+  }
+}
+
+struct TelemetryRoutePoint: Equatable, Hashable, Identifiable {
+  let id: Int
+  let seconds: Double
+  let coordinate: TelemetryCoordinate
+  let speedKmh: Double
+  let headingDeg: Double
+}
+
+enum ClipHealthSeverity: String, Codable, Equatable, Hashable {
+  case info
+  case warning
+}
+
+struct ClipHealthFact: Codable, Equatable, Hashable, Identifiable {
+  let title: String
+  let value: String
+  let severity: ClipHealthSeverity
+
+  var id: String {
+    "\(title)-\(value)"
+  }
+}
+
+struct TelemetryDisplayModel: Equatable, Hashable {
+  let speedKmh: Double
+  let acceleratorPercent: Double
+  let steeringAngleDeg: Double
+  let gear: String
+  let autopilot: String
+  let brakeApplied: Bool
+  let blinkerLeft: Bool
+  let blinkerRight: Bool
+  let headingDeg: Double
+  let coordinate: TelemetryCoordinate?
+  let accelX: Double
+  let accelY: Double
+  let accelZ: Double
+
+  init(sei: SeiMetadata) {
+    speedKmh = Double(sei.vehicleSpeedMps) * 3.6
+    acceleratorPercent = max(0, Double(sei.acceleratorPedalPosition))
+    steeringAngleDeg = Double(sei.steeringWheelAngle)
+    switch sei.gearState {
+    case .park: gear = "P"
+    case .drive: gear = "D"
+    case .reverse: gear = "R"
+    case .neutral: gear = "N"
+    }
+    switch sei.autopilotState {
+    case .none: autopilot = "Off"
+    case .selfDriving: autopilot = "FSD"
+    case .autosteer: autopilot = "Autosteer"
+    case .tacc: autopilot = "TACC"
+    }
+    brakeApplied = sei.brakeApplied
+    blinkerLeft = sei.blinkerLeft
+    blinkerRight = sei.blinkerRight
+    headingDeg = sei.headingDeg
+    let coordinate = TelemetryCoordinate(latitude: sei.latitudeDeg, longitude: sei.longitudeDeg)
+    self.coordinate = coordinate.isUsable ? coordinate : nil
+    accelX = sei.linearAccelX
+    accelY = sei.linearAccelY
+    accelZ = sei.linearAccelZ
+  }
+
+  var speedText: String {
+    String(format: "%.1f km/h", speedKmh)
+  }
+
+  var acceleratorText: String {
+    String(format: "%.0f%%", acceleratorPercent)
+  }
+
+  var steeringText: String {
+    String(format: "%.0f deg", steeringAngleDeg)
+  }
+
+  var headingText: String {
+    String(format: "%.0f deg", headingDeg)
+  }
+
+  var locationText: String {
+    guard let coordinate else { return "No GPS" }
+    return String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude)
+  }
+
+  var compactText: String {
+    "Speed: \(speedText)  Pedal: \(acceleratorText)  Steer: \(steeringText)  Gear: \(gear)  AP: \(autopilot)  Brake: \(brakeApplied ? "On" : "Off")"
+  }
+}
+
+struct TeslaCamEventSummary: Identifiable, Hashable {
+  let id: String
+  let clipIndex: Int
+  let timestamp: Date
+  let folderURL: URL?
+  let thumbnailURL: URL?
+  let city: String
+  let street: String
+  let reason: String
+  let camera: String
+  let coordinate: TelemetryCoordinate?
+
+  var locationTitle: String {
+    let trimmedStreet = street.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedCity = city.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmedStreet.isEmpty, !trimmedCity.isEmpty {
+      return "\(trimmedStreet), \(trimmedCity)"
+    }
+    if !trimmedCity.isEmpty {
+      return trimmedCity
+    }
+    return coordinate?.isUsable == true ? "GPS Event" : "Event"
+  }
+
+  var reasonTitle: String {
+    reason
+      .replacingOccurrences(of: "_", with: " ")
+      .capitalized
+  }
 }
 
 struct PreviewTimelineState: Equatable {

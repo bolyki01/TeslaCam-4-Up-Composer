@@ -54,6 +54,10 @@ front, back, left_repeater, right_repeater, left, right, left_pillar, right_pill
 
 Layout plans expose a requested profile, expected cameras, render order, hidden cameras, canvas size, and cell rectangles. Missing expected cameras render as black placeholders. Present cameras outside the selected profile are listed as hidden cameras instead of silently changing the grid. For mixed HW3/HW4 inputs, `auto` uses the 6-camera layout and records classic repeater cameras as hidden.
 
+Native preview/export can layer camera-track cuts over this base layout. A camera-track cut is a timeline second plus camera id; during native export, the latest cut at or before the render second focuses that camera full-frame. Without cuts, export uses the base grid layout above. The portable CLI does not currently apply camera-track cuts.
+
+Native export presets are intent labels over native codecs: Evidence HEVC, Fast Review HEVC, Social 25 MB HEVC, Proxy HEVC, and Master ProRes. The portable CLI keeps its existing ffmpeg preset adapters unless a fixture explicitly expands the shared contract.
+
 ## Output naming and conflicts
 
 Default CLI output names use:

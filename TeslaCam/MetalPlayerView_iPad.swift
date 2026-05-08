@@ -7,6 +7,9 @@ import MetalKit
 struct MetalPlayerView: UIViewRepresentable {
   @ObservedObject var playback: MultiCamPlaybackController
   var cameraOrder: [Camera]
+  var layoutRequest: CameraLayoutRequest = .auto
+  var previewLayoutMode: PreviewLayoutMode = .grid
+  var focusedCamera: Camera?
 
   func makeCoordinator() -> Coordinator {
     Coordinator()
@@ -41,6 +44,9 @@ struct MetalPlayerView: UIViewRepresentable {
 
   private func applyState(to renderer: MetalRenderer) {
     renderer.cameraOrder = cameraOrder
+    renderer.layoutRequest = layoutRequest
+    renderer.previewLayoutMode = previewLayoutMode
+    renderer.focusedCamera = focusedCamera
     renderer.itemTimeProvider = { playback.currentItemTime() }
     renderer.fileURLsProvider = { playback.files }
     renderer.cameraDurationsProvider = { playback.cameraDurations }

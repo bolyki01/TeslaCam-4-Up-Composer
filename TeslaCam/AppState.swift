@@ -209,16 +209,28 @@ struct ExportStore {
     chosenURL: URL,
     preset: ExportPreset,
     enabledCameras: Set<Camera>,
+    layoutRequest: CameraLayoutRequest = .auto,
+    overlayOptions: ExportOverlayOptions = ExportOverlayOptions(),
     trimStartSeconds: Double,
     trimEndSeconds: Double,
     trimStartDate: Date,
     trimEndDate: Date,
     selectedRangeText: String,
-    partialClipCount: Int
+    partialClipCount: Int,
+    cameraTrack: CameraTrack = .empty,
+    isPreviewSample: Bool = false
   ) -> ExportRequest? {
     guard !sets.isEmpty else { return nil }
-    let useExpandedGrid = enabledCameras.count > 4 || sets.contains { set in
-      !Set(set.files.keys).intersection([.left, .right, .left_pillar, .right_pillar]).isEmpty
+    let useExpandedGrid: Bool
+    switch layoutRequest {
+    case .legacy4:
+      useExpandedGrid = false
+    case .sixcam:
+      useExpandedGrid = true
+    case .auto:
+      useExpandedGrid = enabledCameras.count > 4 || sets.contains { set in
+        !Set(set.files.keys).intersection([.left, .right, .left_pillar, .right_pillar]).isEmpty
+      }
     }
     return ExportRequest(
       sets: sets,
@@ -235,12 +247,16 @@ struct ExportStore {
       useSixCam: useExpandedGrid,
       preset: preset,
       enabledCameras: enabledCameras,
+      layoutRequest: layoutRequest,
+      overlayOptions: overlayOptions,
       trimStartSeconds: trimStartSeconds,
       trimEndSeconds: trimEndSeconds,
       trimStartDate: trimStartDate,
       trimEndDate: trimEndDate,
       selectedRangeText: selectedRangeText,
-      partialClipCount: partialClipCount
+      partialClipCount: partialClipCount,
+      cameraTrack: cameraTrack,
+      isPreviewSample: isPreviewSample
     )
   }
 
@@ -322,12 +338,48 @@ final class AppState: ObservableObject {
     duplicateTimestampCount: 0,
     overlapMinuteCount: 0
   )
+  @Published var telemetryModel: TelemetryDisplayModel?
+  @Published var telemetryRoute: [TelemetryRoutePoint] = []
+  @Published var telemetryEventMarkers: [TelemetryEventMarker] = []
+  @Published var eventSummaries: [TeslaCamEventSummary] = []
+  @Published var currentEvent: TeslaCamEventSummary?
+  @Published var previewLayoutMode: PreviewLayoutMode = .grid
+  @Published var layoutRequest: CameraLayoutRequest = .auto
+  @Published var focusedCamera: Camera?
+  @Published var cameraTrack: CameraTrack = .empty
+  @Published var clipHealthFacts: [ClipHealthFact] = []
+  @Published var layoutPresetStatus: String = ""
+  @Published var playbackRate: Double = 1.0 {
+    didSet {
+      let allowed = Self.allowedPlaybackRates
+      playbackRate = allowed.min(by: { abs($0 - playbackRate) < abs($1 - playbackRate) }) ?? 1.0
+      playback.playbackRate = playbackRate
+    }
+  }
+  @Published var privacyMode: Bool = false {
+    didSet {
+      let local = max(0, currentSeconds - currentSegmentStartSeconds)
+      updateOverlayAndTelemetry(
+        globalSeconds: currentSeconds,
+        clipIndex: currentSegmentClipIndex,
+        localSeconds: local
+      )
+    }
+  }
+  @Published var exportOverlayOptions = ExportOverlayOptions(
+    telemetryHUD: true,
+    routeMap: true,
+    privacyMask: false,
+    includeReport: true,
+    includeScreenshot: true
+  )
   @Published var isDuplicateResolverPresented: Bool = false
   @Published var duplicateResolverMessage: String = ""
   @Published var showDuplicateResolverForConflicts: Bool = false
 
   let playback = MultiCamPlaybackController()
   let exporter: NativeExportController
+  static let allowedPlaybackRates: [Double] = [0.25, 0.5, 1.0, 1.5, 2.0, 4.0]
 
   private var timelineStore = TimelineStore()
   private let exportStore = ExportStore()
@@ -338,6 +390,7 @@ final class AppState: ObservableObject {
   private var wasPlayingBeforeSeek = false
   private var telemetryTimeline: TelemetryTimeline?
   private var telemetryURL: URL?
+  private var telemetryRouteByURL: [URL: [TelemetryRoutePoint]] = [:]
   private var activeSecurityScopedURLs: [URL] = []
 
   init() {
@@ -450,6 +503,15 @@ final class AppState: ObservableObject {
     clipSets = []
     camerasDetected = []
     healthSummary = nil
+    eventSummaries = []
+    currentEvent = nil
+    telemetryModel = nil
+    telemetryRoute = []
+    telemetryEventMarkers = []
+    telemetryText = ""
+    cameraTrack = .empty
+    clipHealthFacts = []
+    layoutPresetStatus = ""
     duplicateSummary = DuplicateResolutionSummary(
       duplicateFileCount: 0,
       duplicateTimestampCount: 0,
@@ -480,6 +542,8 @@ final class AppState: ObservableObject {
           self.camerasDetected = self.orderCameras(Array(index.camerasFound), profile: index.layoutProfile)
           self.selectedExportCameras = Set(self.camerasDetected)
           self.healthSummary = self.buildHealthSummary(from: index.sets)
+          self.clipHealthFacts = self.buildClipHealthFacts(from: index.sets)
+          self.eventSummaries = self.buildEventSummaries(from: index.sets)
           self.duplicateSummary = index.duplicateSummary
           self.rememberLastSources(normalizedSources)
           self.scanStage = .mergingClips
@@ -541,6 +605,47 @@ final class AppState: ObservableObject {
     }
   }
 
+  func setPlaybackRate(_ rate: Double) {
+    playbackRate = rate
+  }
+
+  func cyclePlaybackRate() {
+    let rates = Self.allowedPlaybackRates
+    guard let index = rates.firstIndex(of: playbackRate) else {
+      setPlaybackRate(1.0)
+      return
+    }
+    setPlaybackRate(rates[(index + 1) % rates.count])
+  }
+
+  func stepPlayback(by seconds: Double) {
+    guard totalDuration > 0 else { return }
+    seekToGlobalTime(currentSeconds + seconds, exact: true)
+  }
+
+  func jumpToEvent(_ event: TeslaCamEventSummary) {
+    guard clipSets.indices.contains(event.clipIndex) else { return }
+    let seconds = clipStartOffset(at: event.clipIndex)
+    seekToGlobalTime(seconds, exact: true)
+    currentEvent = event
+    debug("event jump \(event.id)", category: "event")
+  }
+
+  func jumpToNextEvent(direction: Int = 1) {
+    guard !eventSummaries.isEmpty else { return }
+    let sorted = eventSummaries.sorted { $0.timestamp < $1.timestamp }
+    let current = currentSeconds
+    let target: TeslaCamEventSummary?
+    if direction >= 0 {
+      target = sorted.first { clipStartOffset(at: $0.clipIndex) > current + 0.5 } ?? sorted.first
+    } else {
+      target = sorted.reversed().first { clipStartOffset(at: $0.clipIndex) < current - 0.5 } ?? sorted.last
+    }
+    if let target {
+      jumpToEvent(target)
+    }
+  }
+
   func restart() {
     guard !clipSets.isEmpty else { return }
     currentIndex = 0
@@ -582,15 +687,75 @@ final class AppState: ObservableObject {
     }
   }
 
+  func setFocusedCamera(_ camera: Camera?) {
+    focusedCamera = camera
+    if camera != nil {
+      previewLayoutMode = .focus
+    }
+  }
+
+  func addCameraTrackCut(camera: Camera? = nil) {
+    let selected = camera ?? focusedCamera ?? activePreviewCameras.first ?? camerasDetected.first
+    guard let selected else { return }
+    cameraTrack = cameraTrack.addingCut(seconds: currentSeconds, camera: selected)
+    focusedCamera = selected
+    previewLayoutMode = .focus
+    debug("camera track cut \(selected.rawValue) at \(String(format: "%.1f", currentSeconds))s", category: "camera-track")
+  }
+
+  func clearCameraTrack() {
+    cameraTrack = .empty
+    debug("camera track cleared", category: "camera-track")
+  }
+
+  func cameraForTrack(at seconds: Double) -> Camera? {
+    cameraTrack.camera(at: seconds)
+  }
+
+  func exportPreviewSample() {
+    exportRange(previewOnly: true, queued: false)
+  }
+
+  func queueExportRange() {
+    exportRange(previewOnly: false, queued: true)
+  }
+
+  func currentLayoutPresetData() throws -> Data {
+    let preset = CustomLayoutPreset(
+      name: "TeslaCam Layout",
+      layoutRequest: layoutRequest,
+      previewLayoutMode: previewLayoutMode,
+      focusedCamera: focusedCamera,
+      overlayOptions: exportOverlayOptions,
+      cameraTrack: cameraTrack
+    )
+    return try CustomLayoutPresetCodec.encode(preset)
+  }
+
+  func applyLayoutPreset(data: Data) throws {
+    let preset = try CustomLayoutPresetCodec.decode(data)
+    layoutRequest = preset.layoutRequest
+    previewLayoutMode = preset.previewLayoutMode
+    focusedCamera = preset.focusedCamera
+    exportOverlayOptions = preset.overlayOptions
+    cameraTrack = preset.cameraTrack.normalized
+    layoutPresetStatus = "Layout loaded"
+  }
+
   func exportRange() {
-    guard !clipSets.isEmpty, !exporter.isExporting else { return }
+    exportRange(previewOnly: false, queued: false)
+  }
+
+  private func exportRange(previewOnly: Bool, queued: Bool) {
+    guard !clipSets.isEmpty else { return }
+    guard queued || !exporter.isExporting else { return }
     normalizeRange()
     debug("export open save panel: \(selectedRangeDescription)", category: "export")
 
 #if DEBUG
     let isAutomatedTest = ProcessInfo.processInfo.environment[DebugEnvironment.uiTestMode] != nil
     if isAutomatedTest, let debugOutputURL = debugOutputURL() {
-      exportRange(to: debugOutputURL)
+      exportRange(to: debugOutputURL, previewOnly: previewOnly, queued: queued)
       return
     }
 #endif
@@ -601,15 +766,16 @@ final class AppState: ObservableObject {
       allowedContentTypes: PlatformFileAccess.contentTypes(for: exportPreset),
       directoryURL: rootURL?.deletingLastPathComponent() ?? sourceURLs.first?.deletingLastPathComponent()
     ) { [weak self] url in
-      self?.exportRange(to: url)
+      self?.exportRange(to: url, previewOnly: previewOnly, queued: queued)
     }
     #else
     // On iPad, export to app scratch space, then offer share.
     let scratchDir = FileManager.default.temporaryDirectory
       .appendingPathComponent("teslacam_export", isDirectory: true)
     try? FileManager.default.createDirectory(at: scratchDir, withIntermediateDirectories: true)
-    let outputURL = scratchDir.appendingPathComponent(defaultExportFilename())
-    exportRange(to: outputURL)
+    let filename = previewOnly ? "preview_\(defaultExportFilename())" : defaultExportFilename()
+    let outputURL = scratchDir.appendingPathComponent(filename)
+    exportRange(to: outputURL, previewOnly: previewOnly, queued: queued)
     #endif
   }
 
@@ -787,6 +953,37 @@ final class AppState: ObservableObject {
     return detected.isEmpty ? Set(Camera.allCases) : detected
   }
 
+  var effectiveExportOverlayOptions: ExportOverlayOptions {
+    var options = exportOverlayOptions
+    if privacyMode {
+      options.telemetryHUD = false
+      options.routeMap = false
+      options.privacyMask = true
+      options.includeReport = false
+    }
+    return options
+  }
+
+  var activePreviewCameras: [Camera] {
+    let ordered = camerasForCurrentLayout()
+    switch previewLayoutMode {
+    case .focus:
+      if let focusedCamera, ordered.contains(focusedCamera) {
+        return [focusedCamera]
+      }
+      return Array(ordered.prefix(1))
+    case .frontRear:
+      let pair = [.front, .back].filter { ordered.contains($0) }
+      return pair.isEmpty ? Array(ordered.prefix(2)) : pair
+    case .horizontal, .pictureInPicture, .grid:
+      return ordered
+    }
+  }
+
+  var timelineStartOffsetForCurrentClip: Double {
+    currentSegmentStartSeconds
+  }
+
   func shutdownForTermination() {
     playback.stop()
     exporter.cancelExport()
@@ -939,21 +1136,32 @@ final class AppState: ObservableObject {
   private func clearTelemetry() {
     telemetryTimeline = nil
     telemetryURL = nil
+    telemetryModel = nil
+    telemetryRoute = []
+    telemetryEventMarkers = []
     telemetryText = ""
   }
 
   private func loadTelemetry(for set: ClipSet?) {
     let url = set?.file(for: .front) ?? set?.file(for: .back) ?? set?.files.values.first
     telemetryTimeline = nil
+    telemetryModel = nil
+    telemetryRoute = url.flatMap { telemetryRouteByURL[$0] } ?? []
+    telemetryEventMarkers = []
     telemetryURL = url
     telemetryText = ""
     guard let fileURL = url else { return }
     debug("telemetry load \(fileURL.lastPathComponent)", category: "telemetry")
     DispatchQueue.global(qos: .utility).async {
       let timeline = try? TelemetryParser.parseTimeline(url: fileURL)
+      let route = timeline.map { Self.routePoints(from: $0) } ?? []
+      let markers = timeline.map { TelemetryEventMarker.markers(from: $0) } ?? []
       DispatchQueue.main.async {
         guard self.telemetryURL == fileURL else { return }
         self.telemetryTimeline = timeline
+        self.telemetryRouteByURL[fileURL] = route
+        self.telemetryRoute = route
+        self.telemetryEventMarkers = markers
         self.debug(
           timeline == nil ? "telemetry unavailable for \(fileURL.lastPathComponent)" : "telemetry ready for \(fileURL.lastPathComponent)",
           category: "telemetry"
@@ -970,13 +1178,22 @@ final class AppState: ObservableObject {
 
   private func updateOverlayAndTelemetry(globalSeconds: Double, clipIndex: Int?, localSeconds: Double) {
     overlayText = TeslaCamFormatters.fullDateTime.string(from: date(forGlobalSeconds: globalSeconds))
+    currentEvent = eventSummaries.last { event in
+      clipStartOffset(at: event.clipIndex) <= globalSeconds + 0.5
+    }
     guard clipIndex != nil, let timeline = telemetryTimeline else {
+      telemetryModel = nil
       telemetryText = ""
       return
     }
     let safeLocal = max(0, localSeconds)
+    if let trackCamera = cameraForTrack(at: globalSeconds), camerasDetected.contains(trackCamera) {
+      focusedCamera = trackCamera
+      previewLayoutMode = .focus
+    }
     let frame = timeline.closest(to: safeLocal * 1000.0)
-    telemetryText = formatTelemetry(frame?.sei)
+    telemetryModel = frame.map { TelemetryDisplayModel(sei: $0.sei) }
+    telemetryText = privacyMode ? "" : formatTelemetry(frame?.sei)
   }
 
   private func expectedCoverageCameras(for set: ClipSet) -> Set<Camera> {
@@ -1006,25 +1223,7 @@ final class AppState: ObservableObject {
 
   private func formatTelemetry(_ sei: SeiMetadata?) -> String {
     guard let s = sei else { return "" }
-    let speedKmh = Double(s.vehicleSpeedMps) * 3.6
-    let speed = String(format: "%.1f km/h", speedKmh)
-    let pedal = String(format: "%.0f%%", max(0, Double(s.acceleratorPedalPosition)))
-    let steering = String(format: "%.0f°", Double(s.steeringWheelAngle))
-    let gear: String
-    switch s.gearState {
-    case .park: gear = "P"
-    case .drive: gear = "D"
-    case .reverse: gear = "R"
-    case .neutral: gear = "N"
-    }
-    let ap: String
-    switch s.autopilotState {
-    case .none: ap = "Off"
-    case .selfDriving: ap = "FSD"
-    case .autosteer: ap = "Autosteer"
-    case .tacc: ap = "TACC"
-    }
-    return "Speed: \(speed)  Pedal: \(pedal)  Steer: \(steering)  Gear: \(gear)  AP: \(ap)  Brake: \(s.brakeApplied ? "On" : "Off")"
+    return TelemetryDisplayModel(sei: s).compactText
   }
 
   private func orderCameras(_ cams: [Camera], profile: CameraLayoutProfile) -> [Camera] {
@@ -1124,8 +1323,8 @@ final class AppState: ObservableObject {
     )
   }
 
-  private func exportRange(to chosenURL: URL) {
-    guard let request = makeExportRequest(for: chosenURL) else {
+  private func exportRange(to chosenURL: URL, previewOnly: Bool, queued: Bool) {
+    guard let request = makeExportRequest(for: chosenURL, previewOnly: previewOnly) else {
       errorMessage = "No clips found in the selected range."
       showError = true
       return
@@ -1136,7 +1335,11 @@ final class AppState: ObservableObject {
       return
     }
     debug("export request: preset=\(request.preset.rawValue) cameras=\(request.enabledCameras.map { $0.rawValue }.sorted().joined(separator: ",")) duration=\(String(format: "%.2f", request.totalDuration))", category: "export")
-    exporter.export(request: request)
+    if queued {
+      exporter.enqueue(request: request)
+    } else {
+      exporter.export(request: request)
+    }
   }
 
   private func debug(_ message: String, category: String = "app") {
@@ -1171,19 +1374,37 @@ final class AppState: ObservableObject {
     )
   }
 
-  private func makeExportRequest(for chosenURL: URL) -> ExportRequest? {
+  private func makeExportRequest(for chosenURL: URL, previewOnly: Bool = false) -> ExportRequest? {
     let sets = selectedSetsForExport
+    let startDate = trimStartDate
+    let endDate: Date
+    let endSeconds: Double
+    let rangeText: String
+    if previewOnly {
+      let duration = min(10, max(0.1, trimEndDate.timeIntervalSince(trimStartDate)))
+      endDate = trimStartDate.addingTimeInterval(duration)
+      endSeconds = min(trimEndSeconds, trimStartSeconds + duration)
+      rangeText = "Preview sample \(Int(duration.rounded()))s"
+    } else {
+      endDate = trimEndDate
+      endSeconds = trimEndSeconds
+      rangeText = selectedRangeDescription
+    }
     return exportStore.makeRequest(
       sets: sets,
       chosenURL: chosenURL,
       preset: exportPreset,
       enabledCameras: activeExportCameras,
+      layoutRequest: layoutRequest,
+      overlayOptions: effectiveExportOverlayOptions,
       trimStartSeconds: trimStartSeconds,
-      trimEndSeconds: trimEndSeconds,
-      trimStartDate: trimStartDate,
-      trimEndDate: trimEndDate,
-      selectedRangeText: selectedRangeDescription,
-      partialClipCount: partialSelectedSetCount
+      trimEndSeconds: endSeconds,
+      trimStartDate: startDate,
+      trimEndDate: endDate,
+      selectedRangeText: rangeText,
+      partialClipCount: partialSelectedSetCount,
+      cameraTrack: cameraTrack,
+      isPreviewSample: previewOnly
     )
   }
 
@@ -1237,6 +1458,150 @@ final class AppState: ObservableObject {
       sixCameraSetCount: six,
       missingCameraCounts: missingCameraCounts
     )
+  }
+
+  private func buildClipHealthFacts(from sets: [ClipSet]) -> [ClipHealthFact] {
+    let totalDuration = sets.reduce(0) { $0 + $1.duration }
+    let fileCount = sets.reduce(0) { $0 + $1.files.count }
+    let expectedMissing = sets.reduce(0) { partials, set in
+      let expected = expectedCoverageCameras(for: set)
+      return partials + max(0, expected.subtracting(Set(set.files.keys)).count)
+    }
+    let resolutions = sets.flatMap { set in
+      set.naturalSizes.values.map { size in
+        "\(Int(size.width.rounded()))x\(Int(size.height.rounded()))"
+      }
+    }
+    let mostCommonResolution = Dictionary(grouping: resolutions, by: { $0 })
+      .max { lhs, rhs in lhs.value.count < rhs.value.count }?
+      .key ?? "Unknown"
+
+    return [
+      ClipHealthFact(
+        title: "Files",
+        value: "\(fileCount)",
+        severity: .info
+      ),
+      ClipHealthFact(
+        title: "Duration",
+        value: durationString(seconds: totalDuration),
+        severity: .info
+      ),
+      ClipHealthFact(
+        title: "Main Size",
+        value: mostCommonResolution,
+        severity: .info
+      ),
+      ClipHealthFact(
+        title: "Missing",
+        value: "\(expectedMissing)",
+        severity: expectedMissing == 0 ? .info : .warning
+      )
+    ]
+  }
+
+  private func buildEventSummaries(from sets: [ClipSet]) -> [TeslaCamEventSummary] {
+    var seenFolders = Set<String>()
+    var events: [TeslaCamEventSummary] = []
+    for (index, set) in sets.enumerated() {
+      guard let folder = set.files.values.first?.deletingLastPathComponent() else { continue }
+      let folderKey = folder.standardizedFileURL.path
+      guard seenFolders.insert(folderKey).inserted else { continue }
+      let event = Self.loadEventSummary(folder: folder, fallbackDate: set.date, clipIndex: index)
+      events.append(event)
+    }
+    return events.sorted { $0.timestamp < $1.timestamp }
+  }
+
+  private static func loadEventSummary(folder: URL, fallbackDate: Date, clipIndex: Int) -> TeslaCamEventSummary {
+    let eventURL = folder.appendingPathComponent("event.json")
+    let thumbnailURL = folder.appendingPathComponent("thumb.png")
+    var payload: EventJSON?
+    if let data = try? Data(contentsOf: eventURL) {
+      payload = try? JSONDecoder().decode(EventJSON.self, from: data)
+    }
+    let date = payload?.parsedTimestamp ?? fallbackDate
+    let coordinate = TelemetryCoordinate(
+      latitude: Double(payload?.estLat ?? "") ?? 0,
+      longitude: Double(payload?.estLon ?? "") ?? 0
+    )
+    return TeslaCamEventSummary(
+      id: folder.standardizedFileURL.path,
+      clipIndex: clipIndex,
+      timestamp: date,
+      folderURL: folder,
+      thumbnailURL: FileManager.default.fileExists(atPath: thumbnailURL.path) ? thumbnailURL : nil,
+      city: payload?.city ?? "",
+      street: payload?.street ?? "",
+      reason: payload?.reason ?? "recording",
+      camera: payload?.camera ?? "",
+      coordinate: coordinate.isUsable ? coordinate : nil
+    )
+  }
+
+  private struct EventJSON: Decodable {
+    let timestamp: String?
+    let city: String?
+    let street: String?
+    let estLat: String?
+    let estLon: String?
+    let reason: String?
+    let camera: String?
+
+    enum CodingKeys: String, CodingKey {
+      case timestamp
+      case city
+      case street
+      case estLat = "est_lat"
+      case estLon = "est_lon"
+      case reason
+      case camera
+    }
+
+    var parsedTimestamp: Date? {
+      guard let timestamp else { return nil }
+      return TeslaCamFormatters.eventTimestamp.date(from: timestamp)
+    }
+  }
+
+  private static func routePoints(from timeline: TelemetryTimeline) -> [TelemetryRoutePoint] {
+    var points: [TelemetryRoutePoint] = []
+    points.reserveCapacity(min(240, timeline.frames.count))
+    var lastWholeSecond = -1
+    var lastCoordinate: TelemetryCoordinate?
+    for frame in timeline.frames {
+      let seconds = Int((frame.timestampMs / 1000.0).rounded(.down))
+      guard seconds != lastWholeSecond else { continue }
+      lastWholeSecond = seconds
+      let coordinate = TelemetryCoordinate(
+        latitude: frame.sei.latitudeDeg,
+        longitude: frame.sei.longitudeDeg
+      )
+      guard coordinate.isUsable, coordinate != lastCoordinate else { continue }
+      lastCoordinate = coordinate
+      points.append(
+        TelemetryRoutePoint(
+          id: points.count,
+          seconds: frame.timestampMs / 1000.0,
+          coordinate: coordinate,
+          speedKmh: Double(frame.sei.vehicleSpeedMps) * 3.6,
+          headingDeg: frame.sei.headingDeg
+        )
+      )
+    }
+    return points
+  }
+
+  private func camerasForCurrentLayout() -> [Camera] {
+    let detected = Set(camerasDetected)
+    let plan = CameraLayoutPlan.build(
+      requestedProfile: layoutRequest,
+      detectedCameras: detected,
+      enabledCameras: activeExportCameras,
+      naturalSizes: [:]
+    )
+    let ordered = plan.renderOrder.filter { detected.contains($0) }
+    return ordered.isEmpty ? camerasDetected : ordered
   }
 
   private func presentDuplicateResolverIfNeeded(for index: ClipIndex) {
@@ -1357,6 +1722,9 @@ final class AppState: ObservableObject {
     camerasDetected = [.front, .back, .left, .right, .left_pillar, .right_pillar]
     selectedExportCameras = Set(camerasDetected)
     exportPreset = .fastHEVC
+    eventSummaries = buildEventSummaries(from: sampleSets)
+    clipHealthFacts = buildClipHealthFacts(from: sampleSets)
+    cameraTrack = .empty
     currentIndex = 0
     overlayText = formatDateTime(base)
     rebuildTimeline()
