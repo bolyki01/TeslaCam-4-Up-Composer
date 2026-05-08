@@ -1,5 +1,167 @@
 {
   "description": "Two standard HW3 timestamps with all four classic cameras.",
+  "expected_layout": {
+    "auto": {
+      "canvas": {
+        "height": 1920,
+        "width": 2560
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 0
+        },
+        "left_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "right_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "hidden_cameras": [],
+      "kind": "4up",
+      "profile": "auto",
+      "render_order": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ]
+    },
+    "legacy4": {
+      "canvas": {
+        "height": 1920,
+        "width": 2560
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 0
+        },
+        "left_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "right_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "hidden_cameras": [],
+      "kind": "4up",
+      "profile": "legacy4",
+      "render_order": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ]
+    },
+    "sixcam": {
+      "canvas": {
+        "height": 2880,
+        "width": 3840
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "left": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "left_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 1920
+        },
+        "right": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 960
+        },
+        "right_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 1920
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "hidden_cameras": [
+        "left_repeater",
+        "right_repeater"
+      ],
+      "kind": "6up",
+      "profile": "sixcam",
+      "render_order": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ]
+    }
+  },
   "expected_scan": {
     "keep-all": {
       "cameras": [

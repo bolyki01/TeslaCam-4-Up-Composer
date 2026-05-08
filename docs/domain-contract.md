@@ -2,6 +2,16 @@
 
 This contract pins the behavior that must stay aligned between the native macOS app and the Python CLI. The app remains the shipping macOS export path. The CLI remains portable and dependency-light.
 
+## Camera vocabulary
+
+The canonical camera values, in canonical render order, are:
+
+```text
+front, back, left_repeater, right_repeater, left, right, left_pillar, right_pillar
+```
+
+Camera tokens parsed from filenames are lowercased, hyphens converted to underscores, repeated underscores collapsed, and trailing numeric suffixes removed. After normalization, accepted aliases are: `fwd` / `forward` → `front`; `rear` / `rear_camera` → `back`; `left_rear` → `left_repeater`; `right_rear` → `right_repeater`. Tokens containing both a side word and `pillar` map to the pillar camera on that side; tokens containing both a side word and `repeat` map to the repeater on that side. Tokens that do not normalize to one of the canonical values are ignored.
+
 ## Clip file discovery
 
 Source inputs are treated as untrusted media trees. Recursive scans consider regular `.mp4` and `.mov` files whose basename matches:
@@ -10,17 +20,7 @@ Source inputs are treated as untrusted media trees. Recursive scans consider reg
 YYYY-MM-DD_HH-MM-SS-CAMERA.(mp4|mov)
 ```
 
-The timestamp is parsed with `yyyy-MM-dd_HH-mm-ss` / `%Y-%m-%d_%H-%M-%S` in the local timezone used by the process. Files with malformed timestamps, unknown camera tokens, unsupported extensions, or hidden path components are ignored. Hidden path components are any relative path segment beginning with `.`.
-
-## Camera normalization
-
-Camera tokens are lowercased, hyphens are converted to underscores, repeated underscores are collapsed, and trailing numeric suffixes are removed. The canonical camera values are:
-
-```text
-front, back, left_repeater, right_repeater, left, right, left_pillar, right_pillar
-```
-
-Accepted aliases include `fwd` and `forward` for `front`; `rear` and `rear_camera` for `back`; `left_rear` for `left_repeater`; and `right_rear` for `right_repeater`. Tokens containing both side and `pillar` map to pillar cameras. Tokens containing both side and `repeat` map to repeater cameras.
+The timestamp is parsed with `yyyy-MM-dd_HH-mm-ss` / `%Y-%m-%d_%H-%M-%S` in the local timezone used by the process. The `CAMERA` token is normalized using the rules in **Camera vocabulary** above. Files with malformed timestamps, unknown camera tokens, unsupported extensions, or hidden path components are ignored. Hidden path components are any relative path segment beginning with `.`.
 
 ## Duplicate policy
 
@@ -40,11 +40,7 @@ Clip sets are sorted by start time, then timestamp string, then deterministic fi
 
 ## Layout selection
 
-The canonical camera order is:
-
-```text
-front, back, left_repeater, right_repeater, left, right, left_pillar, right_pillar
-```
+Layouts use the canonical camera order from **Camera vocabulary**. The three profiles are:
 
 `legacy4` / forced 4-camera uses `front, back, left_repeater, right_repeater` in a two-by-two layout.
 

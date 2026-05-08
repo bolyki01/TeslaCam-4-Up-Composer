@@ -4,8 +4,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+from teslacam_cli.cli import default_output_filename, unique_output_path
 from teslacam_cli.domain_contract import dry_run_manifest, manifest_json, scan_manifest
-from teslacam_cli.layouts import build_layout, fill_missing_dimensions
+from teslacam_cli.layouts import build_camera_layout_plan, build_layout, fill_missing_dimensions
 from teslacam_cli.models import Camera, Dimensions, DuplicatePolicy, LayoutKind, OutputConflictPolicy, SelectedSet
 from teslacam_cli.scanner import scan_source
 
@@ -29,6 +30,49 @@ class DomainFixtureParityTests(unittest.TestCase):
                             manifest.pop("schema_version")
                             manifest.pop("type")
                             self.assertEqual(manifest, case["expected_scan"][policy.value])
+
+    def test_shared_layout_fixtures_round_trip_through_scan_then_layout_for_all_profiles(self):
+        from teslacam_cli.domain_contract import layout_manifest
+        cases = sorted(FIXTURE_DIR.glob("*.json"))
+        self.assertGreaterEqual(len(cases), 4)
+        for fixture_path in cases:
+            with self.subTest(fixture=fixture_path.name):
+                case = json.loads(fixture_path.read_text(encoding="utf-8"))
+                self.assertIn("expected_layout", case, f"{fixture_path.name} missing expected_layout")
+                self.assertEqual(set(case["expected_layout"]), {"auto", "legacy4", "sixcam"})
+                with TemporaryDirectory() as temp_dir:
+                    source = Path(temp_dir)
+                    _materialize_case(case, source)
+                    scan = scan_source(source, duplicate_policy=DuplicatePolicy.MERGE_BY_TIME)
+                    for profile in ("auto", "legacy4", "sixcam"):
+                        with self.subTest(profile=profile):
+                            layout = build_camera_layout_plan(
+                                profile=profile,
+                                available_cameras=scan.cameras,
+                                probed_dimensions={},
+                            )
+                            self.assertEqual(layout_manifest(layout), case["expected_layout"][profile])
+
+    def test_default_output_filename_matches_contract_format(self):
+        from datetime import datetime
+        start = datetime(2026, 1, 1, 0, 0, 0)
+        end = datetime(2026, 1, 1, 0, 5, 30)
+        self.assertEqual(
+            default_output_filename("lossless", start, end),
+            "teslacam_lossless_2026-01-01_00-00-00_to_2026-01-01_00-05-30.mp4",
+        )
+        self.assertEqual(
+            default_output_filename("fast", start, end),
+            "teslacam_fast_2026-01-01_00-00-00_to_2026-01-01_00-05-30.mp4",
+        )
+
+    def test_unique_output_path_appends_dash_counter(self):
+        with TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir) / "teslacam_lossless_a_to_b.mp4"
+            base.write_bytes(b"")
+            self.assertEqual(unique_output_path(base).name, "teslacam_lossless_a_to_b-2.mp4")
+            (base.parent / "teslacam_lossless_a_to_b-2.mp4").write_bytes(b"")
+            self.assertEqual(unique_output_path(base).name, "teslacam_lossless_a_to_b-3.mp4")
 
     def test_dry_run_manifest_is_machine_readable_and_contains_export_contract(self):
         with TemporaryDirectory() as temp_dir:
@@ -89,6 +133,8 @@ def _materialize_case(case: dict, source: Path) -> None:
         path.write_bytes(b"fixture")
         if "mtime" in entry:
             os.utime(path, (entry["mtime"], entry["mtime"]))
+
+
 
 
 if __name__ == "__main__":

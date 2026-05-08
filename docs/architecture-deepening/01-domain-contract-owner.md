@@ -24,12 +24,12 @@ Target shape:
 - Fixtures are the Interface. Callers learn the fixture schema, not internal rules.
 
 Steps:
-1. Extend fixture schema with `expected_layout`, `expected_selection`, and `expected_output`.
-2. Add a Swift manifest builder for the same dry-run fields Python emits.
-3. Add Swift tests that compare all fixture fields, not only scan fields.
-4. Add Python tests for layout and output conflict against the same fixtures.
-5. Move camera order and alias notes into one contract vocabulary section in `docs/domain-contract.md`.
-6. Keep fixture data small: malformed names, hidden paths, duplicates, mixed HW3/HW4, directory output, file output, conflict suffix.
+1. Extend fixture schema with `expected_layout`, `expected_selection`, and `expected_output`. **`expected_layout` done for all 5 fixtures across `auto`/`legacy4`/`sixcam` profiles. `expected_selection` and `expected_output` per-fixture still TODO.**
+2. Add a Swift manifest builder for the same dry-run fields Python emits. **TODO** — Swift currently has no manifest builder. Without it the parity check is one-directional (Python only).
+3. Add Swift tests that compare all fixture fields, not only scan fields. **Blocked on step 2.**
+4. Add Python tests for layout and output conflict against the same fixtures. **Done** — `tests/test_domain_contract.py` validates `build_camera_layout_plan` against the new `expected_layout` block for every fixture/profile and `default_output_filename` + `unique_output_path` against the contract format.
+5. Move camera order and alias notes into one contract vocabulary section in `docs/domain-contract.md`. **Done** — single "Camera vocabulary" section is now the source of truth, and "Clip file discovery" + "Layout selection" reference it.
+6. Keep fixture data small: malformed names, hidden paths, duplicates, mixed HW3/HW4, directory output, file output, conflict suffix. **Mostly done; the conflict-suffix and directory-output cases live in code-level tests rather than fixture data, which is acceptable.**
 
 Tests:
 - `python3 -m unittest tests.test_domain_contract`
