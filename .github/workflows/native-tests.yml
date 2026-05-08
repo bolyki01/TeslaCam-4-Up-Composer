@@ -31,6 +31,7 @@ jobs:
             -destination 'platform=macOS' \
             -parallel-testing-enabled NO \
             -maximum-parallel-testing-workers 1 \
+            MACOSX_DEPLOYMENT_TARGET=14.0 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -48,6 +49,7 @@ jobs:
             -parallel-testing-enabled NO \
             -maximum-parallel-testing-workers 1 \
             -only-testing:TeslaCamTests \
+            MACOSX_DEPLOYMENT_TARGET=14.0 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
