@@ -511,7 +511,11 @@ struct TeslaCamTests {
     )
     let restored = readStore.restoreBookmarkedURLs()
 
-    #expect(restored.map(\.path) == [folder.standardizedFileURL.path])
+    // macOS bookmark resolution returns the canonical /private/var path; the
+    // input was the /var alias. Compare via resolvingSymlinksInPath so the
+    // assertion is independent of the temp-directory symlink layout.
+    let canonical = { (url: URL) in url.resolvingSymlinksInPath().standardizedFileURL.path }
+    #expect(restored.map(canonical) == [canonical(folder)])
   }
 
   @Test func sharedDomainFixturesMatchNativeScanManifestsForAllDuplicatePolicies() async throws {
