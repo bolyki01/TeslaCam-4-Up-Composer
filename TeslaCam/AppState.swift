@@ -295,10 +295,6 @@ struct ExportStore {
 }
 
 final class AppState: ObservableObject {
-  private enum StorageKey {
-    static let lastSourceBookmarks = "TeslaCam.lastSourceBookmarks"
-  }
-
   private enum DebugEnvironment {
     static let source = "TESLACAM_DEBUG_SOURCE"
     static let exportDirectory = "TESLACAM_DEBUG_EXPORT_DIR"
@@ -383,6 +379,7 @@ final class AppState: ObservableObject {
 
   private var timelineStore = TimelineStore()
   private let exportStore = ExportStore()
+  private let sourceStore = SourceStore()
   private var observers: Set<AnyCancellable> = []
   private var currentSegmentStartSeconds: Double = 0
   private var currentSegmentClipIndex: Int?
@@ -391,7 +388,6 @@ final class AppState: ObservableObject {
   private var telemetryTimeline: TelemetryTimeline?
   private var telemetryURL: URL?
   private var telemetryRouteByURL: [URL: [TelemetryRoutePoint]] = [:]
-  private var activeSecurityScopedURLs: [URL] = []
 
   init() {
     exporter = NativeExportController()
@@ -1211,85 +1207,27 @@ final class AppState: ObservableObject {
   }
 
   private func normalizeSources(_ urls: [URL]) -> [URL] {
-    let fm = FileManager.default
-    var seen = Set<String>()
-    var out: [URL] = []
-    out.reserveCapacity(urls.count)
-    for raw in urls {
-      let u = raw.standardizedFileURL
-      guard fm.fileExists(atPath: u.path) else { continue }
-      let key = u.path
-      if seen.contains(key) { continue }
-      seen.insert(key)
-      out.append(u)
-    }
-    return out
+    sourceStore.normalize(urls)
   }
 
   private func rememberLastSources(_ urls: [URL]) {
-    let bookmarks = urls.compactMap { url -> Data? in
-      try? url.bookmarkData(
-        options: PlatformFileAccess.bookmarkCreationOptions,
-        includingResourceValuesForKeys: nil,
-        relativeTo: nil
-      )
-    }
-    UserDefaults.standard.set(bookmarks, forKey: StorageKey.lastSourceBookmarks)
+    sourceStore.rememberBookmarks(for: urls)
   }
 
   @discardableResult
   private func restoreLastSourcesIfPossible() -> Bool {
-    guard let bookmarks = UserDefaults.standard.array(forKey: StorageKey.lastSourceBookmarks) as? [Data],
-          !bookmarks.isEmpty else {
-      return false
-    }
-
-    var restored: [URL] = []
-    var refreshedBookmarks: [Data] = []
-    for bookmark in bookmarks {
-      var stale = false
-      guard let url = try? URL(
-        resolvingBookmarkData: bookmark,
-        options: PlatformFileAccess.bookmarkResolutionOptions,
-        relativeTo: nil,
-        bookmarkDataIsStale: &stale
-      ) else {
-        continue
-      }
-      guard FileManager.default.fileExists(atPath: url.path) else { continue }
-      restored.append(url)
-      if stale,
-         let refreshed = try? url.bookmarkData(
-          options: PlatformFileAccess.bookmarkCreationOptions,
-          includingResourceValuesForKeys: nil,
-          relativeTo: nil
-         ) {
-        refreshedBookmarks.append(refreshed)
-      } else {
-        refreshedBookmarks.append(bookmark)
-      }
-    }
-
+    let restored = sourceStore.restoreBookmarkedURLs()
     guard !restored.isEmpty else { return false }
-    if !refreshedBookmarks.isEmpty {
-      UserDefaults.standard.set(refreshedBookmarks, forKey: StorageKey.lastSourceBookmarks)
-    }
     indexSources(restored)
     return true
   }
 
   private func activateSecurityScopedAccess(for urls: [URL]) {
-    deactivateSecurityScopedAccess()
-    activeSecurityScopedURLs = urls.filter { url in
-      url.startAccessingSecurityScopedResource()
-    }
+    sourceStore.activateSecurityScope(for: urls)
   }
 
   private func deactivateSecurityScopedAccess() {
-    for url in activeSecurityScopedURLs {
-      url.stopAccessingSecurityScopedResource()
-    }
-    activeSecurityScopedURLs.removeAll()
+    sourceStore.deactivateSecurityScope()
   }
 
   private func defaultExportFilename() -> String {

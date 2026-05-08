@@ -1,0 +1,118 @@
+import Foundation
+
+/// Owns the URLs the user picked as inputs, the security-scoped access lifecycle,
+/// and the persisted bookmarks so the same picks survive across launches.
+///
+/// Carved out of `AppState` so the rest of the app talks to source-folder
+/// concerns through a small interface and can be unit-tested with a stand-in
+/// `UserDefaults` / `FileManager`.
+final class SourceStore {
+  /// `UserDefaults` key holding `[Data]` of the bookmark blobs for the last
+  /// successful set of input folders. Public so test doubles can target it.
+  static let defaultBookmarkKey = "TeslaCam.lastSourceBookmarks"
+
+  private let bookmarkKey: String
+  private let userDefaults: UserDefaults
+  private let fileManager: FileManager
+  private var activeSecurityScopedURLs: [URL] = []
+
+  init(
+    bookmarkKey: String = SourceStore.defaultBookmarkKey,
+    userDefaults: UserDefaults = .standard,
+    fileManager: FileManager = .default
+  ) {
+    self.bookmarkKey = bookmarkKey
+    self.userDefaults = userDefaults
+    self.fileManager = fileManager
+  }
+
+  /// Standardizes paths, drops missing entries, and de-duplicates while preserving order.
+  func normalize(_ urls: [URL]) -> [URL] {
+    var seen = Set<String>()
+    var out: [URL] = []
+    out.reserveCapacity(urls.count)
+    for raw in urls {
+      let u = raw.standardizedFileURL
+      guard fileManager.fileExists(atPath: u.path) else { continue }
+      if seen.insert(u.path).inserted {
+        out.append(u)
+      }
+    }
+    return out
+  }
+
+  /// Persists security-scoped bookmarks for the supplied URLs so they can be
+  /// re-resolved on the next launch.
+  func rememberBookmarks(for urls: [URL]) {
+    let bookmarks = urls.compactMap { url -> Data? in
+      try? url.bookmarkData(
+        options: PlatformFileAccess.bookmarkCreationOptions,
+        includingResourceValuesForKeys: nil,
+        relativeTo: nil
+      )
+    }
+    userDefaults.set(bookmarks, forKey: bookmarkKey)
+  }
+
+  /// Resolves the persisted bookmarks. Stale bookmarks are refreshed in place,
+  /// missing files are dropped, and the persisted blob is rewritten if any
+  /// bookmark was refreshed. Returns the live URLs that survived resolution
+  /// (empty if nothing usable persists).
+  func restoreBookmarkedURLs() -> [URL] {
+    guard
+      let bookmarks = userDefaults.array(forKey: bookmarkKey) as? [Data],
+      !bookmarks.isEmpty
+    else {
+      return []
+    }
+
+    var restored: [URL] = []
+    var refreshedBookmarks: [Data] = []
+    for bookmark in bookmarks {
+      var stale = false
+      guard
+        let url = try? URL(
+          resolvingBookmarkData: bookmark,
+          options: PlatformFileAccess.bookmarkResolutionOptions,
+          relativeTo: nil,
+          bookmarkDataIsStale: &stale
+        ),
+        fileManager.fileExists(atPath: url.path)
+      else {
+        continue
+      }
+      restored.append(url)
+      if stale,
+         let refreshed = try? url.bookmarkData(
+          options: PlatformFileAccess.bookmarkCreationOptions,
+          includingResourceValuesForKeys: nil,
+          relativeTo: nil
+         ) {
+        refreshedBookmarks.append(refreshed)
+      } else {
+        refreshedBookmarks.append(bookmark)
+      }
+    }
+
+    if !refreshedBookmarks.isEmpty, restored.count == refreshedBookmarks.count {
+      userDefaults.set(refreshedBookmarks, forKey: bookmarkKey)
+    }
+    return restored
+  }
+
+  /// Starts security-scoped access for the supplied URLs and remembers which
+  /// ones succeeded so they can be released later. Idempotent: any previously
+  /// active scope is released first.
+  func activateSecurityScope(for urls: [URL]) {
+    deactivateSecurityScope()
+    activeSecurityScopedURLs = urls.filter { $0.startAccessingSecurityScopedResource() }
+  }
+
+  /// Releases all currently held security-scoped access.
+  func deactivateSecurityScope() {
+    for url in activeSecurityScopedURLs {
+      url.stopAccessingSecurityScopedResource()
+    }
+    activeSecurityScopedURLs.removeAll()
+  }
+}

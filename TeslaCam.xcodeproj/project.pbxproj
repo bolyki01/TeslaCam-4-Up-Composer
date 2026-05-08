@@ -31,10 +31,12 @@
 		50C6855A2F3526330073314B /* NativeExportController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C6855C2F3526330073314B /* NativeExportController.swift */; };
 		50C6855E2F3526330073314B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 50C6855D2F3526330073314B /* Assets.xcassets */; };
 		50F4EAD1A7AC5FC49F71BF31 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C6853D2F3526330073314B /* AppState.swift */; };
+		5471D882A47D8B38EC261269 /* SourceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFC3905691B5A214C7F12DC6 /* SourceStore.swift */; };
 		5E18ECCAC9BDFE1995BB9F3C /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F6752ADD69F7C76B881977D4 /* Foundation.framework */; };
 		7651D245D03D9627B0901116 /* NativeExportController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C6855C2F3526330073314B /* NativeExportController.swift */; };
 		8878B92A5590887F535BD892 /* IPadMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53FEA6CD4150968355138666 /* IPadMain.swift */; };
 		9D396087622135F7A72945A3 /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685462F3526330073314B /* PlaybackController.swift */; };
+		B3749F963B09DDA60FA98763 /* SourceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFC3905691B5A214C7F12DC6 /* SourceStore.swift */; };
 		B4FFA09213F66C171AF20512 /* TelemetryProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B832DA43FCA85C989EFF678 /* TelemetryProcessor.swift */; };
 		B582B85BBFA5AFDD00630B73 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C6853E2F3526330073314B /* ContentView.swift */; };
 		C310E15FCC440A1D947222CD /* MetalPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685422F3526330073314B /* MetalPlayerView.swift */; };
@@ -84,6 +86,7 @@
 		53FEA6CD4150968355138666 /* IPadMain.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IPadMain.swift; sourceTree = "<group>"; };
 		5B832DA43FCA85C989EFF678 /* TelemetryProcessor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TelemetryProcessor.swift; sourceTree = "<group>"; };
 		9B9A79DBE9E309C323846661 /* PlatformFileAccess.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlatformFileAccess.swift; sourceTree = "<group>"; };
+		BFC3905691B5A214C7F12DC6 /* SourceStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SourceStore.swift; sourceTree = "<group>"; };
 		E7761E775BC37CD7C35A556C /* MetalPlayerView_iPad.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetalPlayerView_iPad.swift; sourceTree = "<group>"; };
 		F6752ADD69F7C76B881977D4 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
@@ -199,6 +202,7 @@
 				53FEA6CD4150968355138666 /* IPadMain.swift */,
 				3615C866A634FF23B9D53ACE /* TeslaCam_iPad.entitlements */,
 				5B832DA43FCA85C989EFF678 /* TelemetryProcessor.swift */,
+				BFC3905691B5A214C7F12DC6 /* SourceStore.swift */,
 			);
 			path = TeslaCam;
 			sourceTree = "<group>";
@@ -390,6 +394,7 @@
 				4FC3EC1D1A403F7C27D9DAC2 /* Utils.swift in Sources */,
 				8878B92A5590887F535BD892 /* IPadMain.swift in Sources */,
 				31E19FA2404A5A723BC406D1 /* TelemetryProcessor.swift in Sources */,
+				B3749F963B09DDA60FA98763 /* SourceStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -411,6 +416,7 @@
 				50C6855A2F3526330073314B /* NativeExportController.swift in Sources */,
 				CDDBB87778F9005CECFA36F5 /* PlatformFileAccess.swift in Sources */,
 				B4FFA09213F66C171AF20512 /* TelemetryProcessor.swift in Sources */,
+				5471D882A47D8B38EC261269 /* SourceStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

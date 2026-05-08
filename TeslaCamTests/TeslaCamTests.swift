@@ -424,6 +424,41 @@ struct TeslaCamTests {
     }
   }
 
+  @Test func sourceStoreNormalizeDeduplicatesAndDropsMissingFiles() async throws {
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+    let liveOne = root.url.appendingPathComponent("alpha", isDirectory: true)
+    let liveTwo = root.url.appendingPathComponent("beta", isDirectory: true)
+    try FileManager.default.createDirectory(at: liveOne, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: liveTwo, withIntermediateDirectories: true)
+    let phantom = root.url.appendingPathComponent("does-not-exist", isDirectory: true)
+
+    let store = SourceStore()
+    let normalized = store.normalize([liveOne, liveTwo, liveOne, phantom])
+
+    #expect(normalized.map(\.path) == [liveOne.standardizedFileURL.path, liveTwo.standardizedFileURL.path])
+  }
+
+  @Test func sourceStoreBookmarkRoundTripRestoresPreviouslyRememberedURLs() async throws {
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+    let folder = root.url.appendingPathComponent("kept", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+    let suite = "TeslaCamTests.SourceStore.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+
+    let key = "TeslaCam.lastSourceBookmarks.under-test"
+    let writeStore = SourceStore(bookmarkKey: key, userDefaults: defaults)
+    writeStore.rememberBookmarks(for: [folder])
+
+    let readStore = SourceStore(bookmarkKey: key, userDefaults: defaults)
+    let restored = readStore.restoreBookmarkedURLs()
+
+    #expect(restored.map(\.path) == [folder.standardizedFileURL.path])
+  }
+
   @Test func sharedDomainFixturesMatchNativeScanManifestsForAllDuplicatePolicies() async throws {
     let fixtureDirectory = repositoryRootForTests()
       .appendingPathComponent("fixtures", isDirectory: true)
