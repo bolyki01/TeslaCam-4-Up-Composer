@@ -29,12 +29,12 @@ Target shape:
 - Test lanes are named and reproducible.
 
 Steps:
-1. Add ignore rules for local Xcode build folders such as `build-dd/` and other derived roots used here.
-2. Move or mark legacy export code so search does not confuse it with shipping export.
-3. Keep vendor binaries and license assets untouched unless packaging/licensing is the task.
-4. Pick one primary CLI command in docs; list other wrappers as compatibility Adapters.
-5. Add a small test lane doc: Python, native unit, native UI, contract fixtures.
-6. Add CI follow-up plan after local lanes are stable.
+1. Add ignore rules for local Xcode build folders such as `build-dd/` and other derived roots used here. **Done** — `.gitignore` covers `DerivedData/`, `DerivedData-*/`, `build-dd/`, `*.xcresult/`, `*.dSYM`, and the SwiftPM build dirs.
+2. Move or mark legacy export code so search does not confuse it with shipping export. **Done** — `_legacy/Exporter.swift` is the only `ExportController` hit outside the shipping path, and `_legacy/` is documented as reference-only in `AGENTS.md`, `README.md`, and `CLAUDE.md`.
+3. Keep vendor binaries and license assets untouched unless packaging/licensing is the task. **Honored.**
+4. Pick one primary CLI command in docs; list other wrappers as compatibility Adapters. **Done** — `RUNBOOK.md` and `README.md` both name `./teslacam-cli` as the primary command and call out `teslacam.py` / `teslacam.sh` as adapters.
+5. Add a small test lane doc: Python, native unit, native UI, contract fixtures. **Done** — `RUNBOOK.md` lists the Python lanes and `script/test_native.sh` for the native unit + UI lane; `CLAUDE.md` summarizes the lanes for agents.
+6. Add CI follow-up plan after local lanes are stable. **TODO** — `.github/workflows/` exists but the CI shape vs the local lanes hasn't been audited.
 
 Tests:
 - `git status --short` should not show generated build output after clean.
