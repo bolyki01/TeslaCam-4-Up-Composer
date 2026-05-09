@@ -25,3 +25,4 @@ Append-only. Read the last 5 entries before picking the next task.
 08:06 | B7 | clean (audit) | n/a — eventSummaries @Published; JSON parse once per index build, not per redraw | --
 08:08 | D5 | done | planning peak ~9 MB/1k events; baseline doc + script | b2da57a
 08:21 | A6 | done | timezone_edges fixture (DST gap + midnight + wide range) | 36b67ec
+08:22 | J5+J6 | done | drop 2 unused imports; zero runtime deps | f70f1a6
