@@ -71,6 +71,26 @@ script/test_native.sh
 - Native export stays the only shipping mac app path.
 - Debug builds show recent debug events for fast triage.
 
+## Optional pre-commit hook
+
+`script/pre-commit.example.sh` is a ready-to-use hook that runs the fast
+per-commit gates: full Python unittest suite, whitespace check on the
+staged diff, and a cache-leak tripwire that flags any `TeslaCam-*`
+folder appearing in user-level `~/Library/Developer/Xcode/DerivedData`
+newer than the repo's `.cache/` (catches an `xcodebuild` invocation
+that bypassed `-derivedDataPath`).
+
+Install opt-in:
+
+```bash
+cp script/pre-commit.example.sh .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+Skip a single commit with `git commit --no-verify`. Native xcodebuild
+tests are deliberately not run by the hook — those go through
+`script/test_native.sh` before push.
+
 ## Guardrails
 
 - `TeslaCam/Resources/LICENSES.md` and `TeslaCam/Resources/ffmpeg_bin/` are support assets, not dev notes.
