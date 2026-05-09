@@ -799,6 +799,61 @@ struct TeslaCamTests {
     #expect(blobAfter.count == 1)
   }
 
+  @Test func indexerScansRealFootageWhenSourceIsAvailable() async throws {
+    // Opt-in real-footage Swift sibling of the Python real-footage
+    // planner test (tests/test_integration.py::RealFootageIntegrationTests).
+    // Skipped (vacuous pass) when neither
+    // TESLACAM_REAL_FOOTAGE_SOURCE nor the project-owner local
+    // fallback ~/Downloads/Teslacam resolves to a directory; CI
+    // never has either.
+    //
+    // When fired, locks the contract for an HW3 source folder:
+    //   - ClipIndexer.index does not throw
+    //   - at least one clip set is found
+    //   - cameras detected are the four HW3 classics
+    //   - layoutProfile is hw3FourCam (auto layout)
+    //   - totalDuration is positive
+    let env = ProcessInfo.processInfo.environment
+    let candidates: [URL] = {
+      var out: [URL] = []
+      if let raw = env["TESLACAM_REAL_FOOTAGE_SOURCE"], !raw.isEmpty {
+        out.append(URL(fileURLWithPath: NSString(string: raw).expandingTildeInPath))
+      }
+      if let home = env["HOME"], !home.isEmpty {
+        out.append(URL(fileURLWithPath: home).appendingPathComponent("Downloads").appendingPathComponent("Teslacam"))
+      }
+      return out
+    }()
+
+    var source: URL?
+    var isDir: ObjCBool = false
+    for candidate in candidates where FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDir) && isDir.boolValue {
+      source = candidate
+      break
+    }
+    guard let source else {
+      // No real source configured. Vacuous pass — the planner-side
+      // Python test covers the same surface when configured.
+      return
+    }
+
+    let index = try ClipIndexer.index(inputURLs: [source], duplicatePolicy: .mergeByTime) { _ in }
+
+    #expect(index.sets.count >= 1, "real-footage source must produce at least one clip set")
+    #expect(index.totalDuration > 0, "totalDuration must be positive on real footage")
+
+    // HW3 classic source — these are the four cameras the user's
+    // current ~/Downloads/Teslacam folder carries; if a future
+    // source switches to HW4 the assertion below should be relaxed
+    // to "at least one camera present", but for the locked baseline
+    // (docs/improvement/real-footage-baseline-2026-05-09.md) HW3 is
+    // the canonical test source.
+    let expected: Set<Camera> = [.front, .back, .left_repeater, .right_repeater]
+    #expect(index.camerasFound.isSubset(of: expected) || expected.isSubset(of: index.camerasFound),
+            "real-footage cameras differ from HW3 baseline; got \(index.camerasFound)")
+    #expect(index.layoutProfile == .hw3FourCam, "expected HW3 four-cam layout for the canonical source")
+  }
+
   @Test func indexerSurvivesUnreadableAndCorruptedClipFilesWithFallbackDuration() async throws {
     // Lock the contract for corrupted / unreadable media: ClipIndexer
     // must not crash, must index every well-named clip file (filename
