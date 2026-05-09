@@ -1,0 +1,511 @@
+{
+  "description": "Two HW4 timestamps where the first event has all six cameras and the second is missing the side and pillar cameras. Locks the layout decision (sixcam) and the per-set camera coverage.",
+  "expected_layout": {
+    "auto": {
+      "canvas": {
+        "height": 2880,
+        "width": 3840
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "left": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "left_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 1920
+        },
+        "right": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 960
+        },
+        "right_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 1920
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "hidden_cameras": [],
+      "kind": "6up",
+      "profile": "auto",
+      "render_order": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ]
+    },
+    "legacy4": {
+      "canvas": {
+        "height": 1920,
+        "width": 2560
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 0
+        },
+        "left_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "right_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "hidden_cameras": [
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "kind": "4up",
+      "profile": "legacy4",
+      "render_order": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ]
+    },
+    "sixcam": {
+      "canvas": {
+        "height": 2880,
+        "width": 3840
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "left": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "left_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 1920
+        },
+        "right": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 960
+        },
+        "right_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 1920
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "hidden_cameras": [],
+      "kind": "6up",
+      "profile": "sixcam",
+      "render_order": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ]
+    }
+  },
+  "expected_output": {
+    "default_filename_by_mode": {
+      "lossless": "teslacam_lossless_2026-03-10_09-00-00_to_2026-03-10_09-02-00.mp4",
+      "quality": "teslacam_quality_2026-03-10_09-00-00_to_2026-03-10_09-02-00.mp4"
+    },
+    "error_with_conflict": {
+      "exception_type": "RuntimeError",
+      "message_contains": "Output file already exists",
+      "raises": true
+    },
+    "overwrite_with_conflict": "teslacam_lossless_2026-03-10_09-00-00_to_2026-03-10_09-02-00.mp4",
+    "unique_resolution": [
+      "teslacam_lossless_2026-03-10_09-00-00_to_2026-03-10_09-02-00.mp4",
+      "teslacam_lossless_2026-03-10_09-00-00_to_2026-03-10_09-02-00-2.mp4",
+      "teslacam_lossless_2026-03-10_09-00-00_to_2026-03-10_09-02-00-3.mp4"
+    ]
+  },
+  "expected_scan": {
+    "keep-all": {
+      "cameras": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left",
+            "right",
+            "left_pillar",
+            "right_pillar"
+          ],
+          "files": {
+            "back": "SavedClips/2026-03-10_09-00-00-back.mp4",
+            "front": "SavedClips/2026-03-10_09-00-00-front.mp4",
+            "left": "SavedClips/2026-03-10_09-00-00-left.mp4",
+            "left_pillar": "SavedClips/2026-03-10_09-00-00-left_pillar.mp4",
+            "right": "SavedClips/2026-03-10_09-00-00-right.mp4",
+            "right_pillar": "SavedClips/2026-03-10_09-00-00-right_pillar.mp4"
+          },
+          "start_time": "2026-03-10T09:00:00",
+          "timestamp": "2026-03-10_09-00-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-03-10_09-01-00-back.mp4",
+            "front": "SavedClips/2026-03-10_09-01-00-front.mp4"
+          },
+          "start_time": "2026-03-10T09:01:00",
+          "timestamp": "2026-03-10_09-01-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "merge-by-time": {
+      "cameras": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left",
+            "right",
+            "left_pillar",
+            "right_pillar"
+          ],
+          "files": {
+            "back": "SavedClips/2026-03-10_09-00-00-back.mp4",
+            "front": "SavedClips/2026-03-10_09-00-00-front.mp4",
+            "left": "SavedClips/2026-03-10_09-00-00-left.mp4",
+            "left_pillar": "SavedClips/2026-03-10_09-00-00-left_pillar.mp4",
+            "right": "SavedClips/2026-03-10_09-00-00-right.mp4",
+            "right_pillar": "SavedClips/2026-03-10_09-00-00-right_pillar.mp4"
+          },
+          "start_time": "2026-03-10T09:00:00",
+          "timestamp": "2026-03-10_09-00-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-03-10_09-01-00-back.mp4",
+            "front": "SavedClips/2026-03-10_09-01-00-front.mp4"
+          },
+          "start_time": "2026-03-10T09:01:00",
+          "timestamp": "2026-03-10_09-01-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "prefer-newest": {
+      "cameras": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left",
+            "right",
+            "left_pillar",
+            "right_pillar"
+          ],
+          "files": {
+            "back": "SavedClips/2026-03-10_09-00-00-back.mp4",
+            "front": "SavedClips/2026-03-10_09-00-00-front.mp4",
+            "left": "SavedClips/2026-03-10_09-00-00-left.mp4",
+            "left_pillar": "SavedClips/2026-03-10_09-00-00-left_pillar.mp4",
+            "right": "SavedClips/2026-03-10_09-00-00-right.mp4",
+            "right_pillar": "SavedClips/2026-03-10_09-00-00-right_pillar.mp4"
+          },
+          "start_time": "2026-03-10T09:00:00",
+          "timestamp": "2026-03-10_09-00-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-03-10_09-01-00-back.mp4",
+            "front": "SavedClips/2026-03-10_09-01-00-front.mp4"
+          },
+          "start_time": "2026-03-10T09:01:00",
+          "timestamp": "2026-03-10_09-01-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    }
+  },
+  "expected_selection": {
+    "keep-all": {
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left",
+            "right",
+            "left_pillar",
+            "right_pillar"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-03-10_09-00-00-back.mp4",
+            "front": "SavedClips/2026-03-10_09-00-00-front.mp4",
+            "left": "SavedClips/2026-03-10_09-00-00-left.mp4",
+            "left_pillar": "SavedClips/2026-03-10_09-00-00-left_pillar.mp4",
+            "right": "SavedClips/2026-03-10_09-00-00-right.mp4",
+            "right_pillar": "SavedClips/2026-03-10_09-00-00-right_pillar.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-03-10T09:00:00",
+          "timestamp": "2026-03-10_09-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-03-10_09-01-00-back.mp4",
+            "front": "SavedClips/2026-03-10_09-01-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-03-10T09:01:00",
+          "timestamp": "2026-03-10_09-01-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 120.0
+    },
+    "merge-by-time": {
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left",
+            "right",
+            "left_pillar",
+            "right_pillar"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-03-10_09-00-00-back.mp4",
+            "front": "SavedClips/2026-03-10_09-00-00-front.mp4",
+            "left": "SavedClips/2026-03-10_09-00-00-left.mp4",
+            "left_pillar": "SavedClips/2026-03-10_09-00-00-left_pillar.mp4",
+            "right": "SavedClips/2026-03-10_09-00-00-right.mp4",
+            "right_pillar": "SavedClips/2026-03-10_09-00-00-right_pillar.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-03-10T09:00:00",
+          "timestamp": "2026-03-10_09-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-03-10_09-01-00-back.mp4",
+            "front": "SavedClips/2026-03-10_09-01-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-03-10T09:01:00",
+          "timestamp": "2026-03-10_09-01-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 120.0
+    },
+    "prefer-newest": {
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left",
+            "right",
+            "left_pillar",
+            "right_pillar"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-03-10_09-00-00-back.mp4",
+            "front": "SavedClips/2026-03-10_09-00-00-front.mp4",
+            "left": "SavedClips/2026-03-10_09-00-00-left.mp4",
+            "left_pillar": "SavedClips/2026-03-10_09-00-00-left_pillar.mp4",
+            "right": "SavedClips/2026-03-10_09-00-00-right.mp4",
+            "right_pillar": "SavedClips/2026-03-10_09-00-00-right_pillar.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-03-10T09:00:00",
+          "timestamp": "2026-03-10_09-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-03-10_09-01-00-back.mp4",
+            "front": "SavedClips/2026-03-10_09-01-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-03-10T09:01:00",
+          "timestamp": "2026-03-10_09-01-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 120.0
+    }
+  },
+  "files": [
+    {
+      "path": "SavedClips/2026-03-10_09-00-00-front.mp4"
+    },
+    {
+      "path": "SavedClips/2026-03-10_09-00-00-back.mp4"
+    },
+    {
+      "path": "SavedClips/2026-03-10_09-00-00-left.mp4"
+    },
+    {
+      "path": "SavedClips/2026-03-10_09-00-00-right.mp4"
+    },
+    {
+      "path": "SavedClips/2026-03-10_09-00-00-left_pillar.mp4"
+    },
+    {
+      "path": "SavedClips/2026-03-10_09-00-00-right_pillar.mp4"
+    },
+    {
+      "path": "SavedClips/2026-03-10_09-01-00-front.mp4"
+    },
+    {
+      "path": "SavedClips/2026-03-10_09-01-00-back.mp4"
+    }
+  ],
+  "name": "hw4_partial",
+  "schema_version": 1
+}

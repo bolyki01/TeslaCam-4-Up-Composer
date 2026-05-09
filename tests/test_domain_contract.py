@@ -100,7 +100,7 @@ class DomainFixtureParityTests(unittest.TestCase):
                 self.assertIn(
                     "expected_selection",
                     case,
-                    f"{fixture_path.name} missing expected_selection — run script/regen_selection_fixtures.py",
+                    f"{fixture_path.name} missing expected_selection — run script/regen_fixtures.py",
                 )
                 self.assertEqual(
                     set(case["expected_selection"]),
@@ -149,7 +149,7 @@ class DomainFixtureParityTests(unittest.TestCase):
                 self.assertIn(
                     "expected_output",
                     case,
-                    f"{fixture_path.name} missing expected_output — run script/regen_output_fixtures.py",
+                    f"{fixture_path.name} missing expected_output — run script/regen_fixtures.py",
                 )
                 expected = case["expected_output"]
                 with TemporaryDirectory() as temp_dir:
