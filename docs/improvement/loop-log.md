@@ -40,3 +40,4 @@ Append-only. Read the last 5 entries before picking the next task.
 09:56 | G-ext | done | codebase invariant tripwires (5 forbidden patterns) | 0277cd6
 09:59 | docs | done | CLAUDE.md surfaces loop scaffolding (regen / audits / invariants) | aaf68e2
 10:13 | G-ext-swift | done | Swift codebase invariant tripwires (print/Sentry/_legacy) | 9ca336b
+10:16 | F-ext-regen | done | regen_fixtures idempotency lock | 38f4b00
