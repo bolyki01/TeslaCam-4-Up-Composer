@@ -138,6 +138,36 @@ struct TeslaCamTests {
     }
   }
 
+  @Test func exportPreflightWarnsWhenFreeDiskSpaceCannotBeChecked() async throws {
+    // ExportPreflight.summary surfaces a non-blocking warning when the
+    // file-access adapter can't determine free disk space (returns
+    // nil). Without this safety net, the user might see no disk-space
+    // information at all when the OS hides volume capacity (e.g. some
+    // network mounts). The other two warning channels are already
+    // covered (partial-clip d66432d, hidden-cameras 0c5127b); this
+    // closes the third.
+    let plan = try ExportPlan(
+      request: exportRequestForPlan(enabledCameras: [.front])
+    )
+    let preflight = ExportPreflight(
+      fileAccess: StubExportPreflightFileAccess(canWrite: true, availableCapacity: nil)
+    )
+    let summary = preflight.summary(for: plan)
+
+    let diskUnknownWarnings = summary.warnings.filter { warning in
+      warning.message.lowercased().contains("disk") &&
+        warning.message.lowercased().contains("could not be checked")
+    }
+    #expect(!diskUnknownWarnings.isEmpty, "preflight must surface a 'disk space could not be checked' warning when capacity is nil")
+    for warning in diskUnknownWarnings {
+      #expect(!warning.isBlocking, "disk-unknown warning is informational; export still proceeds")
+    }
+    // hasWriteAccess must remain true (the write-access channel is
+    // separate from the capacity channel) so we don't accidentally
+    // double-fire as a blocking issue here.
+    #expect(summary.hasWriteAccess)
+  }
+
   @Test func exportPreflightWarnsAboutHiddenCamerasWhenSomeFilesAreNotEnabled() async throws {
     // ExportPreflight surfaces a non-blocking warning when a clip set
     // contains cameras the user has not enabled — they'll render as
