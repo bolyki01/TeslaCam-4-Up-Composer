@@ -38,3 +38,4 @@ Append-only. Read the last 5 entries before picking the next task.
 09:38 | F-ext-disk | done | preflight disk-unknown warning channel locked | b2b9906
 09:42 | refactor | done | DomainContract.swift extracted; Models.swift -253 lines | 6f0b172
 09:56 | G-ext | done | codebase invariant tripwires (5 forbidden patterns) | 0277cd6
+09:59 | docs | done | CLAUDE.md surfaces loop scaffolding (regen / audits / invariants) | aaf68e2
