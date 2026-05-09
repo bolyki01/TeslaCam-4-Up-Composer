@@ -32,3 +32,4 @@ Append-only. Read the last 5 entries before picking the next task.
 08:42 | A3-output | done | Swift output-policy parity vs expected_output | e54aec2
 08:47 | F5 | done | indexer fallback duration on unreadable media | b17db2d
 09:02 | F6 | done | ExportPlan per-variant validation + .noClips gap closed | 23f96bc
+09:04 | H2 | done | plan note 02 refreshed with F5 + F6 status | 5fc5350
