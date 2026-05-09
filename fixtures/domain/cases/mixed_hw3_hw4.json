@@ -280,6 +280,92 @@
       "duplicate_timestamp_count": 0
     }
   },
+  "expected_selection": {
+    "keep-all": {
+      "clip_set_count": 1,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "left",
+            "right_pillar"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "Mixed/2026-01-01_00-00-00-rear.mp4",
+            "front": "Mixed/2026-01-01_00-00-00-front.mp4",
+            "left": "Mixed/2026-01-01_00-00-00-left.mp4",
+            "left_repeater": "Mixed/2026-01-01_00-00-00-left_repeater.mp4",
+            "right_pillar": "Mixed/2026-01-01_00-00-00-right_pillar.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 60.0
+    },
+    "merge-by-time": {
+      "clip_set_count": 1,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "left",
+            "right_pillar"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "Mixed/2026-01-01_00-00-00-rear.mp4",
+            "front": "Mixed/2026-01-01_00-00-00-front.mp4",
+            "left": "Mixed/2026-01-01_00-00-00-left.mp4",
+            "left_repeater": "Mixed/2026-01-01_00-00-00-left_repeater.mp4",
+            "right_pillar": "Mixed/2026-01-01_00-00-00-right_pillar.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 60.0
+    },
+    "prefer-newest": {
+      "clip_set_count": 1,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "left",
+            "right_pillar"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "Mixed/2026-01-01_00-00-00-rear.mp4",
+            "front": "Mixed/2026-01-01_00-00-00-front.mp4",
+            "left": "Mixed/2026-01-01_00-00-00-left.mp4",
+            "left_repeater": "Mixed/2026-01-01_00-00-00-left_repeater.mp4",
+            "right_pillar": "Mixed/2026-01-01_00-00-00-right_pillar.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 60.0
+    }
+  },
   "files": [
     {
       "path": "Mixed/2026-01-01_00-00-00-front.mp4"

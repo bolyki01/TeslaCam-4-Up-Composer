@@ -240,6 +240,88 @@
       "duplicate_timestamp_count": 1
     }
   },
+  "expected_selection": {
+    "keep-all": {
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "folder_a/2026-01-01_00-00-00-rear.mp4",
+            "front": "folder_a/2026-01-01_00-00-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front"
+          ],
+          "duration": 60.0,
+          "files": {
+            "front": "folder_b/2026-01-01_00-00-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 120.0
+    },
+    "merge-by-time": {
+      "clip_set_count": 1,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "folder_a/2026-01-01_00-00-00-rear.mp4",
+            "front": "folder_a/2026-01-01_00-00-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 60.0
+    },
+    "prefer-newest": {
+      "clip_set_count": 1,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "folder_a/2026-01-01_00-00-00-rear.mp4",
+            "front": "folder_b/2026-01-01_00-00-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-01-01T00:00:00",
+          "timestamp": "2026-01-01_00-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 60.0
+    }
+  },
   "files": [
     {
       "mtime": 1700000000,

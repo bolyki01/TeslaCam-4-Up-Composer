@@ -1,16 +1,49 @@
 import json
 import os
+from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
 from teslacam_cli.cli import default_output_filename, unique_output_path
-from teslacam_cli.domain_contract import dry_run_manifest, manifest_json, scan_manifest
+from teslacam_cli.composer import select_clip_sets
+from teslacam_cli.domain_contract import (
+    dry_run_manifest,
+    manifest_json,
+    scan_manifest,
+    selected_sets_manifest,
+)
 from teslacam_cli.layouts import build_camera_layout_plan, build_layout, fill_missing_dimensions
 from teslacam_cli.models import Camera, Dimensions, DuplicatePolicy, LayoutKind, OutputConflictPolicy, SelectedSet
 from teslacam_cli.scanner import scan_source
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "domain" / "cases"
+
+# Stand-in ffprobe + duration that mirror ``script/regen_selection_fixtures.py``.
+# Keep the two in lockstep; this parity test is the gate that catches drift.
+_STUB_FFPROBE = Path("/usr/bin/ffprobe")
+_STUB_DURATION_SECONDS = 60.0
+
+
+class _StubMediaProbe:
+    """Deterministic probe for fixture-driven selection tests.
+
+    Same shape as ``script/regen_selection_fixtures.py``'s stub. Every clip is
+    60 s, every clip has a video stream, dimensions/fps are unused for
+    selection itself.
+    """
+
+    def duration(self, ffprobe, media_path):
+        return _STUB_DURATION_SECONDS
+
+    def has_video_stream(self, ffprobe, media_path):
+        return True
+
+    def dimensions(self, ffprobe, media_path):
+        return None
+
+    def fps(self, ffprobe, media_path):
+        return 36.027
 
 
 class DomainFixtureParityTests(unittest.TestCase):
@@ -52,6 +85,55 @@ class DomainFixtureParityTests(unittest.TestCase):
                                 probed_dimensions={},
                             )
                             self.assertEqual(layout_manifest(layout), case["expected_layout"][profile])
+
+    def test_shared_selection_fixtures_round_trip_through_select_clip_sets_for_all_duplicate_policies(self):
+        cases = sorted(FIXTURE_DIR.glob("*.json"))
+        self.assertGreaterEqual(len(cases), 4)
+        for fixture_path in cases:
+            with self.subTest(fixture=fixture_path.name):
+                case = json.loads(fixture_path.read_text(encoding="utf-8"))
+                self.assertIn(
+                    "expected_selection",
+                    case,
+                    f"{fixture_path.name} missing expected_selection — run script/regen_selection_fixtures.py",
+                )
+                self.assertEqual(
+                    set(case["expected_selection"]),
+                    {policy.value for policy in DuplicatePolicy},
+                    f"{fixture_path.name} expected_selection must cover every duplicate policy",
+                )
+                with TemporaryDirectory() as temp_dir:
+                    source = Path(temp_dir)
+                    _materialize_case(case, source)
+                    for policy in DuplicatePolicy:
+                        with self.subTest(policy=policy.value):
+                            try:
+                                scan = scan_source(source, duplicate_policy=policy)
+                            except RuntimeError:
+                                self.assertEqual(
+                                    case["expected_selection"][policy.value],
+                                    {"clip_set_count": 0, "rendered_duration": 0.0, "clip_sets": []},
+                                )
+                                continue
+                            if not scan.clip_sets:
+                                self.assertEqual(
+                                    case["expected_selection"][policy.value],
+                                    {"clip_set_count": 0, "rendered_duration": 0.0, "clip_sets": []},
+                                )
+                                continue
+                            first = scan.clip_sets[0].start_time
+                            last = scan.clip_sets[-1].start_time + timedelta(seconds=_STUB_DURATION_SECONDS)
+                            selected = select_clip_sets(
+                                scan.clip_sets,
+                                first,
+                                last,
+                                _STUB_FFPROBE,
+                                media_probe=_StubMediaProbe(),
+                            )
+                            self.assertEqual(
+                                selected_sets_manifest(selected, source),
+                                case["expected_selection"][policy.value],
+                            )
 
     def test_default_output_filename_matches_contract_format(self):
         from datetime import datetime
