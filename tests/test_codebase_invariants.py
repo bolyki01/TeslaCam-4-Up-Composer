@@ -24,11 +24,21 @@ from typing import Iterable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SHIPPING_ROOT = REPO_ROOT / "teslacam_cli"
+SWIFT_SHIPPING_ROOT = REPO_ROOT / "TeslaCam"
 
 
 def _shipping_python_files() -> Iterable[Path]:
     """Every .py file under teslacam_cli/, recursively."""
     yield from sorted(SHIPPING_ROOT.rglob("*.py"))
+
+
+def _shipping_swift_files() -> Iterable[Path]:
+    """Every .swift file under TeslaCam/ (excluding the iPad
+    target's resources and any nested generated content). Plain
+    rglob is fine — TeslaCam/ does not nest derived data; the
+    cache isolation work parks build state under .cache/.
+    """
+    yield from sorted(SWIFT_SHIPPING_ROOT.rglob("*.swift"))
 
 
 def _grep_lines(pattern: re.Pattern[str], paths: Iterable[Path]) -> list[tuple[Path, int, str]]:
@@ -112,6 +122,57 @@ class ForbiddenPatternTests(unittest.TestCase):
         )
 
 
+class SwiftForbiddenPatternTests(unittest.TestCase):
+    """Patterns that must never appear in shipping Swift source under
+    ``TeslaCam/``.
+
+    Each rule matches a sacred-rule reason. If a pattern legitimately
+    needs to come back, update the rule in the same commit and explain
+    why in the commit message.
+    """
+
+    def test_print_is_never_used_in_shipping_swift(self):
+        # Justification: G5 logging discipline — the macOS app routes
+        # every diagnostic through DebugLogSink (Logger with .private
+        # message redaction). A bare `print(` in shipping Swift would
+        # leak user-controlled paths to the unified log without
+        # redaction. Currently zero hits; lock that.
+        pattern = re.compile(r"\bprint\(")
+        hits = _grep_lines(pattern, _shipping_swift_files())
+        self.assertEqual(
+            hits,
+            [],
+            f"print( must not appear in shipping Swift source — use DebugLogSink instead:\n{_format_hits(hits)}",
+        )
+
+    def test_sentry_is_never_referenced_in_shipping_swift(self):
+        # Justification: sacred rule 7 — no Sentry, no analytics, no
+        # external crash telemetry. The repo CLAUDE.md overrides the
+        # global Sentry MCP guidance for this project; diagnostics
+        # stay local via the in-app Show Log surface.
+        pattern = re.compile(r"\bSentry\b")
+        hits = _grep_lines(pattern, _shipping_swift_files())
+        self.assertEqual(
+            hits,
+            [],
+            f"Sentry references must not appear in shipping Swift source:\n{_format_hits(hits)}",
+        )
+
+    def test_legacy_is_never_referenced_in_shipping_swift(self):
+        # Justification: sacred rule 5 — `_legacy/` and
+        # `teslacam_legacy_macos.sh` are reference only. Anything in
+        # shipping code that imports or path-references `_legacy/`
+        # is a contract violation per H6 audit
+        # (docs/improvement/hygiene-audit-2026-05-09.md).
+        pattern = re.compile(r"_legacy(?:/|\\\\)")
+        hits = _grep_lines(pattern, _shipping_swift_files())
+        self.assertEqual(
+            hits,
+            [],
+            f"_legacy/ references must not appear in shipping Swift source:\n{_format_hits(hits)}",
+        )
+
+
 class TestSurfaceTests(unittest.TestCase):
     """Sanity checks on the test surface itself.
 
@@ -124,6 +185,11 @@ class TestSurfaceTests(unittest.TestCase):
         self.assertTrue(SHIPPING_ROOT.is_dir(), f"{SHIPPING_ROOT} must be a directory")
         files = list(_shipping_python_files())
         self.assertGreaterEqual(len(files), 5, "expected at least a handful of .py files under teslacam_cli/")
+
+    def test_swift_shipping_root_exists_and_has_swift_files(self):
+        self.assertTrue(SWIFT_SHIPPING_ROOT.is_dir(), f"{SWIFT_SHIPPING_ROOT} must be a directory")
+        files = list(_shipping_swift_files())
+        self.assertGreaterEqual(len(files), 5, "expected at least a handful of .swift files under TeslaCam/")
 
     def test_grep_helper_actually_finds_real_lines(self):
         # If `_grep_lines` quietly returns [] for everything, the
