@@ -6,7 +6,7 @@ import platform
 import shutil
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from .concat_safety import ffconcat_path as _safe_ffconcat_path
 from .models import Dimensions, EncoderPlan
@@ -23,8 +23,56 @@ class ToolResolutionError(RuntimeError):
     pass
 
 
+# Number of trailing stderr lines preserved in the user-visible error summary.
+# ffmpeg/ffprobe stderr is regularly hundreds of lines; only the tail is
+# actionable on a real failure.
+FFMPEG_ERROR_STDERR_TAIL_LINES = 40
+
+
 class FfmpegRuntimeError(RuntimeError):
-    pass
+    """Raised when ffmpeg/ffprobe exits non-zero or times out.
+
+    Carries the full structured failure payload as attributes so callers
+    that want more than the human-readable summary (tests, log capture,
+    future tooling) can inspect each piece. ``str(exc)`` returns the
+    summary; the attributes carry the rest.
+
+    Attributes
+    ----------
+    exit_code:
+        Exit status returned by the failing process. ``None`` for
+        timeouts / pre-launch errors where no exit code is available.
+    command_args:
+        The argv used to invoke the process.
+    filter_graph:
+        The value of the ``-filter_complex`` argument when present;
+        ``None`` otherwise. Surfaced as its own labeled section in the
+        summary so the failing graph is easy to spot.
+    stderr_full:
+        The full captured stderr string (already truncated by the
+        process-tools byte limit; that's a separate concern from the
+        line-tail truncation in the summary).
+    stderr_tail:
+        The trailing ``FFMPEG_ERROR_STDERR_TAIL_LINES`` lines of stderr
+        included in the summary.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        exit_code: Optional[int] = None,
+        command_args: Optional[Sequence[str]] = None,
+        filter_graph: Optional[str] = None,
+        stderr_full: Optional[str] = None,
+        stderr_tail: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+        self.command_args = tuple(command_args) if command_args is not None else None
+        self.filter_graph = filter_graph
+        self.stderr_full = stderr_full
+        self.stderr_tail = stderr_tail
 
 
 class MediaProbe:
@@ -338,6 +386,117 @@ def choose_encoder(
     raise ValueError(f"Unsupported encoder mode: {mode}")
 
 
+def extract_filter_complex(args: Sequence[str]) -> Optional[str]:
+    """Return the value of the first ``-filter_complex`` argument, if any.
+
+    ffmpeg accepts both ``-filter_complex GRAPH`` and the long form
+    ``-filter_complex_script PATH``; only the inline form is extracted
+    here because that's what the CLI emits.
+    """
+    items = list(args)
+    for index, token in enumerate(items[:-1]):
+        if str(token) == "-filter_complex":
+            return str(items[index + 1])
+    return None
+
+
+def _strip_filter_complex(args: Sequence[str]) -> List[str]:
+    """Return ``args`` with ``-filter_complex GRAPH`` collapsed to a placeholder.
+
+    Keeps the surrounding arguments visible in the failure summary
+    without dragging the (very long) graph into the args line — the
+    graph is shown separately in its own labeled section.
+    """
+    items = list(args)
+    out: List[str] = []
+    skip_next = False
+    for index, token in enumerate(items):
+        if skip_next:
+            skip_next = False
+            continue
+        if str(token) == "-filter_complex":
+            out.append("-filter_complex")
+            out.append("<see filter graph below>")
+            skip_next = True
+            continue
+        out.append(str(token))
+    return out
+
+
+def _tail_lines(text: str, max_lines: int) -> tuple[str, int, int]:
+    """Return ``(tail_text, kept_lines, total_lines)`` for the last ``max_lines`` of ``text``."""
+    if not text:
+        return "", 0, 0
+    # Preserve trailing-newline semantics; ffmpeg stderr is line-based.
+    lines = text.splitlines()
+    total = len(lines)
+    if total <= max_lines:
+        return text.rstrip("\n"), total, total
+    tail = lines[-max_lines:]
+    return "\n".join(tail), max_lines, total
+
+
+def format_ffmpeg_failure(
+    returncode: int,
+    args: Sequence[str],
+    stderr: str,
+    stderr_truncated_by_byte_limit: bool,
+    *,
+    stderr_tail_lines: int = FFMPEG_ERROR_STDERR_TAIL_LINES,
+) -> Dict[str, Any]:
+    """Build the structured payload for a failed ffmpeg/ffprobe invocation.
+
+    Pure function so callers can unit-test the formatting independently
+    of subprocess.
+
+    Returns a dict with keys::
+
+        message: str          # human-readable summary
+        filter_graph: str|None
+        stderr_tail: str
+        stderr_full: str
+        kept_lines: int
+        total_lines: int
+    """
+    base_args = _strip_filter_complex(args)
+    joined_args = " ".join(base_args)
+    filter_graph = extract_filter_complex(args)
+    tail_text, kept_lines, total_lines = _tail_lines(stderr or "", stderr_tail_lines)
+    truncated_by_lines = total_lines > kept_lines
+
+    parts: List[str] = [f"ffmpeg/ffprobe exited with code {returncode}: {joined_args}"]
+    if filter_graph is not None:
+        parts.append("Filter graph:")
+        parts.append(f"  {filter_graph}")
+
+    if total_lines == 0 and stderr_truncated_by_byte_limit:
+        parts.append("stderr: <captured but exceeded byte limit; nothing decoded>")
+    elif total_lines == 0:
+        parts.append("stderr: <empty>")
+    else:
+        if truncated_by_lines and stderr_truncated_by_byte_limit:
+            parts.append(
+                f"stderr (last {kept_lines} of {total_lines} lines; output also exceeded byte limit):"
+            )
+        elif truncated_by_lines:
+            parts.append(f"stderr (last {kept_lines} of {total_lines} lines):")
+        elif stderr_truncated_by_byte_limit:
+            parts.append("stderr (output exceeded byte limit; line-tail unaffected):")
+        else:
+            parts.append("stderr:")
+        for line in tail_text.split("\n"):
+            parts.append(f"  {line}")
+
+    return {
+        "message": "\n".join(parts),
+        "filter_graph": filter_graph,
+        "stderr_tail": tail_text,
+        "stderr_full": stderr or "",
+        "kept_lines": kept_lines,
+        "total_lines": total_lines,
+    }
+
+
 def run_command(args: Sequence[str], cwd: Optional[Path] = None, timeout_seconds: Optional[float] = None) -> None:
     try:
         result = run_limited_process(
@@ -348,13 +507,23 @@ def run_command(args: Sequence[str], cwd: Optional[Path] = None, timeout_seconds
             stderr_limit_bytes=262_144,
         )
     except LimitedProcessTimeout as exc:
-        raise FfmpegRuntimeError(str(exc)) from exc
+        raise FfmpegRuntimeError(str(exc), command_args=tuple(str(item) for item in args)) from exc
     if result.returncode != 0:
-        joined = " ".join(str(item) for item in args)
-        stderr = (result.stderr or "").strip()
-        if result.stderr_truncated:
-            stderr += " [stderr truncated]"
-        raise FfmpegRuntimeError(f"Command failed with exit code {result.returncode}: {joined}\n{stderr}".strip())
+        argv = tuple(str(item) for item in args)
+        payload = format_ffmpeg_failure(
+            returncode=result.returncode,
+            args=argv,
+            stderr=result.stderr or "",
+            stderr_truncated_by_byte_limit=result.stderr_truncated,
+        )
+        raise FfmpegRuntimeError(
+            payload["message"],
+            exit_code=result.returncode,
+            command_args=argv,
+            filter_graph=payload["filter_graph"],
+            stderr_full=payload["stderr_full"],
+            stderr_tail=payload["stderr_tail"],
+        )
 
 
 def ffconcat_path(path: Path) -> str:
