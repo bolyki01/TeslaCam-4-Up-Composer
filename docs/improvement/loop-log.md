@@ -16,3 +16,4 @@ Append-only. Read the last 5 entries before picking the next task.
 07:42 | G2+G3 | clean (audit) | n/a — bookmark pairing + no shell injection | 0a51872
 07:43 | G4 | clean (audit) | n/a — minimum entitlements only | 546fb4a
 07:47 | F3 | done | sandbox revoke + partial-survivor SourceStore tests | a9c7cd0
+07:49 | H1 | done | regen workflow documented in domain-contract.md | 13291cf
