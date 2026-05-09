@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import Dict, Iterable, List, Optional, Protocol, Union
+from typing import Callable, Dict, Hashable, Iterable, List, Optional, Protocol, Sequence, Tuple, TypeVar, Union
 
 from .concat_safety import ffconcat_path
 from .ffmpeg_tools import FfmpegRunner, MediaProbe
@@ -51,6 +53,60 @@ class RenderReporter(Protocol):
         ...
 
 
+# ffprobe is I/O bound (process startup + JSON parse). 4 concurrent workers is
+# the knee on a typical laptop without melting the kernel scheduler — the
+# probe-cache already prevents re-probing duplicate paths within a run, so the
+# workload is essentially "N unique files × ~50–200 ms each". Override via
+# the ``TESLACAM_PROBE_JOBS`` environment variable when measuring.
+_PROBE_MAX_WORKERS_DEFAULT = 4
+
+
+def _probe_max_workers() -> int:
+    raw = os.environ.get("TESLACAM_PROBE_JOBS")
+    if raw is not None:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = _PROBE_MAX_WORKERS_DEFAULT
+        if value >= 1:
+            return value
+    return _PROBE_MAX_WORKERS_DEFAULT
+
+
+_K = TypeVar("_K", bound=Hashable)
+_V = TypeVar("_V")
+
+
+def _concurrent_probe(
+    jobs: Sequence[Tuple[_K, Callable[[], _V]]],
+    *,
+    max_workers: Optional[int] = None,
+) -> Dict[_K, _V]:
+    """Run probe callables concurrently; return ``{key: result}`` for each.
+
+    ``jobs`` is a sequence of ``(key, fn)`` pairs. Each ``fn`` is invoked in a
+    worker thread; results are gathered into a dict keyed by ``key``. Order is
+    irrelevant — callers reduce results into their own collections.
+
+    Sized for I/O-bound workloads (ffprobe subprocesses release the GIL during
+    the system call). Falls back to a single-thread pool when only one job
+    needs probing so the executor overhead does not dominate.
+    """
+    if not jobs:
+        return {}
+    workers = max_workers if max_workers is not None else _probe_max_workers()
+    workers = max(1, min(workers, len(jobs)))
+    if workers == 1:
+        return {key: fn() for key, fn in jobs}
+    results: Dict[_K, _V] = {}
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="teslacam-probe") as pool:
+        futures = {pool.submit(fn): key for key, fn in jobs}
+        for future in futures:
+            key = futures[future]
+            results[key] = future.result()
+    return results
+
+
 def clip_set_duration(
     clip_set: ClipSet,
     ffprobe: Path,
@@ -78,11 +134,31 @@ def select_clip_sets(
     ffprobe: Path,
     media_probe: Optional[MediaProbe] = None,
 ) -> List[SelectedSet]:
-    selected: List[SelectedSet] = []
-    duration_cache: Dict[Path, float] = {}
+    """Select clip-sets overlapping the requested range.
 
-    for clip_set in clip_sets:
-        duration = clip_set_duration(clip_set, ffprobe, duration_cache, media_probe)
+    Probes ``clip_set_duration`` concurrently across clip-sets — that's the
+    pre-flight phase on every render. The shared ``duration_cache`` would
+    otherwise serialize per-path probes; the cache is still populated as
+    each ``clip_set_duration`` call resolves, so subsequent same-path lookups
+    inside the per-set walk hit the cache.
+    """
+    materialized = list(clip_sets)
+    if not materialized:
+        return []
+
+    duration_cache: Dict[Path, float] = {}
+    duration_jobs: List[Tuple[int, Callable[[], float]]] = [
+        (
+            index,
+            (lambda cs=clip_set: clip_set_duration(cs, ffprobe, duration_cache, media_probe)),
+        )
+        for index, clip_set in enumerate(materialized)
+    ]
+    durations = _concurrent_probe(duration_jobs)
+
+    selected: List[SelectedSet] = []
+    for index, clip_set in enumerate(materialized):
+        duration = durations[index]
         clip_end = clip_set.start_time + timedelta(seconds=duration)
         if clip_set.start_time >= end_time or clip_end <= start_time:
             continue
@@ -124,15 +200,33 @@ def probe_dimensions_for_selection(
     selected_sets: Iterable[SelectedSet],
     media_probe: Optional[MediaProbe] = None,
 ) -> Dict[Camera, Dimensions]:
+    """Probe per-camera dimensions across the selection in parallel.
+
+    The first-encountered path wins per camera (matches the previous
+    sequential behavior). All candidate paths are probed concurrently;
+    serial reduction picks the first non-``None`` per camera.
+    """
     probe = media_probe or MediaProbe()
-    dimensions: Dict[Camera, Dimensions] = {}
+    seen_per_camera: Dict[Camera, Path] = {}
+    candidates: List[Tuple[Camera, Path]] = []
     for selected in selected_sets:
         for camera, clip_path in selected.clip_set.files.items():
-            if camera in dimensions:
+            if camera in seen_per_camera:
                 continue
-            probed = probe.dimensions(ffprobe, clip_path)
-            if probed is not None:
-                dimensions[camera] = probed
+            seen_per_camera[camera] = clip_path
+            candidates.append((camera, clip_path))
+    if not candidates:
+        return {}
+    jobs: List[Tuple[Camera, Callable[[], Optional[Dimensions]]]] = [
+        (camera, (lambda p=path: probe.dimensions(ffprobe, p)))
+        for camera, path in candidates
+    ]
+    probed = _concurrent_probe(jobs)
+    dimensions: Dict[Camera, Dimensions] = {}
+    for camera, _path in candidates:
+        result = probed.get(camera)
+        if result is not None:
+            dimensions[camera] = result
     return dimensions
 
 
@@ -320,14 +414,38 @@ def collect_clip_readability(
     selected_sets: Iterable[SelectedSet],
     media_probe: Optional[MediaProbe] = None,
 ) -> Dict[Path, bool]:
+    """Return ``{path: True/False}`` for every unique clip path in the selection.
+
+    Existence and ``has_video_stream`` checks for each unique path run
+    concurrently. ``False`` is recorded for missing files without invoking
+    ffprobe (matches the sequential semantics).
+    """
     probe = media_probe or MediaProbe()
-    readability: Dict[Path, bool] = {}
+    unique_paths: Dict[Path, bool] = {}
+    order: List[Path] = []
     for selected in selected_sets:
         for clip_path in selected.clip_set.files.values():
-            if clip_path in readability:
+            if clip_path in unique_paths:
                 continue
-            readability[clip_path] = clip_path.exists() and probe.has_video_stream(ffprobe, clip_path)
-    return readability
+            order.append(clip_path)
+            unique_paths[clip_path] = False  # placeholder; resolved below
+
+    if not order:
+        return {}
+
+    jobs: List[Tuple[Path, Callable[[], bool]]] = []
+    for clip_path in order:
+        if not clip_path.exists():
+            unique_paths[clip_path] = False
+            continue
+        jobs.append((clip_path, (lambda p=clip_path: probe.has_video_stream(ffprobe, p))))
+
+    if jobs:
+        probed = _concurrent_probe(jobs)
+        for clip_path, value in probed.items():
+            unique_paths[clip_path] = bool(value)
+
+    return unique_paths
 
 
 
