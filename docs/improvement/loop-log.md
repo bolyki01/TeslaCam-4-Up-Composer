@@ -22,3 +22,4 @@ Append-only. Read the last 5 entries before picking the next task.
 08:01 | H5 | clean (audit) | n/a — MACOSX_DEPLOYMENT_TARGET=26.0 only in pbxproj, no script overrides | --
 08:01 | H6 | clean (audit) | n/a — zero shipping-code references to _legacy/ | --
 08:03 | G5 | done | OSLog message privacy .public -> .private | bcd1a32
+08:06 | B7 | clean (audit) | n/a — eventSummaries @Published; JSON parse once per index build, not per redraw | --
