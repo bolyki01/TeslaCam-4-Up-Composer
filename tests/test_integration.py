@@ -1,12 +1,41 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+
+
+REAL_FOOTAGE_ENV = "TESLACAM_REAL_FOOTAGE_SOURCE"
+
+
+def _real_footage_source() -> Path | None:
+    """Return the configured real-footage source folder, or ``None``.
+
+    Two ways to opt in:
+    - ``TESLACAM_REAL_FOOTAGE_SOURCE=/abs/path`` (preferred, works on
+      any machine and in CI if a runner happens to have a sample).
+    - ``~/Downloads/Teslacam`` exists (local convenience for the
+      project owner — same path used in
+      ``docs/improvement/real-footage-baseline-2026-05-09.md``).
+
+    Either way, the test only fires when the path is a directory; CI
+    runs without either path skip the test silently.
+    """
+    explicit = os.environ.get(REAL_FOOTAGE_ENV)
+    if explicit:
+        candidate = Path(explicit).expanduser()
+        if candidate.is_dir():
+            return candidate
+        return None
+    fallback = Path.home() / "Downloads" / "Teslacam"
+    if fallback.is_dir():
+        return fallback
+    return None
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe required")
@@ -205,6 +234,83 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(fields[0], "hevc")
             self.assertEqual(fields[1], "320")
             self.assertEqual(fields[2], "180")
+
+
+@unittest.skipUnless(_real_footage_source() is not None, f"real-footage source not configured (set {REAL_FOOTAGE_ENV} or place a folder at ~/Downloads/Teslacam)")
+class RealFootageIntegrationTests(unittest.TestCase):
+    """Opt-in tests that run against real Tesla recording data.
+
+    Skipped on CI and on any machine where the configured source
+    folder is missing. When fired, they exercise the planner end-to-
+    end against real bytes — that's a different surface from the
+    synthetic IntegrationTests above, which always run on tiny
+    160×90 lavfi clips.
+
+    These do NOT trigger an actual render — wall-clock + GB output
+    would be too heavy for an autonomous loop. Render-side coverage
+    stays in IntegrationTests on synthetic input.
+    """
+
+    def test_cli_dry_run_json_against_real_footage(self):
+        repo_root = Path(__file__).resolve().parent.parent
+        source = _real_footage_source()
+        assert source is not None  # guarded by the skipUnless decorator
+
+        with TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(repo_root / "teslacam.py"),
+                    str(source),
+                    "--dry-run-json",
+                    str(manifest_path),
+                ],
+                check=True,
+            )
+            self.assertTrue(manifest_path.exists())
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        # Manifest envelope.
+        self.assertEqual(payload.get("type"), "teslacam.dry-run")
+        self.assertEqual(payload.get("schema_version"), 1)
+
+        # Scan should find at least one clip set in real footage.
+        scan = payload.get("scan", {})
+        self.assertGreater(scan.get("clip_set_count", 0), 0, "real footage must produce at least one clip set")
+        self.assertIn("cameras", scan)
+        self.assertGreater(len(scan["cameras"]), 0, "real footage must surface at least one camera")
+
+        # Selection block lines up with scan when no explicit time range
+        # is passed; the CLI defaults to the dataset's natural range.
+        selection = payload.get("selection", {})
+        self.assertGreaterEqual(
+            selection.get("clip_set_count", 0),
+            1,
+            "selection must include at least one clip set under default range",
+        )
+        self.assertGreater(
+            selection.get("rendered_duration", 0.0),
+            0.0,
+            "rendered_duration must be positive on real footage",
+        )
+
+        # Layout invariants — fixture-pinned profile must surface and
+        # canvas dimensions must be positive integers.
+        layout = payload.get("layout", {})
+        self.assertIn(layout.get("kind"), {"4up", "6up"})
+        self.assertIn(layout.get("profile"), {"auto", "legacy4", "sixcam"})
+        canvas = layout.get("canvas", {})
+        self.assertGreater(canvas.get("width", 0), 0)
+        self.assertGreater(canvas.get("height", 0), 0)
+
+        # Probed FPS must be a sensible TeslaCam-ish value (the contract
+        # has historically seen ~24 and ~36 from different firmware).
+        # 1 < fps < 120 is the conservative envelope.
+        fps = payload.get("fps")
+        self.assertIsInstance(fps, (int, float))
+        self.assertGreater(fps, 1.0)
+        self.assertLess(fps, 120.0)
 
 
 if __name__ == "__main__":
