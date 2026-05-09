@@ -518,6 +518,99 @@ struct TeslaCamTests {
     #expect(restored.map(canonical) == [canonical(folder)])
   }
 
+  @Test func sourceStoreRestoreReturnsEmptyAndPreservesBlobWhenAllFoldersAreGone() async throws {
+    // Sandbox-revoke / drive-ejected / folder-deleted edge case for the
+    // SourceStore bookmark layer. When every persisted bookmark resolves
+    // to a URL whose underlying file no longer exists, restore() must
+    // surface an empty list (no crash, no spurious URLs) and must NOT
+    // rewrite the persisted blob — leaving the bookmark data behind so a
+    // future re-mount can still resolve it.
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+    let folder = root.url.appendingPathComponent("vanished", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+    let suite = "TeslaCamTests.SourceStore.Revoke.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let key = "TeslaCam.lastSourceBookmarks.revoke-under-test"
+
+    let writeStore = SourceStore(
+      bookmarkKey: key,
+      userDefaults: defaults,
+      bookmarkCreationOptions: [],
+      bookmarkResolutionOptions: []
+    )
+    writeStore.rememberBookmarks(for: [folder])
+    let blobBeforeRevoke = defaults.array(forKey: key) as? [Data] ?? []
+    #expect(blobBeforeRevoke.count == 1)
+
+    // Revoke: the folder disappears between launches.
+    try FileManager.default.removeItem(at: folder)
+
+    let readStore = SourceStore(
+      bookmarkKey: key,
+      userDefaults: defaults,
+      bookmarkCreationOptions: [],
+      bookmarkResolutionOptions: []
+    )
+    let restored = readStore.restoreBookmarkedURLs()
+    #expect(restored.isEmpty)
+
+    // Blob untouched because zero bookmarks survived — keep the bookmark
+    // around so a future remount can still resolve it.
+    let blobAfter = defaults.array(forKey: key) as? [Data] ?? []
+    #expect(blobAfter == blobBeforeRevoke)
+  }
+
+  @Test func sourceStoreRestoreDropsMissingBookmarkAndShrinksBlobToSurvivors() async throws {
+    // Partial-survivor scenario: two folders bookmarked, one gets removed.
+    // restore() must return only the survivor and rewrite the persisted
+    // blob to drop the dead bookmark — otherwise the missing folder lingers
+    // forever in the blob, polluting subsequent restores.
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+    let kept = root.url.appendingPathComponent("kept", isDirectory: true)
+    let removed = root.url.appendingPathComponent("removed", isDirectory: true)
+    try FileManager.default.createDirectory(at: kept, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: removed, withIntermediateDirectories: true)
+
+    let suite = "TeslaCamTests.SourceStore.Partial.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let key = "TeslaCam.lastSourceBookmarks.partial-under-test"
+
+    let writeStore = SourceStore(
+      bookmarkKey: key,
+      userDefaults: defaults,
+      bookmarkCreationOptions: [],
+      bookmarkResolutionOptions: []
+    )
+    writeStore.rememberBookmarks(for: [kept, removed])
+    let blobBefore = defaults.array(forKey: key) as? [Data] ?? []
+    #expect(blobBefore.count == 2)
+
+    try FileManager.default.removeItem(at: removed)
+
+    let readStore = SourceStore(
+      bookmarkKey: key,
+      userDefaults: defaults,
+      bookmarkCreationOptions: [],
+      bookmarkResolutionOptions: []
+    )
+    let restored = readStore.restoreBookmarkedURLs()
+
+    // Compare via resolvingSymlinksInPath so the assertion is independent
+    // of the temp-directory /var ↔ /private/var aliasing (matches the
+    // round-trip test above).
+    let canonical = { (url: URL) in url.resolvingSymlinksInPath().standardizedFileURL.path }
+    #expect(restored.map(canonical) == [canonical(kept)])
+
+    // Blob shrunk to the survivor only.
+    let blobAfter = defaults.array(forKey: key) as? [Data] ?? []
+    #expect(blobAfter.count == 1)
+  }
+
   @Test func sharedDomainFixturesMatchNativeScanManifestsForAllDuplicatePolicies() async throws {
     let fixtureDirectory = repositoryRootForTests()
       .appendingPathComponent("fixtures", isDirectory: true)
