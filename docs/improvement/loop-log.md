@@ -36,3 +36,4 @@ Append-only. Read the last 5 entries before picking the next task.
 09:20 | F2-ext | done | preflight partial-clip warning channel locked | d66432d
 09:22 | F-ext-hidden | done | preflight hidden-cameras warning channel locked | 0c5127b
 09:38 | F-ext-disk | done | preflight disk-unknown warning channel locked | b2b9906
+09:42 | refactor | done | DomainContract.swift extracted; Models.swift -253 lines | 6f0b172
