@@ -611,6 +611,67 @@ struct TeslaCamTests {
     #expect(blobAfter.count == 1)
   }
 
+  @Test func indexerSurvivesUnreadableAndCorruptedClipFilesWithFallbackDuration() async throws {
+    // Lock the contract for corrupted / unreadable media: ClipIndexer
+    // must not crash, must index every well-named clip file (filename
+    // pattern is the source of truth), and must fall back to the
+    // 60-second default duration when AVAsset cannot decode the bytes.
+    // The composer's clip-readability check is a separate downstream
+    // gate; the indexer's job is to surface every named clip so the
+    // health summary can flag it.
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+
+    let savedClips = root.url.appendingPathComponent("SavedClips", isDirectory: true)
+    try FileManager.default.createDirectory(at: savedClips, withIntermediateDirectories: true)
+
+    // 1. Empty file — zero bytes. AVAsset returns invalid duration.
+    let emptyURL = savedClips.appendingPathComponent("2026-07-01_00-00-00-front.mp4")
+    try Data().write(to: emptyURL)
+
+    // 2. Truncated mp4 header — valid 'ftyp' box prefix but no moov
+    //    atom, so AVAsset can't establish duration / track metadata.
+    let truncatedURL = savedClips.appendingPathComponent("2026-07-01_00-01-00-back.mp4")
+    var truncatedHeader = Data()
+    // box size = 24 bytes (big-endian)
+    truncatedHeader.append(contentsOf: [0x00, 0x00, 0x00, 0x18])
+    // box type 'ftyp'
+    truncatedHeader.append(contentsOf: [0x66, 0x74, 0x79, 0x70])
+    // major brand 'isom'
+    truncatedHeader.append(contentsOf: [0x69, 0x73, 0x6F, 0x6D])
+    // minor version + compatible brands (just enough to be 24 bytes total)
+    truncatedHeader.append(contentsOf: Array(repeating: UInt8(0), count: 12))
+    try truncatedHeader.write(to: truncatedURL)
+
+    // 3. Random garbage — guarantees AVAsset failure.
+    let garbageURL = savedClips.appendingPathComponent("2026-07-01_00-02-00-left_repeater.mp4")
+    var garbage = Data(count: 512)
+    for index in 0..<garbage.count {
+      garbage[index] = UInt8(index & 0xFF)
+    }
+    try garbage.write(to: garbageURL)
+
+    // Index — must not throw.
+    let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: .mergeByTime) { _ in }
+
+    // All three timestamps survived (filename is the source of truth;
+    // AVAsset failure does not drop the clip).
+    #expect(index.sets.count == 3)
+    let timestamps = Set(index.sets.map(\.timestamp))
+    #expect(timestamps == [
+      "2026-07-01_00-00-00",
+      "2026-07-01_00-01-00",
+      "2026-07-01_00-02-00",
+    ])
+
+    // Every clip set falls back to the 60.0s default. The indexer's
+    // normalizedDuration helper returns 60.0 on invalid CMTime; the
+    // builder's max() across cameras propagates that into ClipSet.
+    for clipSet in index.sets {
+      #expect(clipSet.duration == 60.0, "expected 60s fallback for unreadable clip \(clipSet.timestamp), got \(clipSet.duration)")
+    }
+  }
+
   @Test func sharedOutputFixturesMatchNativeOutputContractForEveryPolicy() async throws {
     // Swift parity for the expected_output block emitted by
     // script/regen_fixtures.py. Exercises DomainOutputContract's three
