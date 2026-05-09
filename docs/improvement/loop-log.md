@@ -31,3 +31,4 @@ Append-only. Read the last 5 entries before picking the next task.
 08:34 | policy | drop commit-count stop; time-based budget is the only hard stop | --
 08:42 | A3-output | done | Swift output-policy parity vs expected_output | e54aec2
 08:47 | F5 | done | indexer fallback duration on unreadable media | b17db2d
+09:02 | F6 | done | ExportPlan per-variant validation + .noClips gap closed | 23f96bc
