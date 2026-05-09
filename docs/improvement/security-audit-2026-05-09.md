@@ -91,6 +91,41 @@ for f in TeslaCam/*.entitlements; do echo "=== $f ==="; cat "$f"; echo; done
 Re-open G4 if a new entitlement key gets added; the new key needs a
 matching exercise site in the codebase, otherwise drop it.
 
+## G5 — logging discipline (privacy redaction in unified log)
+
+Pattern checked:
+
+```bash
+git grep -nE '\b(print\(|NSLog|os_log\b|Logger|debugPrint)' -- 'TeslaCam/*.swift'
+git grep -nE '\bprint\(' -- 'teslacam_cli/*.py'
+```
+
+**Swift findings:**
+
+- Zero `print(` / `NSLog` / `debugPrint` in shipping Swift source. The
+  app routes diagnostics through a single `Logger(subsystem:
+  "com.magrathean.TeslaCam", category: "debug")` inside
+  `DebugLogSink.record(_:category:)` (TeslaCam/Models.swift:946).
+- One actionable finding **(fixed in this loop)**: the message
+  interpolation was `\(message, privacy: .public)`. Category is a fixed
+  identifier (legitimately public for filtering), but message content
+  is dynamic and may carry user-facing file paths (export destinations,
+  source-folder URLs). Public privacy means those paths surface in
+  Console.app / sysdiagnose without a debugger attached.
+- Fix: tightened to `\(message, privacy: .private)`. Category stays
+  `.public`. The in-app `Show Log` is unaffected — it reads the
+  in-memory `events` array, not the redacted unified-log copy. This
+  matches sacred rule 7: diagnostics stay local; `Show Log` is the
+  user-facing surface.
+
+**Python findings:**
+
+- The CLI's `print()` calls in `teslacam_cli/cli.py` are all
+  user-facing CLI output (progress, prompts, errors, summaries) —
+  intended terminal interaction, not a long-lived log. The `--ffmpeg
+  failed: ...` channel is `print(..., file=sys.stderr)` on line 351.
+  Not a logging-discipline concern.
+
 ## Re-running the audit
 
 ```bash

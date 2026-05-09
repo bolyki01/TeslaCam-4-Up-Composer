@@ -950,7 +950,14 @@ final class DebugLogSink: ObservableObject {
   private let maxEventCount = 250
 
   func record(_ message: String, category: String) {
-    logger.log("[\(category, privacy: .public)] \(message, privacy: .public)")
+    // Categories are fixed identifiers (e.g. "export", "import") so they
+    // stay .public for filtering. Message content is dynamic and may
+    // contain user-facing file paths (export destinations, source-folder
+    // URLs). Mark it .private so it's redacted in Console.app /
+    // sysdiagnose without a debugger attached. The in-app `Show Log`
+    // surface still receives the full string via the in-memory `events`
+    // array below — that's the canonical user-facing diagnostic.
+    logger.log("[\(category, privacy: .public)] \(message, privacy: .private)")
 #if DEBUG
     events.append(DebugEvent(timestamp: Date(), category: category, message: message))
     if events.count > maxEventCount {
