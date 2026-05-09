@@ -30,3 +30,4 @@ Append-only. Read the last 5 entries before picking the next task.
 08:28 | A3-selection | done | Swift selection parity vs expected_selection per policy | cf9b317
 08:34 | policy | drop commit-count stop; time-based budget is the only hard stop | --
 08:42 | A3-output | done | Swift output-policy parity vs expected_output | e54aec2
+08:47 | F5 | done | indexer fallback duration on unreadable media | b17db2d
