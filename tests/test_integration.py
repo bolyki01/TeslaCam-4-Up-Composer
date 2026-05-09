@@ -11,6 +11,18 @@ import unittest
 
 
 REAL_FOOTAGE_ENV = "TESLACAM_REAL_FOOTAGE_SOURCE"
+REAL_FOOTAGE_RENDER_ENV = "TESLACAM_REAL_FOOTAGE_RENDER"
+
+
+def _real_footage_render_opted_in() -> bool:
+    """The render test is heavier than the planner test (~3 s wall +
+    ~10 MB output for a 2-second window). Require an explicit opt-in
+    via ``TESLACAM_REAL_FOOTAGE_RENDER`` so routine
+    ``unittest discover`` runs are not slowed even when the source
+    folder happens to be present.
+    """
+    raw = os.environ.get(REAL_FOOTAGE_RENDER_ENV, "")
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _real_footage_source() -> Path | None:
@@ -311,6 +323,77 @@ class RealFootageIntegrationTests(unittest.TestCase):
         self.assertIsInstance(fps, (int, float))
         self.assertGreater(fps, 1.0)
         self.assertLess(fps, 120.0)
+
+
+@unittest.skipUnless(
+    _real_footage_source() is not None and _real_footage_render_opted_in(),
+    f"real-footage render test requires a configured source AND {REAL_FOOTAGE_RENDER_ENV}=1 (heavier than planner test; ~3s wall + 10 MB output)",
+)
+class RealFootageRenderIntegrationTests(unittest.TestCase):
+    """Opt-in real-footage render. Skipped by default — both
+    `_real_footage_source()` and `TESLACAM_REAL_FOOTAGE_RENDER=1`
+    must hold for it to fire. CI never has either; local
+    developers turn it on when validating the end-to-end ffmpeg
+    pipeline against real bytes (e.g. before shipping a release
+    candidate).
+
+    The test renders a tight 2-second window with the fastest
+    encoder preset so the wall-clock stays small and the output
+    fits comfortably in a TemporaryDirectory.
+    """
+
+    def test_cli_renders_brief_window_from_real_footage(self):
+        repo_root = Path(__file__).resolve().parent.parent
+        source = _real_footage_source()
+        assert source is not None  # guarded by skipUnless
+
+        with TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "render.mp4"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(repo_root / "teslacam.py"),
+                    str(source),
+                    "--start",
+                    "2026-04-08 11:30:35",
+                    "--end",
+                    "2026-04-08 11:30:37",
+                    "--output",
+                    str(output),
+                    "--mode",
+                    "quality",
+                    "--x265-preset",
+                    "ultrafast",
+                    "--loglevel",
+                    "error",
+                ],
+                check=True,
+            )
+            self.assertTrue(output.exists(), "render must produce an output mp4")
+            self.assertGreater(output.stat().st_size, 0, "output must be non-empty")
+
+            probe = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=codec_name,width,height",
+                    "-of",
+                    "default=nk=1:nw=1",
+                    str(output),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            fields = probe.stdout.strip().splitlines()
+            self.assertEqual(fields[0], "hevc", "real-footage render must produce HEVC output")
+            # HW3 4-cam canvas: 2560 × 1920 (two 1280×960 tiles per row).
+            self.assertEqual(fields[1], "2560")
+            self.assertEqual(fields[2], "1920")
 
 
 if __name__ == "__main__":
