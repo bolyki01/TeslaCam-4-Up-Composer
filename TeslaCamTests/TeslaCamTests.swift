@@ -138,6 +138,68 @@ struct TeslaCamTests {
     }
   }
 
+  @Test func exportPreflightWarnsAboutHiddenCamerasWhenSomeFilesAreNotEnabled() async throws {
+    // ExportPreflight surfaces a non-blocking warning when a clip set
+    // contains cameras the user has not enabled — they'll render as
+    // black tiles rather than silently dropping out of the layout.
+    // Build a request with three cameras present in files but only
+    // `.front` enabled; assert the warning message names the hidden
+    // cameras using their display names.
+    let trimStart = Date(timeIntervalSince1970: 200)
+    let trimEnd = Date(timeIntervalSince1970: 260)
+    let request = ExportRequest(
+      sets: [
+        ClipSet(
+          timestamp: "sample",
+          date: trimStart,
+          duration: 60,
+          files: [
+            .front: URL(fileURLWithPath: "/tmp/front.mov"),
+            .back: URL(fileURLWithPath: "/tmp/back.mov"),
+            .left_repeater: URL(fileURLWithPath: "/tmp/left.mov"),
+          ],
+          cameraDurations: [.front: 60, .back: 60, .left_repeater: 60],
+          naturalSizes: [
+            .front: CGSize(width: 1280, height: 960),
+            .back: CGSize(width: 1280, height: 960),
+            .left_repeater: CGSize(width: 1280, height: 960),
+          ]
+        )
+      ],
+      outputURL: URL(fileURLWithPath: "/tmp/teslacam-hidden.mov"),
+      useSixCam: false,
+      preset: .maxQualityHEVC,
+      enabledCameras: [.front],
+      trimStartSeconds: 0,
+      trimEndSeconds: 60,
+      trimStartDate: trimStart,
+      trimEndDate: trimEnd,
+      selectedRangeText: "sample",
+      partialClipCount: 0,
+      cameraTrack: .empty,
+      isPreviewSample: false
+    )
+    let plan = try ExportPlan(request: request)
+    let preflight = ExportPreflight(
+      fileAccess: StubExportPreflightFileAccess(canWrite: true, availableCapacity: Int64.max)
+    )
+    let summary = preflight.summary(for: plan)
+
+    let hiddenWarnings = summary.warnings.filter { warning in
+      warning.message.contains("Hidden cameras")
+    }
+    #expect(!hiddenWarnings.isEmpty, "preflight must surface a 'Hidden cameras' warning when present cameras are not enabled")
+    for warning in hiddenWarnings {
+      #expect(!warning.isBlocking, "hidden-cameras warning is informational; export still ships with black tiles")
+      // Display names of the hidden cameras should appear in the message.
+      #expect(warning.message.contains(Camera.back.displayName), "warning text must name the hidden Back camera")
+      #expect(warning.message.contains(Camera.left_repeater.displayName), "warning text must name the hidden Left repeater camera")
+      // The enabled camera must NOT show up as 'hidden'.
+      #expect(!warning.message.contains("\(Camera.front.displayName),") && !warning.message.hasSuffix(Camera.front.displayName + "."),
+              "warning text must not list Front (the enabled camera) as hidden")
+    }
+  }
+
   @Test func exportPreflightWarnsAboutPartialClipsWhenRequestCarriesPartialCount() async throws {
     // ExportPlan carries partialClipCount through from the request;
     // ExportPreflight must surface a non-blocking warning that calls
