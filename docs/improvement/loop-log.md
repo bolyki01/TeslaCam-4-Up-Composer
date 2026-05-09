@@ -19,3 +19,5 @@ Append-only. Read the last 5 entries before picking the next task.
 07:49 | H1 | done | regen workflow documented in domain-contract.md | 13291cf
 07:49 | F7 | clean (audit) | n/a — both CIs pick up parity tests via discover / target | --
 08:01 | H4 | done | opt-in pre-commit hook + RUNBOOK section | 5cddd85
+08:01 | H5 | clean (audit) | n/a — MACOSX_DEPLOYMENT_TARGET=26.0 only in pbxproj, no script overrides | --
+08:01 | H6 | clean (audit) | n/a — zero shipping-code references to _legacy/ | --

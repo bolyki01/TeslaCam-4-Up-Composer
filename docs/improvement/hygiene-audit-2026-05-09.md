@@ -60,3 +60,35 @@ git grep -nE '(TODO|FIXME|HACK|XXX)' -- \
 
 Re-open H3 / J4 in the queue if either command starts producing actionable
 hits.
+
+## H5 — MACOSX_DEPLOYMENT_TARGET override audit
+
+Pattern checked:
+
+```bash
+git grep -nE 'MACOSX_DEPLOYMENT_TARGET' -- '.github/*' 'script/*' 'TeslaCam.xcodeproj/*.pbxproj'
+```
+
+**Result:** the only setter is the Xcode project's six per-configuration
+slots in `TeslaCam.xcodeproj/project.pbxproj` (Debug + Release ×
+`TeslaCam` / `TeslaCamTests` / `TeslaCamUITests`), all = `26.0`. No
+`MACOSX_DEPLOYMENT_TARGET` override anywhere under `script/` or
+`.github/workflows/`. The CI `xcodebuild` invocation honors the
+project setting — confirmed in plan note 06 step 6.
+
+No commit required.
+
+## H6 — `_legacy/` references in shipping code
+
+Pattern checked:
+
+```bash
+git grep -nE '_legacy/' -- 'TeslaCam/*.swift' 'teslacam_cli/*.py' 'tests/*.py' \
+                          'TeslaCamTests/*.swift' 'TeslaCamUITests/*.swift'
+```
+
+**Result:** zero hits. No shipping Swift or Python source references
+`_legacy/`. The directory remains reference-only as documented in
+`AGENTS.md` and `CLAUDE.md`.
+
+No commit required.
