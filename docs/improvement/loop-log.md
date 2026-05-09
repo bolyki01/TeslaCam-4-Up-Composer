@@ -45,3 +45,4 @@ Append-only. Read the last 5 entries before picking the next task.
 10:30 | F4-real | done | opt-in real-footage planner integration test | ade07cc
 10:39 | F4-render | done | opt-in real-footage 2s render integration test | c638c98
 20:14 | F4-real-swift | done | opt-in real-footage Swift indexer test | 0812d83
+20:15 | stop | budget elapsed | session 6h budget elapsed; loop wraps here | --
