@@ -9,3 +9,5 @@ Append-only. Read the last 5 entries before picking the next task.
 07:18 | A7 | done | n/a (correctness lock + 3 new fixtures) | 0866e90
 07:26 | D3 | done | actionable error UX (tail=40 lines + filter graph) | d3c27e4
 07:32 | D2 | done | parallel ffprobe (4 workers, ~4x on probe phase) | e2ff83d
+07:34 | D7 | done | unicode round-trip locked | a92343d
+07:34 | H3+J4 | clean (audit) | n/a | 3914e39
