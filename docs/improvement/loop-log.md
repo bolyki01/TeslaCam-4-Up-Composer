@@ -27,3 +27,4 @@ Append-only. Read the last 5 entries before picking the next task.
 08:21 | A6 | done | timezone_edges fixture (DST gap + midnight + wide range) | 36b67ec
 08:22 | J5+J6 | done | drop 2 unused imports; zero runtime deps | f70f1a6
 08:23 | J7 | done | churn snapshot — AppState + NativeExportController are the splits | b3162ee
+08:28 | A3-selection | done | Swift selection parity vs expected_selection per policy | cf9b317
