@@ -138,6 +138,54 @@ struct TeslaCamTests {
     }
   }
 
+  @Test func exportPreflightWarnsAboutPartialClipsWhenRequestCarriesPartialCount() async throws {
+    // ExportPlan carries partialClipCount through from the request;
+    // ExportPreflight must surface a non-blocking warning that calls
+    // out the count so the export status UI shows the user that some
+    // clip spans will render with black placeholders. The current
+    // tests cover preflight access + canvas + disk gates but never
+    // exercise the partial-clip warning channel.
+    let trimStart = Date(timeIntervalSince1970: 100)
+    let trimEnd = Date(timeIntervalSince1970: 160)
+    let request = ExportRequest(
+      sets: [
+        ClipSet(
+          timestamp: "sample",
+          date: trimStart,
+          duration: 60,
+          files: [.front: URL(fileURLWithPath: "/tmp/front.mov")],
+          cameraDurations: [.front: 60],
+          naturalSizes: [.front: CGSize(width: 1280, height: 960)]
+        )
+      ],
+      outputURL: URL(fileURLWithPath: "/tmp/teslacam-partial.mov"),
+      useSixCam: false,
+      preset: .maxQualityHEVC,
+      enabledCameras: [.front],
+      trimStartSeconds: 0,
+      trimEndSeconds: 60,
+      trimStartDate: trimStart,
+      trimEndDate: trimEnd,
+      selectedRangeText: "sample",
+      partialClipCount: 2,
+      cameraTrack: .empty,
+      isPreviewSample: false
+    )
+    let plan = try ExportPlan(request: request)
+    let preflight = ExportPreflight(
+      fileAccess: StubExportPreflightFileAccess(canWrite: true, availableCapacity: Int64.max)
+    )
+    let summary = preflight.summary(for: plan)
+
+    let partialWarnings = summary.warnings.filter { warning in
+      warning.message.contains("2") && warning.message.lowercased().contains("missing")
+    }
+    #expect(!partialWarnings.isEmpty, "preflight should surface a non-blocking warning that mentions the partial-clip count + 'missing'")
+    for warning in partialWarnings {
+      #expect(!warning.isBlocking, "partial-clip warning must be non-blocking — exports still ship with black placeholders")
+    }
+  }
+
   @Test func exportPlanRejectsRequestWithNoClips() async throws {
     // The exportRequestForPlan helper hard-codes a single-clip set so
     // the default path always has clips. Build a no-clip request
