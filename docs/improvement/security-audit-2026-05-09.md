@@ -64,6 +64,33 @@ git grep -n 'TESLACAM_FFMPEG\|TESLACAM_FFPROBE\|_resolve_one_tool\|resolve_tools
 to drive integration cases (gated on `shutil.which("ffmpeg")` so the
 suite skips when ffmpeg is unavailable).
 
+## G4 — hardened-runtime entitlements audit
+
+Both entitlement files (`TeslaCam/TeslaCam.entitlements` and
+`TeslaCam/TeslaCam_iPad.entitlements`) carry exactly two keys:
+
+- `com.apple.security.app-sandbox` = `true` — required for App Store
+  distribution. Always exercised: the app runs sandboxed.
+- `com.apple.security.files.user-selected.read-write` = `true` —
+  required by the App Store sandbox to open user-picked TeslaCam folders
+  and write export output. Exercised at every source-folder pick via
+  `NSOpenPanel` (then handled by `SourceStore`'s security-scoped bookmark
+  flow) and at every export destination pick via `NSSavePanel` (then
+  handled by `NativeExportController.beginOutputScope`).
+
+No additional entitlements (no Apple Events, no network client, no
+camera/microphone, no Mac App Sandbox temporary exceptions). The
+permission surface is the minimum required by sandbox + user-picked file
+access; nothing is over-granted.
+
+```bash
+ls TeslaCam/*.entitlements
+for f in TeslaCam/*.entitlements; do echo "=== $f ==="; cat "$f"; echo; done
+```
+
+Re-open G4 if a new entitlement key gets added; the new key needs a
+matching exercise site in the codebase, otherwise drop it.
+
 ## Re-running the audit
 
 ```bash
