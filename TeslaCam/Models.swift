@@ -1524,6 +1524,161 @@ extension ClipIndex {
   }
 }
 
+struct DomainSelectedClipSetManifest: Codable, Equatable {
+  let timestamp: String
+  let startTime: String
+  let duration: Double
+  let trimStart: Double
+  let trimEnd: Double
+  let renderedDuration: Double
+  let cameras: [String]
+  let files: [String: String]
+
+  enum CodingKeys: String, CodingKey {
+    case timestamp
+    case startTime = "start_time"
+    case duration
+    case trimStart = "trim_start"
+    case trimEnd = "trim_end"
+    case renderedDuration = "rendered_duration"
+    case cameras
+    case files
+  }
+}
+
+struct DomainSelectionManifest: Codable, Equatable {
+  let clipSetCount: Int
+  let renderedDuration: Double
+  let clipSets: [DomainSelectedClipSetManifest]
+
+  enum CodingKeys: String, CodingKey {
+    case clipSetCount = "clip_set_count"
+    case renderedDuration = "rendered_duration"
+    case clipSets = "clip_sets"
+  }
+
+  /// Empty-selection sentinel: matches what Python's
+  /// `selected_sets_manifest` returns when no clips survive filtering.
+  static let empty = DomainSelectionManifest(
+    clipSetCount: 0,
+    renderedDuration: 0.0,
+    clipSets: []
+  )
+}
+
+extension Array where Element == ClipSet {
+  /// Build the selection manifest for the contract.
+  ///
+  /// Mirrors Python's `selected_sets_manifest()` (in
+  /// `teslacam_cli/domain_contract.py`) and exists so fixture-scale
+  /// Swift parity tests can produce the same JSON shape without
+  /// running AVAsset duration probes against empty fixture files.
+  ///
+  /// - Parameters:
+  ///   - startTime: lower time bound (inclusive); clips ending at or
+  ///     before this are dropped.
+  ///   - endTime: upper time bound (exclusive); clips starting at or
+  ///     after this are dropped.
+  ///   - clipDurationSeconds: assumed duration for every clip set.
+  ///     Pass the natural value from real AVAsset probes in production
+  ///     code, or a stub (60s for fixture parity tests) when the
+  ///     underlying media is synthetic.
+  ///   - rootURL: source directory used to make the file paths
+  ///     relative in the manifest output.
+  func domainSelectionManifest(
+    startTime: Date,
+    endTime: Date,
+    clipDurationSeconds: Double,
+    relativeTo rootURL: URL
+  ) -> DomainSelectionManifest {
+    let cameraOrder = Dictionary(
+      uniqueKeysWithValues: Camera.mixedOrder.enumerated().map { ($0.element, $0.offset) }
+    )
+
+    var manifests: [DomainSelectedClipSetManifest] = []
+    var totalRendered: Double = 0.0
+
+    for clipSet in self {
+      let clipEnd = clipSet.date.addingTimeInterval(clipDurationSeconds)
+      if clipSet.date >= endTime || clipEnd <= startTime {
+        continue
+      }
+      // Inside an `Array<ClipSet>` extension, bare `max` / `min` resolve
+      // to the Array instance methods. Force the global numeric ones.
+      let trimStart = Swift.max(0.0, startTime.timeIntervalSince(clipSet.date))
+      let trimEnd = Swift.min(clipDurationSeconds, endTime.timeIntervalSince(clipSet.date))
+      if trimEnd - trimStart <= 0.001 {
+        continue
+      }
+      let rendered = Swift.max(0.0, trimEnd - trimStart)
+      totalRendered += rendered
+
+      let orderedCameras = clipSet.files.keys.sorted { lhs, rhs in
+        let lhsIndex = cameraOrder[lhs] ?? Int.max
+        let rhsIndex = cameraOrder[rhs] ?? Int.max
+        if lhsIndex == rhsIndex { return lhs.rawValue < rhs.rawValue }
+        return lhsIndex < rhsIndex
+      }
+      var files: [String: String] = [:]
+      for camera in orderedCameras {
+        if let url = clipSet.files[camera] {
+          files[camera.rawValue] = DomainContractPath.relative(url, to: rootURL)
+        }
+      }
+      manifests.append(
+        DomainSelectedClipSetManifest(
+          timestamp: clipSet.timestamp,
+          startTime: DomainContractPath.timestamp(clipSet.date),
+          duration: DomainContractPath.round6(clipDurationSeconds),
+          trimStart: DomainContractPath.round6(trimStart),
+          trimEnd: DomainContractPath.round6(trimEnd),
+          renderedDuration: DomainContractPath.round6(rendered),
+          cameras: orderedCameras.map(\.rawValue),
+          files: files
+        )
+      )
+    }
+
+    return DomainSelectionManifest(
+      clipSetCount: manifests.count,
+      renderedDuration: DomainContractPath.round6(totalRendered),
+      clipSets: manifests
+    )
+  }
+}
+
+/// File-private contract formatting helpers shared by every
+/// `DomainScanManifest` / `DomainSelectionManifest` builder. Matches the
+/// `path_for_manifest` / `datetime_for_manifest` / `round(value, 6)`
+/// behaviour in Python's `domain_contract.py`.
+enum DomainContractPath {
+  static func relative(_ url: URL, to rootURL: URL) -> String {
+    let rootPath = rootURL.standardizedFileURL.path
+    let path = url.standardizedFileURL.path
+    let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+    if path.hasPrefix(prefix) {
+      return String(path.dropFirst(prefix.count))
+    }
+    return path
+  }
+
+  static func timestamp(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone.current
+    formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+    return formatter.string(from: date)
+  }
+
+  /// Mirror Python's `round(value, 6)`. For the deterministic fixture
+  /// values (60.0 etc.) the input is already exact; this helper exists
+  /// so future contract-shape changes stay symmetric.
+  static func round6(_ value: Double) -> Double {
+    let scale = 1_000_000.0
+    return (value * scale).rounded() / scale
+  }
+}
+
 struct ExportHealthSummary {
   let totalMinutes: Int
   let gapCount: Int

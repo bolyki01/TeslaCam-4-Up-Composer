@@ -611,6 +611,64 @@ struct TeslaCamTests {
     #expect(blobAfter.count == 1)
   }
 
+  @Test func sharedSelectionFixturesMatchNativeSelectionManifestForAllDuplicatePolicies() async throws {
+    // Swift parity for the expected_selection.{policy} block emitted by
+    // script/regen_fixtures.py. Uses a fixed clipDurationSeconds = 60
+    // (matches the StubMediaProbe both the regen script and the Python
+    // parity test agree on) so the fixture data does not depend on
+    // AVAsset returning realistic durations for empty mp4 placeholders.
+    let fixtureDirectory = repositoryRootForTests()
+      .appendingPathComponent("fixtures", isDirectory: true)
+      .appendingPathComponent("domain", isDirectory: true)
+      .appendingPathComponent("cases", isDirectory: true)
+    let fixtureURLs = try FileManager.default.contentsOfDirectory(
+      at: fixtureDirectory,
+      includingPropertiesForKeys: nil
+    ).filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+    #expect(fixtureURLs.count >= 4)
+
+    let decoder = JSONDecoder()
+    var checkedFixtures = 0
+    for fixtureURL in fixtureURLs {
+      let fixture = try decoder.decode(DomainFixtureCase.self, from: Data(contentsOf: fixtureURL))
+      guard let expectedSelection = fixture.expectedSelection else { continue }
+      checkedFixtures += 1
+
+      let root = try TemporaryDirectory.make()
+      defer { try? root.remove() }
+      try materializeDomainFixture(fixture, at: root.url)
+
+      for policy in DuplicateClipPolicy.allCases {
+        let expected = try #require(expectedSelection[policy.contractValue])
+        let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: policy) { _ in }
+
+        let actual: DomainSelectionManifest
+        if index.sets.isEmpty {
+          actual = .empty
+        } else {
+          let sortedSets = index.sets.sorted { lhs, rhs in
+            if lhs.date == rhs.date {
+              return lhs.timestamp < rhs.timestamp
+            }
+            return lhs.date < rhs.date
+          }
+          let earliest = sortedSets.first!.date
+          let latest = sortedSets.last!.date.addingTimeInterval(60.0)
+          actual = sortedSets.domainSelectionManifest(
+            startTime: earliest,
+            endTime: latest,
+            clipDurationSeconds: 60.0,
+            relativeTo: root.url
+          )
+        }
+        #expect(actual == expected, "selection parity differs for \(fixture.name) under policy \(policy.contractValue)")
+      }
+    }
+
+    #expect(checkedFixtures >= 1)
+  }
+
   @Test func sharedDomainFixturesMatchNativeScanManifestsForAllDuplicatePolicies() async throws {
     let fixtureDirectory = repositoryRootForTests()
       .appendingPathComponent("fixtures", isDirectory: true)
@@ -1301,12 +1359,14 @@ private struct DomainFixtureCase: Decodable {
   let files: [DomainFixtureFile]
   let expectedScan: [String: DomainScanManifestWithoutHeader]
   let expectedLayout: [String: DomainLayoutManifest]?
+  let expectedSelection: [String: DomainSelectionManifest]?
 
   enum CodingKeys: String, CodingKey {
     case name
     case files
     case expectedScan = "expected_scan"
     case expectedLayout = "expected_layout"
+    case expectedSelection = "expected_selection"
   }
 }
 
