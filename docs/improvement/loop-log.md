@@ -35,3 +35,4 @@ Append-only. Read the last 5 entries before picking the next task.
 09:04 | H2 | done | plan note 02 refreshed with F5 + F6 status | 5fc5350
 09:20 | F2-ext | done | preflight partial-clip warning channel locked | d66432d
 09:22 | F-ext-hidden | done | preflight hidden-cameras warning channel locked | 0c5127b
+09:38 | F-ext-disk | done | preflight disk-unknown warning channel locked | b2b9906
