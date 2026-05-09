@@ -42,3 +42,4 @@ Append-only. Read the last 5 entries before picking the next task.
 10:13 | G-ext-swift | done | Swift codebase invariant tripwires (print/Sentry/_legacy) | 9ca336b
 10:16 | F-ext-regen | done | regen_fixtures idempotency lock | 38f4b00
 10:19 | B1-real | done | real HW3 baseline (cold scan + dry-run timing) | 8dfb0eb
+10:30 | F4-real | done | opt-in real-footage planner integration test | ade07cc
