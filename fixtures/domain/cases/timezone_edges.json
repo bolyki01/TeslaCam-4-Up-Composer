@@ -1,0 +1,598 @@
+{
+  "description": "Wall-clock edge cases: a US DST forward gap (2026-03-08 02:00 EST \u2192 03:00 EDT \u2014 clips on either side, no 02:xx files), a midnight crossover (2026-04-15 23:59 \u2192 2026-04-16 00:00), and back-to-back clips a single minute apart so the merge-by-time policy keeps them distinct timestamps. The contract treats filename timestamps as opaque strings; this fixture locks that the wall-clock weirdness above does not regress duplicate handling, sort order, or the manifest output.",
+  "expected_layout": {
+    "auto": {
+      "canvas": {
+        "height": 1920,
+        "width": 2560
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 0
+        },
+        "left_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "right_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "hidden_cameras": [],
+      "kind": "4up",
+      "profile": "auto",
+      "render_order": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ]
+    },
+    "legacy4": {
+      "canvas": {
+        "height": 1920,
+        "width": 2560
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 0
+        },
+        "left_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "right_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "hidden_cameras": [],
+      "kind": "4up",
+      "profile": "legacy4",
+      "render_order": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ]
+    },
+    "sixcam": {
+      "canvas": {
+        "height": 2880,
+        "width": 3840
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "left": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "left_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 1920
+        },
+        "right": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 960
+        },
+        "right_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 1920
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "hidden_cameras": [],
+      "kind": "6up",
+      "profile": "sixcam",
+      "render_order": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ]
+    }
+  },
+  "expected_output": {
+    "default_filename_by_mode": {
+      "lossless": "teslacam_lossless_2026-03-08_01-59-00_to_2026-04-16_00-01-00.mp4",
+      "quality": "teslacam_quality_2026-03-08_01-59-00_to_2026-04-16_00-01-00.mp4"
+    },
+    "error_with_conflict": {
+      "exception_type": "RuntimeError",
+      "message_contains": "Output file already exists",
+      "raises": true
+    },
+    "overwrite_with_conflict": "teslacam_lossless_2026-03-08_01-59-00_to_2026-04-16_00-01-00.mp4",
+    "unique_resolution": [
+      "teslacam_lossless_2026-03-08_01-59-00_to_2026-04-16_00-01-00.mp4",
+      "teslacam_lossless_2026-03-08_01-59-00_to_2026-04-16_00-01-00-2.mp4",
+      "teslacam_lossless_2026-03-08_01-59-00_to_2026-04-16_00-01-00-3.mp4"
+    ]
+  },
+  "expected_scan": {
+    "keep-all": {
+      "cameras": [
+        "front",
+        "back"
+      ],
+      "clip_set_count": 4,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-03-08_01-59-00-back.mp4",
+            "front": "SavedClips/2026-03-08_01-59-00-front.mp4"
+          },
+          "start_time": "2026-03-08T01:59:00",
+          "timestamp": "2026-03-08_01-59-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-03-08_03-00-00-back.mp4",
+            "front": "SavedClips/2026-03-08_03-00-00-front.mp4"
+          },
+          "start_time": "2026-03-08T03:00:00",
+          "timestamp": "2026-03-08_03-00-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-04-15_23-59-00-back.mp4",
+            "front": "SavedClips/2026-04-15_23-59-00-front.mp4"
+          },
+          "start_time": "2026-04-15T23:59:00",
+          "timestamp": "2026-04-15_23-59-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-04-16_00-00-00-back.mp4",
+            "front": "SavedClips/2026-04-16_00-00-00-front.mp4"
+          },
+          "start_time": "2026-04-16T00:00:00",
+          "timestamp": "2026-04-16_00-00-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "merge-by-time": {
+      "cameras": [
+        "front",
+        "back"
+      ],
+      "clip_set_count": 4,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-03-08_01-59-00-back.mp4",
+            "front": "SavedClips/2026-03-08_01-59-00-front.mp4"
+          },
+          "start_time": "2026-03-08T01:59:00",
+          "timestamp": "2026-03-08_01-59-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-03-08_03-00-00-back.mp4",
+            "front": "SavedClips/2026-03-08_03-00-00-front.mp4"
+          },
+          "start_time": "2026-03-08T03:00:00",
+          "timestamp": "2026-03-08_03-00-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-04-15_23-59-00-back.mp4",
+            "front": "SavedClips/2026-04-15_23-59-00-front.mp4"
+          },
+          "start_time": "2026-04-15T23:59:00",
+          "timestamp": "2026-04-15_23-59-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-04-16_00-00-00-back.mp4",
+            "front": "SavedClips/2026-04-16_00-00-00-front.mp4"
+          },
+          "start_time": "2026-04-16T00:00:00",
+          "timestamp": "2026-04-16_00-00-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "prefer-newest": {
+      "cameras": [
+        "front",
+        "back"
+      ],
+      "clip_set_count": 4,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-03-08_01-59-00-back.mp4",
+            "front": "SavedClips/2026-03-08_01-59-00-front.mp4"
+          },
+          "start_time": "2026-03-08T01:59:00",
+          "timestamp": "2026-03-08_01-59-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-03-08_03-00-00-back.mp4",
+            "front": "SavedClips/2026-03-08_03-00-00-front.mp4"
+          },
+          "start_time": "2026-03-08T03:00:00",
+          "timestamp": "2026-03-08_03-00-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-04-15_23-59-00-back.mp4",
+            "front": "SavedClips/2026-04-15_23-59-00-front.mp4"
+          },
+          "start_time": "2026-04-15T23:59:00",
+          "timestamp": "2026-04-15_23-59-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "SavedClips/2026-04-16_00-00-00-back.mp4",
+            "front": "SavedClips/2026-04-16_00-00-00-front.mp4"
+          },
+          "start_time": "2026-04-16T00:00:00",
+          "timestamp": "2026-04-16_00-00-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    }
+  },
+  "expected_selection": {
+    "keep-all": {
+      "clip_set_count": 4,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-03-08_01-59-00-back.mp4",
+            "front": "SavedClips/2026-03-08_01-59-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-03-08T01:59:00",
+          "timestamp": "2026-03-08_01-59-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-03-08_03-00-00-back.mp4",
+            "front": "SavedClips/2026-03-08_03-00-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-03-08T03:00:00",
+          "timestamp": "2026-03-08_03-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-04-15_23-59-00-back.mp4",
+            "front": "SavedClips/2026-04-15_23-59-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-04-15T23:59:00",
+          "timestamp": "2026-04-15_23-59-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-04-16_00-00-00-back.mp4",
+            "front": "SavedClips/2026-04-16_00-00-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-04-16T00:00:00",
+          "timestamp": "2026-04-16_00-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 240.0
+    },
+    "merge-by-time": {
+      "clip_set_count": 4,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-03-08_01-59-00-back.mp4",
+            "front": "SavedClips/2026-03-08_01-59-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-03-08T01:59:00",
+          "timestamp": "2026-03-08_01-59-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-03-08_03-00-00-back.mp4",
+            "front": "SavedClips/2026-03-08_03-00-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-03-08T03:00:00",
+          "timestamp": "2026-03-08_03-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-04-15_23-59-00-back.mp4",
+            "front": "SavedClips/2026-04-15_23-59-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-04-15T23:59:00",
+          "timestamp": "2026-04-15_23-59-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-04-16_00-00-00-back.mp4",
+            "front": "SavedClips/2026-04-16_00-00-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-04-16T00:00:00",
+          "timestamp": "2026-04-16_00-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 240.0
+    },
+    "prefer-newest": {
+      "clip_set_count": 4,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-03-08_01-59-00-back.mp4",
+            "front": "SavedClips/2026-03-08_01-59-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-03-08T01:59:00",
+          "timestamp": "2026-03-08_01-59-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-03-08_03-00-00-back.mp4",
+            "front": "SavedClips/2026-03-08_03-00-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-03-08T03:00:00",
+          "timestamp": "2026-03-08_03-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-04-15_23-59-00-back.mp4",
+            "front": "SavedClips/2026-04-15_23-59-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-04-15T23:59:00",
+          "timestamp": "2026-04-15_23-59-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "SavedClips/2026-04-16_00-00-00-back.mp4",
+            "front": "SavedClips/2026-04-16_00-00-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-04-16T00:00:00",
+          "timestamp": "2026-04-16_00-00-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 240.0
+    }
+  },
+  "files": [
+    {
+      "path": "SavedClips/2026-03-08_01-59-00-front.mp4"
+    },
+    {
+      "path": "SavedClips/2026-03-08_01-59-00-back.mp4"
+    },
+    {
+      "path": "SavedClips/2026-03-08_03-00-00-front.mp4"
+    },
+    {
+      "path": "SavedClips/2026-03-08_03-00-00-back.mp4"
+    },
+    {
+      "path": "SavedClips/2026-04-15_23-59-00-front.mp4"
+    },
+    {
+      "path": "SavedClips/2026-04-15_23-59-00-back.mp4"
+    },
+    {
+      "path": "SavedClips/2026-04-16_00-00-00-front.mp4"
+    },
+    {
+      "path": "SavedClips/2026-04-16_00-00-00-back.mp4"
+    }
+  ],
+  "name": "timezone_edges",
+  "schema_version": 1
+}
