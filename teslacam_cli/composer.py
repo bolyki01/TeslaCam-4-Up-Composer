@@ -10,7 +10,7 @@ from typing import Callable, Dict, Hashable, Iterable, List, Optional, Protocol,
 
 from .concat_safety import ffconcat_path
 from .ffmpeg_tools import FfmpegRunner, MediaProbe
-from .models import Camera, ClipSet, ComposePlan, Dimensions, LayoutSpec, MIXED_CAMERA_ORDER, SelectedSet
+from .models import Camera, ClipSet, ComposePlan, Dimensions, MIXED_CAMERA_ORDER, SelectedSet
 from .safe_output import atomic_output_target
 
 

@@ -37,7 +37,7 @@ from .models import (
     SelectedSet,
 )
 from .probe_cache import RunProbeCache
-from .scanner import cameras_in_sets, format_clip_timestamp, parse_clip_timestamp, scan_source
+from .scanner import cameras_in_sets, format_clip_timestamp, scan_source
 
 
 @dataclass(frozen=True)
