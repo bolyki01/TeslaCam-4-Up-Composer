@@ -1647,6 +1647,114 @@ extension Array where Element == ClipSet {
   }
 }
 
+/// Output-conflict policy for the contract's CLI default-naming flow.
+/// Mirrors Python's `OutputConflictPolicy` enum.
+enum OutputConflictPolicy: String, Codable, CaseIterable {
+  case unique
+  case overwrite
+  case error
+}
+
+/// Thrown by ``DomainOutputContract.applyConflictPolicy`` when policy
+/// is ``OutputConflictPolicy/error`` and the target path already
+/// exists. The message intentionally embeds the conflicting path so
+/// the surfaced text matches Python's ``RuntimeError("Output file
+/// already exists: ...")`` to within the contract-pinned fragment.
+struct OutputAlreadyExistsError: Error, LocalizedError {
+  let path: URL
+  var errorDescription: String? {
+    "Output file already exists: \(path.path)"
+  }
+}
+
+/// Contract-side helpers mirroring Python's ``cli.default_output_filename``,
+/// ``cli.unique_output_path``, and ``cli.apply_output_conflict_policy``.
+/// Pure functions; the only side effect is a ``FileManager`` existence
+/// check (the same surface Python's ``Path.exists()`` exposes). Lives on
+/// the contract layer so the macOS app and any future CLI-style Swift
+/// adapter share one source of truth.
+enum DomainOutputContract {
+  static let errorMessageFragment = "Output file already exists"
+
+  static func defaultOutputFilename(mode: String, startTime: Date, endTime: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone.current
+    formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+    let start = formatter.string(from: startTime)
+    let end = formatter.string(from: endTime)
+    return "teslacam_\(mode)_\(start)_to_\(end).mp4"
+  }
+
+  static func uniqueOutputPath(_ path: URL, fileManager: FileManager = .default) -> URL {
+    guard fileManager.fileExists(atPath: path.path) else { return path }
+    let parent = path.deletingLastPathComponent()
+    let stem = path.deletingPathExtension().lastPathComponent
+    let extn = path.pathExtension
+    let suffix = extn.isEmpty ? "" : ".\(extn)"
+    for counter in 2..<10_000 {
+      let candidate = parent.appendingPathComponent("\(stem)-\(counter)\(suffix)")
+      if !fileManager.fileExists(atPath: candidate.path) {
+        return candidate
+      }
+    }
+    return path
+  }
+
+  /// Apply ``policy`` to ``path``. Returns the resolved URL or throws
+  /// ``OutputAlreadyExistsError`` when policy is ``.error`` and the
+  /// path already exists. ``.overwrite`` returns the input path
+  /// unchanged regardless of file-system state — the caller takes
+  /// responsibility for replacing the file.
+  static func applyConflictPolicy(
+    path: URL,
+    policy: OutputConflictPolicy,
+    fileManager: FileManager = .default
+  ) throws -> URL {
+    if !fileManager.fileExists(atPath: path.path) || policy == .overwrite {
+      return path
+    }
+    if policy == .error {
+      throw OutputAlreadyExistsError(path: path)
+    }
+    return uniqueOutputPath(path, fileManager: fileManager)
+  }
+}
+
+/// JSON shape for ``expected_output`` blocks under
+/// ``fixtures/domain/cases/*.json``. Mirrors the dict that
+/// ``script/regen_fixtures.py``'s ``_output_block`` produces.
+struct DomainOutputErrorEntry: Codable, Equatable {
+  let raises: Bool
+  let exceptionType: String?
+  let messageContains: String?
+
+  enum CodingKeys: String, CodingKey {
+    case raises
+    case exceptionType = "exception_type"
+    case messageContains = "message_contains"
+  }
+}
+
+struct DomainOutputManifest: Codable, Equatable {
+  /// Set when the fixture's scan yields zero clips. The other fields
+  /// are absent in that branch, so the parity test must check this
+  /// first and skip the populated assertions.
+  let emptyDataset: Bool?
+  let defaultFilenameByMode: [String: String]?
+  let uniqueResolution: [String]?
+  let overwriteWithConflict: String?
+  let errorWithConflict: DomainOutputErrorEntry?
+
+  enum CodingKeys: String, CodingKey {
+    case emptyDataset = "empty_dataset"
+    case defaultFilenameByMode = "default_filename_by_mode"
+    case uniqueResolution = "unique_resolution"
+    case overwriteWithConflict = "overwrite_with_conflict"
+    case errorWithConflict = "error_with_conflict"
+  }
+}
+
 /// File-private contract formatting helpers shared by every
 /// `DomainScanManifest` / `DomainSelectionManifest` builder. Matches the
 /// `path_for_manifest` / `datetime_for_manifest` / `round(value, 6)`

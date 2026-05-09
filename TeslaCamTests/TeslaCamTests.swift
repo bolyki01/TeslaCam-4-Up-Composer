@@ -611,6 +611,119 @@ struct TeslaCamTests {
     #expect(blobAfter.count == 1)
   }
 
+  @Test func sharedOutputFixturesMatchNativeOutputContractForEveryPolicy() async throws {
+    // Swift parity for the expected_output block emitted by
+    // script/regen_fixtures.py. Exercises DomainOutputContract's three
+    // helpers (defaultOutputFilename, uniqueOutputPath via
+    // applyConflictPolicy(.unique), applyConflictPolicy(.overwrite|.error))
+    // against each fixture's natural clip range with
+    // clipDurationSeconds = 60 — same stub the regen script uses.
+    let fixtureDirectory = repositoryRootForTests()
+      .appendingPathComponent("fixtures", isDirectory: true)
+      .appendingPathComponent("domain", isDirectory: true)
+      .appendingPathComponent("cases", isDirectory: true)
+    let fixtureURLs = try FileManager.default.contentsOfDirectory(
+      at: fixtureDirectory,
+      includingPropertiesForKeys: nil
+    ).filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+    #expect(fixtureURLs.count >= 4)
+
+    let decoder = JSONDecoder()
+    var checkedFixtures = 0
+    for fixtureURL in fixtureURLs {
+      let fixture = try decoder.decode(DomainFixtureCase.self, from: Data(contentsOf: fixtureURL))
+      guard let expected = fixture.expectedOutput else { continue }
+      checkedFixtures += 1
+
+      let root = try TemporaryDirectory.make()
+      defer { try? root.remove() }
+      try materializeDomainFixture(fixture, at: root.url)
+
+      let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: .mergeByTime) { _ in }
+
+      // Empty-dataset branch: assert both sides agree there are no clips.
+      if expected.emptyDataset == true {
+        #expect(index.sets.isEmpty)
+        continue
+      }
+
+      // Compute the natural range with a 60s clip duration, mirroring
+      // Python's dataset_range + StubMediaProbe.
+      let sortedSets = index.sets.sorted { lhs, rhs in
+        if lhs.date == rhs.date { return lhs.timestamp < rhs.timestamp }
+        return lhs.date < rhs.date
+      }
+      try #require(!sortedSets.isEmpty)
+      let earliest = sortedSets.first!.date
+      let latest = sortedSets.last!.date.addingTimeInterval(60.0)
+
+      let actualDefaults: [String: String] = [
+        "lossless": DomainOutputContract.defaultOutputFilename(mode: "lossless", startTime: earliest, endTime: latest),
+        "quality": DomainOutputContract.defaultOutputFilename(mode: "quality", startTime: earliest, endTime: latest),
+      ]
+      try #require(expected.defaultFilenameByMode != nil)
+      #expect(actualDefaults == expected.defaultFilenameByMode!)
+
+      let targetName = actualDefaults["lossless"]!
+
+      // unique-cascade: three calls in a fresh tempdir, write the
+      // resolved file each time so the next call hits the next slot.
+      let outDirA = try TemporaryDirectory.make()
+      defer { try? outDirA.remove() }
+      let target = outDirA.url.appendingPathComponent(targetName)
+      var actualUnique: [String] = []
+      for _ in 0..<3 {
+        let resolved = try DomainOutputContract.applyConflictPolicy(path: target, policy: .unique)
+        actualUnique.append(resolved.lastPathComponent)
+        FileManager.default.createFile(atPath: resolved.path, contents: Data())
+      }
+      try #require(expected.uniqueResolution != nil)
+      #expect(actualUnique == expected.uniqueResolution!)
+
+      // overwrite-with-conflict: returns the input path unchanged.
+      let outDirB = try TemporaryDirectory.make()
+      defer { try? outDirB.remove() }
+      let overwriteTarget = outDirB.url.appendingPathComponent(targetName)
+      FileManager.default.createFile(atPath: overwriteTarget.path, contents: Data())
+      let overwriteResolved = try DomainOutputContract.applyConflictPolicy(path: overwriteTarget, policy: .overwrite)
+      try #require(expected.overwriteWithConflict != nil)
+      #expect(overwriteResolved.lastPathComponent == expected.overwriteWithConflict!)
+
+      // error-with-conflict: throws OutputAlreadyExistsError when the
+      // path exists. We assert the language-agnostic contract (raises
+      // + message contains the fragment); the fixture's
+      // exception_type stays Python-side detail.
+      let expectedError = try #require(expected.errorWithConflict)
+      let outDirC = try TemporaryDirectory.make()
+      defer { try? outDirC.remove() }
+      let errorTarget = outDirC.url.appendingPathComponent(targetName)
+      FileManager.default.createFile(atPath: errorTarget.path, contents: Data())
+      if expectedError.raises {
+        var caught: Error?
+        do {
+          _ = try DomainOutputContract.applyConflictPolicy(path: errorTarget, policy: .error)
+        } catch {
+          caught = error
+        }
+        let raised = try #require(caught, "error policy must raise on existing path")
+        let fragment = expectedError.messageContains ?? DomainOutputContract.errorMessageFragment
+        let message = (raised as? LocalizedError)?.errorDescription ?? "\(raised)"
+        #expect(
+          message.contains(fragment),
+          "error message did not contain expected fragment for \(fixture.name): got \(message)"
+        )
+      } else {
+        // No fixture currently flips this branch; the assertion exists so
+        // a future fixture that disables raise still has a passable shape.
+        let resolved = try DomainOutputContract.applyConflictPolicy(path: errorTarget, policy: .error)
+        #expect(resolved == errorTarget)
+      }
+    }
+
+    #expect(checkedFixtures >= 1)
+  }
+
   @Test func sharedSelectionFixturesMatchNativeSelectionManifestForAllDuplicatePolicies() async throws {
     // Swift parity for the expected_selection.{policy} block emitted by
     // script/regen_fixtures.py. Uses a fixed clipDurationSeconds = 60
@@ -1360,6 +1473,7 @@ private struct DomainFixtureCase: Decodable {
   let expectedScan: [String: DomainScanManifestWithoutHeader]
   let expectedLayout: [String: DomainLayoutManifest]?
   let expectedSelection: [String: DomainSelectionManifest]?
+  let expectedOutput: DomainOutputManifest?
 
   enum CodingKeys: String, CodingKey {
     case name
@@ -1367,6 +1481,7 @@ private struct DomainFixtureCase: Decodable {
     case expectedScan = "expected_scan"
     case expectedLayout = "expected_layout"
     case expectedSelection = "expected_selection"
+    case expectedOutput = "expected_output"
   }
 }
 
