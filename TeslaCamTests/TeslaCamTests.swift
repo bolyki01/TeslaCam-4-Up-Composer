@@ -128,13 +128,61 @@ struct TeslaCamTests {
       trimStart: Date(timeIntervalSince1970: 100),
       trimEnd: Date(timeIntervalSince1970: 100)
     )
-    #expect(throws: ExportPlan.ValidationError.self) {
+    #expect(throws: ExportPlan.ValidationError.emptyTrimRange) {
       try ExportPlan(request: emptyRange)
     }
 
     let noCameras = exportRequestForPlan(enabledCameras: [])
-    #expect(throws: ExportPlan.ValidationError.self) {
+    #expect(throws: ExportPlan.ValidationError.noEnabledCameras) {
       try ExportPlan(request: noCameras)
+    }
+  }
+
+  @Test func exportPlanRejectsRequestWithNoClips() async throws {
+    // The exportRequestForPlan helper hard-codes a single-clip set so
+    // the default path always has clips. Build a no-clip request
+    // inline to cover the .noClips ValidationError variant — the only
+    // ExportPlan error case the existing combined test does not
+    // exercise.
+    // Mirror exportRequestForPlan's argument list but with sets: []. Skips
+    // the overlayOptions / layoutRequest fields so the helper's defaults
+    // apply, exactly as the existing combined test does.
+    let noClips = ExportRequest(
+      sets: [],
+      outputURL: URL(fileURLWithPath: "/tmp/teslacam-noclips.mov"),
+      useSixCam: false,
+      preset: .maxQualityHEVC,
+      enabledCameras: [.front],
+      trimStartSeconds: 0,
+      trimEndSeconds: 60,
+      trimStartDate: Date(timeIntervalSince1970: 0),
+      trimEndDate: Date(timeIntervalSince1970: 60),
+      selectedRangeText: "sample",
+      partialClipCount: 0,
+      cameraTrack: .empty,
+      isPreviewSample: false
+    )
+    #expect(throws: ExportPlan.ValidationError.noClips) {
+      try ExportPlan(request: noClips)
+    }
+  }
+
+  @Test func exportPlanValidationErrorsCarryHumanDescription() async throws {
+    // Every ValidationError case must carry a non-empty
+    // LocalizedError.errorDescription so the surfaced UI / status
+    // text is never blank when ExportPlan rejects a request. The
+    // strings themselves can change, but they must not be nil or
+    // empty.
+    let cases: [ExportPlan.ValidationError] = [
+      .noClips,
+      .emptyTrimRange,
+      .noEnabledCameras,
+      .invalidCanvas,
+    ]
+    for variant in cases {
+      let description = (variant as LocalizedError).errorDescription
+      #expect(description != nil, "ValidationError.\(variant) must carry an errorDescription")
+      #expect(!(description ?? "").isEmpty, "ValidationError.\(variant) errorDescription must be non-empty")
     }
   }
 
