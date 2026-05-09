@@ -5,7 +5,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from teslacam_cli.cli import default_output_filename, unique_output_path
+from teslacam_cli.cli import (
+    apply_output_conflict_policy,
+    dataset_range,
+    default_output_filename,
+    unique_output_path,
+)
 from teslacam_cli.composer import select_clip_sets
 from teslacam_cli.domain_contract import (
     dry_run_manifest,
@@ -134,6 +139,82 @@ class DomainFixtureParityTests(unittest.TestCase):
                                 selected_sets_manifest(selected, source),
                                 case["expected_selection"][policy.value],
                             )
+
+    def test_shared_output_fixtures_match_apply_output_conflict_policy_for_all_policies(self):
+        cases = sorted(FIXTURE_DIR.glob("*.json"))
+        self.assertGreaterEqual(len(cases), 4)
+        for fixture_path in cases:
+            with self.subTest(fixture=fixture_path.name):
+                case = json.loads(fixture_path.read_text(encoding="utf-8"))
+                self.assertIn(
+                    "expected_output",
+                    case,
+                    f"{fixture_path.name} missing expected_output — run script/regen_output_fixtures.py",
+                )
+                expected = case["expected_output"]
+                with TemporaryDirectory() as temp_dir:
+                    source = Path(temp_dir)
+                    _materialize_case(case, source)
+                    try:
+                        scan = scan_source(source, duplicate_policy=DuplicatePolicy.MERGE_BY_TIME)
+                        clip_sets = scan.clip_sets
+                    except RuntimeError:
+                        clip_sets = []
+
+                if not clip_sets:
+                    self.assertTrue(
+                        expected.get("empty_dataset"),
+                        f"{fixture_path.name} produced no clips but expected_output is non-empty",
+                    )
+                    continue
+
+                self.assertNotIn(
+                    "empty_dataset",
+                    expected,
+                    f"{fixture_path.name} expected_output.empty_dataset must not be set when clips exist",
+                )
+                start, end = dataset_range(clip_sets, _STUB_FFPROBE, media_probe=_StubMediaProbe())
+                actual_defaults = {
+                    mode: default_output_filename(mode, start, end)
+                    for mode in ("lossless", "quality")
+                }
+                self.assertEqual(actual_defaults, expected["default_filename_by_mode"])
+
+                target_name = actual_defaults["lossless"]
+
+                # `unique` cascade: three calls in a fresh tempdir.
+                with TemporaryDirectory() as out_dir:
+                    target = Path(out_dir) / target_name
+                    actual_unique = []
+                    for _ in range(3):
+                        picked = apply_output_conflict_policy(target, OutputConflictPolicy.UNIQUE)
+                        actual_unique.append(picked.name)
+                        picked.touch()
+                self.assertEqual(actual_unique, expected["unique_resolution"])
+
+                # `overwrite` policy returns the same path even if a file exists.
+                with TemporaryDirectory() as out_dir:
+                    target = Path(out_dir) / target_name
+                    target.touch()
+                    picked = apply_output_conflict_policy(target, OutputConflictPolicy.OVERWRITE)
+                self.assertEqual(picked.name, expected["overwrite_with_conflict"])
+
+                # `error` policy raises with a stable message fragment.
+                expected_error = expected["error_with_conflict"]
+                with TemporaryDirectory() as out_dir:
+                    target = Path(out_dir) / target_name
+                    target.touch()
+                    if expected_error.get("raises"):
+                        with self.assertRaises(RuntimeError) as ctx:
+                            apply_output_conflict_policy(target, OutputConflictPolicy.ERROR)
+                        self.assertEqual(type(ctx.exception).__name__, expected_error["exception_type"])
+                        self.assertIn(expected_error["message_contains"], str(ctx.exception))
+                    else:
+                        # Currently no fixture exercises the no-raise branch
+                        # (existence + ERROR policy always raises). Keep the
+                        # assertion present so future fixtures stay honest.
+                        picked = apply_output_conflict_policy(target, OutputConflictPolicy.ERROR)
+                        self.assertEqual(picked.name, target_name)
 
     def test_default_output_filename_matches_contract_format(self):
         from datetime import datetime
