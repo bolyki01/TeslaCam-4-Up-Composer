@@ -1,0 +1,457 @@
+{
+  "description": "Folder names containing zero-width space (U+200B), em-dash, accented characters, and an emoji. Locks the path encoding through scan_manifest / selected_sets_manifest \u2014 non-ASCII folder segments must round-trip as POSIX strings without normalization rewrites.",
+  "expected_layout": {
+    "auto": {
+      "canvas": {
+        "height": 1920,
+        "width": 2560
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 0
+        },
+        "left_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "right_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "hidden_cameras": [],
+      "kind": "4up",
+      "profile": "auto",
+      "render_order": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ]
+    },
+    "legacy4": {
+      "canvas": {
+        "height": 1920,
+        "width": 2560
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 0
+        },
+        "left_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "right_repeater": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "hidden_cameras": [],
+      "kind": "4up",
+      "profile": "legacy4",
+      "render_order": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ]
+    },
+    "sixcam": {
+      "canvas": {
+        "height": 2880,
+        "width": 3840
+      },
+      "cells": {
+        "back": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 960
+        },
+        "front": {
+          "height": 960,
+          "width": 1280,
+          "x": 1280,
+          "y": 0
+        },
+        "left": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 960
+        },
+        "left_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 0,
+          "y": 1920
+        },
+        "right": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 960
+        },
+        "right_pillar": {
+          "height": 960,
+          "width": 1280,
+          "x": 2560,
+          "y": 1920
+        }
+      },
+      "expected_cameras": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ],
+      "hidden_cameras": [
+        "left_repeater",
+        "right_repeater"
+      ],
+      "kind": "6up",
+      "profile": "sixcam",
+      "render_order": [
+        "front",
+        "back",
+        "left",
+        "right",
+        "left_pillar",
+        "right_pillar"
+      ]
+    }
+  },
+  "expected_output": {
+    "default_filename_by_mode": {
+      "lossless": "teslacam_lossless_2026-04-01_08-30-00_to_2026-04-01_08-32-00.mp4",
+      "quality": "teslacam_quality_2026-04-01_08-30-00_to_2026-04-01_08-32-00.mp4"
+    },
+    "error_with_conflict": {
+      "exception_type": "RuntimeError",
+      "message_contains": "Output file already exists",
+      "raises": true
+    },
+    "overwrite_with_conflict": "teslacam_lossless_2026-04-01_08-30-00_to_2026-04-01_08-32-00.mp4",
+    "unique_resolution": [
+      "teslacam_lossless_2026-04-01_08-30-00_to_2026-04-01_08-32-00.mp4",
+      "teslacam_lossless_2026-04-01_08-30-00_to_2026-04-01_08-32-00-2.mp4",
+      "teslacam_lossless_2026-04-01_08-30-00_to_2026-04-01_08-32-00-3.mp4"
+    ]
+  },
+  "expected_scan": {
+    "keep-all": {
+      "cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "right_repeater"
+          ],
+          "files": {
+            "back": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-back.mp4",
+            "front": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-front.mp4",
+            "left_repeater": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-left_repeater.mp4",
+            "right_repeater": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-right_repeater.mp4"
+          },
+          "start_time": "2026-04-01T08:30:00",
+          "timestamp": "2026-04-01_08-30-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "\ud83c\udfa5-saved/2026-04-01_08-31-00-back.mp4",
+            "front": "\ud83c\udfa5-saved/2026-04-01_08-31-00-front.mp4"
+          },
+          "start_time": "2026-04-01T08:31:00",
+          "timestamp": "2026-04-01_08-31-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "merge-by-time": {
+      "cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "right_repeater"
+          ],
+          "files": {
+            "back": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-back.mp4",
+            "front": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-front.mp4",
+            "left_repeater": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-left_repeater.mp4",
+            "right_repeater": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-right_repeater.mp4"
+          },
+          "start_time": "2026-04-01T08:30:00",
+          "timestamp": "2026-04-01_08-30-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "\ud83c\udfa5-saved/2026-04-01_08-31-00-back.mp4",
+            "front": "\ud83c\udfa5-saved/2026-04-01_08-31-00-front.mp4"
+          },
+          "start_time": "2026-04-01T08:31:00",
+          "timestamp": "2026-04-01_08-31-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    },
+    "prefer-newest": {
+      "cameras": [
+        "front",
+        "back",
+        "left_repeater",
+        "right_repeater"
+      ],
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "right_repeater"
+          ],
+          "files": {
+            "back": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-back.mp4",
+            "front": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-front.mp4",
+            "left_repeater": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-left_repeater.mp4",
+            "right_repeater": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-right_repeater.mp4"
+          },
+          "start_time": "2026-04-01T08:30:00",
+          "timestamp": "2026-04-01_08-30-00"
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "files": {
+            "back": "\ud83c\udfa5-saved/2026-04-01_08-31-00-back.mp4",
+            "front": "\ud83c\udfa5-saved/2026-04-01_08-31-00-front.mp4"
+          },
+          "start_time": "2026-04-01T08:31:00",
+          "timestamp": "2026-04-01_08-31-00"
+        }
+      ],
+      "duplicate_file_count": 0,
+      "duplicate_timestamp_count": 0
+    }
+  },
+  "expected_selection": {
+    "keep-all": {
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "right_repeater"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-back.mp4",
+            "front": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-front.mp4",
+            "left_repeater": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-left_repeater.mp4",
+            "right_repeater": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-right_repeater.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-04-01T08:30:00",
+          "timestamp": "2026-04-01_08-30-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "\ud83c\udfa5-saved/2026-04-01_08-31-00-back.mp4",
+            "front": "\ud83c\udfa5-saved/2026-04-01_08-31-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-04-01T08:31:00",
+          "timestamp": "2026-04-01_08-31-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 120.0
+    },
+    "merge-by-time": {
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "right_repeater"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-back.mp4",
+            "front": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-front.mp4",
+            "left_repeater": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-left_repeater.mp4",
+            "right_repeater": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-right_repeater.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-04-01T08:30:00",
+          "timestamp": "2026-04-01_08-30-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "\ud83c\udfa5-saved/2026-04-01_08-31-00-back.mp4",
+            "front": "\ud83c\udfa5-saved/2026-04-01_08-31-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-04-01T08:31:00",
+          "timestamp": "2026-04-01_08-31-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 120.0
+    },
+    "prefer-newest": {
+      "clip_set_count": 2,
+      "clip_sets": [
+        {
+          "cameras": [
+            "front",
+            "back",
+            "left_repeater",
+            "right_repeater"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-back.mp4",
+            "front": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-front.mp4",
+            "left_repeater": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-left_repeater.mp4",
+            "right_repeater": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-right_repeater.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-04-01T08:30:00",
+          "timestamp": "2026-04-01_08-30-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        },
+        {
+          "cameras": [
+            "front",
+            "back"
+          ],
+          "duration": 60.0,
+          "files": {
+            "back": "\ud83c\udfa5-saved/2026-04-01_08-31-00-back.mp4",
+            "front": "\ud83c\udfa5-saved/2026-04-01_08-31-00-front.mp4"
+          },
+          "rendered_duration": 60.0,
+          "start_time": "2026-04-01T08:31:00",
+          "timestamp": "2026-04-01_08-31-00",
+          "trim_end": 60.0,
+          "trim_start": 0.0
+        }
+      ],
+      "rendered_duration": 120.0
+    }
+  },
+  "files": [
+    {
+      "path": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-front.mp4"
+    },
+    {
+      "path": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-back.mp4"
+    },
+    {
+      "path": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-left_repeater.mp4"
+    },
+    {
+      "path": "\u00c9v\u00e8nement\u200b\u20142026-04-01/2026-04-01_08-30-00-right_repeater.mp4"
+    },
+    {
+      "path": "\ud83c\udfa5-saved/2026-04-01_08-31-00-front.mp4"
+    },
+    {
+      "path": "\ud83c\udfa5-saved/2026-04-01_08-31-00-back.mp4"
+    }
+  ],
+  "name": "unicode_folders",
+  "schema_version": 1
+}
