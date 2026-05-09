@@ -24,7 +24,7 @@ Target shape:
 - File access and clock behavior sit behind small Adapters only where tests need variation.
 
 Steps:
-1. Add `ExportPlan` built from `ExportRequest`; validate non-empty sets, trim dates, enabled cameras, and canvas size. **Done** — `ExportPlan.init(request:)` in `NativeExportController.swift` validates and builds the layout.
+1. Add `ExportPlan` built from `ExportRequest`; validate non-empty sets, trim dates, enabled cameras, and canvas size. **Done** — `ExportPlan.init(request:)` in `NativeExportController.swift` validates and builds the layout. Per-variant test coverage landed via F6: `exportPlanRejectsRequestWithNoClips`, `exportPlanValidatesTrimRangeAndEnabledCameras` (sharpened to assert specific `.emptyTrimRange` / `.noEnabledCameras`), and `exportPlanValidationErrorsCarryHumanDescription` (locks the `LocalizedError` description contract for every variant).
 2. Move preflight checks into `ExportPreflight`; keep messages stable for UI. **Done** — `ExportPreflight` owns disk-headroom math, write-access check, and warnings.
 3. Move `TimelineFrameLayout` and size probing out of the controller or behind a layout Module. **Partial** — `TimelineFrameLayout` is its own type but still lives inside the controller file.
 4. Replace per-frame `AVAssetImageGenerator` export with composition/reader/writer pipeline from the approved spec. **Deferred** — needs real footage testing; not safe for autopilot. Tracked separately.
@@ -35,9 +35,10 @@ Steps:
 `ExportJobStore` extraction (snapshots / history / queue) is also deferred. `currentJob`, `exportHistory`, and `queuedRequests` still live on the controller. Splitting them cleanly without changing the view contract requires either a child `ObservableObject` plus shimmed pass-throughs or migrating all view sites in one go — both larger than a single-session change.
 
 Tests:
-- Unit test `ExportPlan` validation with empty range, hidden cameras, HW4 canvas, ProRes escape hatch.
+- Unit test `ExportPlan` validation with empty range, hidden cameras, HW4 canvas, ProRes escape hatch. **Done** — see step 1; F6 now covers every `ValidationError` variant.
 - Unit test preflight for bad output, low disk through Adapter, and HEVC size ceiling.
 - Unit test layout invariants: canvas size, tile size, HW3, HW4, mixed.
+- Unit test indexer behaviour against unreadable / corrupted media. **Done via F5** — `indexerSurvivesUnreadableAndCorruptedClipFilesWithFallbackDuration` plants empty / truncated-`ftyp` / random-byte files at well-formed timestamps and asserts the indexer never throws and falls back to the documented 60.0s default duration.
 - Integration test a tiny HW4 export and assert output dimensions.
 - Run native unit tests before UI tests.
 
