@@ -74,7 +74,9 @@ Output conflicts are handled by policy:
 
 ## Dry-run manifest
 
-Dry-run manifests are JSON objects with `schema_version: 1`. They are intended for fixture parity checks and user-visible preflight output. They include scan summary, duplicate counts, selected range, selected clip sets, layout, dimensions, output path, duplicate policy, and output conflict policy.
+Dry-run manifests are JSON objects with `schema_version: 1`. They are intended for fixture parity checks and user-visible preflight output. They include scan summary, duplicate counts, selected range, selected clip sets, layout, dimensions, output path, duplicate policy, output conflict policy, and telemetry capability notes.
+
+Telemetry notes are explicit because the app and CLI intentionally differ here: the native app can burn timestamp, speed, AP, pedal/brake, steering, heading, and route overlays into exports, while the dependency-light CLI does not inspect SEI metadata or render telemetry overlays.
 
 Both Swift and Python implementations must keep the fixture cases under `fixtures/domain/cases` passing before domain behavior changes are accepted.
 

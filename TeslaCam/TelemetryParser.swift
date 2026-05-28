@@ -203,8 +203,10 @@ private final class DashcamMP4 {
   }
 
   func parseSeiFrames() throws -> [TelemetryFrame] {
-    let config = try getConfig()
     let mdat = try findMdat()
+    guard let config = try? getConfig() else {
+      return parseUntimedSeiFrames(in: mdat)
+    }
     var frames: [TelemetryFrame] = []
     frames.reserveCapacity(1024)
 
@@ -235,6 +237,28 @@ private final class DashcamMP4 {
         pendingSei = nil
       }
 
+      cursor += len
+    }
+
+    return frames
+  }
+
+  private func parseUntimedSeiFrames(in mdat: (offset: Int, size: Int)) -> [TelemetryFrame] {
+    var frames: [TelemetryFrame] = []
+    var cursor = mdat.offset
+    let end = mdat.offset + mdat.size
+
+    while cursor + 4 <= end {
+      guard let nalSize = try? readUInt32BE(at: cursor) else { break }
+      let len = Int(nalSize)
+      cursor += 4
+      if len < 2 || cursor + len > end { break }
+
+      let nal = data.subdata(in: cursor..<(cursor + len))
+      if let sei = decodeSei(nal: nal) {
+        let timestampMs = Double(frames.count) * 33.333
+        frames.append(TelemetryFrame(timestampMs: timestampMs, sei: sei))
+      }
       cursor += len
     }
 

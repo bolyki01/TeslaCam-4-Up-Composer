@@ -618,12 +618,94 @@ struct TimelineTrimSelection: Equatable {
   var isDragging: Bool
 }
 
+enum ExportTelemetryHUDMode: String, Codable, CaseIterable, Identifiable {
+  case minimal
+  case detailed
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .minimal:
+      return "Minimal"
+    case .detailed:
+      return "Detailed"
+    }
+  }
+}
+
+enum TelemetrySpeedUnit: String, Codable, CaseIterable, Identifiable {
+  case kilometersPerHour
+  case milesPerHour
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .kilometersPerHour:
+      return "km/h"
+    case .milesPerHour:
+      return "mph"
+    }
+  }
+
+  func speed(fromKmh speedKmh: Double) -> Double {
+    switch self {
+    case .kilometersPerHour:
+      return speedKmh
+    case .milesPerHour:
+      return speedKmh * 0.621371
+    }
+  }
+}
+
 struct ExportOverlayOptions: Codable, Equatable, Hashable {
   var telemetryHUD: Bool = false
   var routeMap: Bool = false
   var privacyMask: Bool = false
   var includeReport: Bool = false
   var includeScreenshot: Bool = false
+  var telemetryHUDMode: ExportTelemetryHUDMode = .detailed
+  var speedUnit: TelemetrySpeedUnit = .kilometersPerHour
+
+  init(
+    telemetryHUD: Bool = false,
+    routeMap: Bool = false,
+    privacyMask: Bool = false,
+    includeReport: Bool = false,
+    includeScreenshot: Bool = false,
+    telemetryHUDMode: ExportTelemetryHUDMode = .detailed,
+    speedUnit: TelemetrySpeedUnit = .kilometersPerHour
+  ) {
+    self.telemetryHUD = telemetryHUD
+    self.routeMap = routeMap
+    self.privacyMask = privacyMask
+    self.includeReport = includeReport
+    self.includeScreenshot = includeScreenshot
+    self.telemetryHUDMode = telemetryHUDMode
+    self.speedUnit = speedUnit
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case telemetryHUD
+    case routeMap
+    case privacyMask
+    case includeReport
+    case includeScreenshot
+    case telemetryHUDMode
+    case speedUnit
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    telemetryHUD = try container.decodeIfPresent(Bool.self, forKey: .telemetryHUD) ?? false
+    routeMap = try container.decodeIfPresent(Bool.self, forKey: .routeMap) ?? false
+    privacyMask = try container.decodeIfPresent(Bool.self, forKey: .privacyMask) ?? false
+    includeReport = try container.decodeIfPresent(Bool.self, forKey: .includeReport) ?? false
+    includeScreenshot = try container.decodeIfPresent(Bool.self, forKey: .includeScreenshot) ?? false
+    telemetryHUDMode = try container.decodeIfPresent(ExportTelemetryHUDMode.self, forKey: .telemetryHUDMode) ?? .detailed
+    speedUnit = try container.decodeIfPresent(TelemetrySpeedUnit.self, forKey: .speedUnit) ?? .kilometersPerHour
+  }
 
   var needsTelemetry: Bool {
     telemetryHUD || routeMap || includeReport
@@ -867,7 +949,12 @@ struct TelemetryDisplayModel: Equatable, Hashable {
   }
 
   var speedText: String {
-    String(format: "%.1f km/h", speedKmh)
+    speedText(unit: .kilometersPerHour)
+  }
+
+  func speedText(unit: TelemetrySpeedUnit) -> String {
+    let speed = unit.speed(fromKmh: speedKmh)
+    return String(format: "%.1f %@", speed, unit.displayName)
   }
 
   var acceleratorText: String {
@@ -888,7 +975,11 @@ struct TelemetryDisplayModel: Equatable, Hashable {
   }
 
   var compactText: String {
-    "Speed: \(speedText)  Pedal: \(acceleratorText)  Steer: \(steeringText)  Gear: \(gear)  AP: \(autopilot)  Brake: \(brakeApplied ? "On" : "Off")"
+    compactText(unit: .kilometersPerHour)
+  }
+
+  func compactText(unit: TelemetrySpeedUnit) -> String {
+    "Speed: \(speedText(unit: unit))  Pedal: \(acceleratorText)  Steer: \(steeringText)  Gear: \(gear)  AP: \(autopilot)  Brake: \(brakeApplied ? "On" : "Off")"
   }
 }
 
@@ -920,6 +1011,25 @@ struct TeslaCamEventSummary: Identifiable, Hashable {
     reason
       .replacingOccurrences(of: "_", with: " ")
       .capitalized
+  }
+}
+
+enum TeslaCamEventSortMode: String, CaseIterable, Identifiable {
+  case oldestFirst
+  case newestFirst
+  case location
+
+  var id: String { rawValue }
+
+  var displayName: String {
+    switch self {
+    case .oldestFirst:
+      return "Oldest"
+    case .newestFirst:
+      return "Newest"
+    case .location:
+      return "Place"
+    }
   }
 }
 

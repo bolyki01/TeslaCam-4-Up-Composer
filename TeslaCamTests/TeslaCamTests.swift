@@ -96,7 +96,9 @@ struct TeslaCamTests {
         routeMap: true,
         privacyMask: false,
         includeReport: true,
-        includeScreenshot: true
+        includeScreenshot: true,
+        telemetryHUDMode: .minimal,
+        speedUnit: .milesPerHour
       ),
       cameraTrack: CameraTrack(keyframes: [CameraTrackKeyframe(seconds: 12, camera: .back)])
     )
@@ -105,6 +107,84 @@ struct TeslaCamTests {
     let decoded = try CustomLayoutPresetCodec.decode(data)
 
     #expect(decoded == preset)
+  }
+
+  @Test func exportOverlayOptionsDecodeLegacyPresetDefaults() async throws {
+    let json = """
+    {
+      "telemetryHUD": true,
+      "routeMap": true,
+      "privacyMask": false,
+      "includeReport": true,
+      "includeScreenshot": false
+    }
+    """.data(using: .utf8)!
+
+    let decoded = try JSONDecoder().decode(ExportOverlayOptions.self, from: json)
+
+    #expect(decoded.telemetryHUD)
+    #expect(decoded.routeMap)
+    #expect(decoded.telemetryHUDMode == .detailed)
+    #expect(decoded.speedUnit == .kilometersPerHour)
+  }
+
+  @Test func telemetryDisplayModelFormatsSpeedUnits() async throws {
+    var metadata = SeiMetadata()
+    metadata.vehicleSpeedMps = 10
+
+    let model = TelemetryDisplayModel(sei: metadata)
+
+    #expect(model.speedText(unit: .kilometersPerHour) == "36.0 km/h")
+    #expect(model.speedText(unit: .milesPerHour) == "22.4 mph")
+  }
+
+  @Test func iPadGridMetricsKeepsRegularDashboardWithinPlannedRails() async throws {
+    let metrics = IPadGridMetrics(containerWidth: 1032)
+
+    #expect(metrics.layoutMode == .threeZone)
+    #expect(metrics.eventRailWidth >= 240)
+    #expect(metrics.eventRailWidth <= 280)
+    #expect(metrics.inspectorWidth >= 300)
+    #expect(metrics.inspectorWidth <= 340)
+    #expect(metrics.centerWidth > metrics.inspectorWidth)
+    #expect(Int(metrics.gutter) % 4 == 0)
+  }
+
+  @Test func iPadGridMetricsDoesNotFallBackToStackedPortraitLayout() async throws {
+    let metrics = IPadGridMetrics(containerWidth: 700)
+
+    #expect(metrics.layoutMode == .threeZone)
+    #expect(metrics.centerWidth >= 320)
+    #expect(Int(metrics.gutter) % 4 == 0)
+  }
+
+  @Test func compactControlsStayVisuallySmallButKeepTouchTargets() async throws {
+    #expect(TeslaCamTheme.Metrics.cardCorner == 10)
+    #expect(TeslaCamTheme.Metrics.controlCorner == 10)
+    #expect(TeslaCamTheme.Metrics.compactCorner == 10)
+    #expect(CompactControlSize.command.visualHeight <= 36)
+    #expect(CompactControlSize.command.maxWidth == 160)
+    #expect(CompactControlSize.chip.visualHeight <= 34)
+    #expect(CompactControlSize.icon.visualWidth <= 36)
+
+    for size in CompactControlSize.allCases {
+      #expect(size.hitTargetHeight >= 44)
+      #expect(size.hitTargetWidth >= 44)
+    }
+  }
+
+  @Test @MainActor func demoModeLoadsSampleTimelineWithoutSourceFiles() async throws {
+    let state = AppState()
+
+    state.loadDemoTimeline()
+
+    #expect(state.sourceURLs.isEmpty)
+    #expect(state.clipSets.count == 3)
+    #expect(state.totalDuration > 0)
+    #expect(state.camerasDetected.contains(.front))
+    #expect(state.eventSummaries.count == state.clipSets.count)
+    #expect(state.telemetryModel != nil)
+    #expect(state.telemetryRoute.count == state.clipSets.count)
   }
 
   @Test func nativeHEVCBitrateScalesWithCanvasSize() async throws {
@@ -610,6 +690,37 @@ struct TeslaCamTests {
     #expect(throws: Error.self) {
       try TelemetryParser.parseTimeline(url: sample)
     }
+  }
+
+  @Test func telemetryParserExtractsTeslaSeiFromMdatWithoutVideoConfig() async throws {
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+    let sample = root.url.appendingPathComponent("sei_only.mp4")
+    var metadata = SeiMetadata()
+    metadata.version = 1
+    metadata.gearState = .drive
+    metadata.frameSeqNo = 42
+    metadata.vehicleSpeedMps = 13.4
+    metadata.acceleratorPedalPosition = 18
+    metadata.steeringWheelAngle = -2
+    metadata.autopilotState = .tacc
+    metadata.latitudeDeg = 51.5074
+    metadata.longitudeDeg = -0.1278
+    metadata.headingDeg = 271.5
+    try makeMp4WithTeslaSei(metadata: metadata).write(to: sample)
+
+    let timeline = try TelemetryParser.parseTimeline(url: sample)
+
+    let frame = try #require(timeline.frames.first)
+    #expect(timeline.frames.count == 1)
+    #expect(frame.sei.version == 1)
+    #expect(frame.sei.gearState == .drive)
+    #expect(frame.sei.frameSeqNo == 42)
+    #expect(abs(frame.sei.vehicleSpeedMps - 13.4) < 0.001)
+    #expect(frame.sei.autopilotState == .tacc)
+    #expect(abs(frame.sei.latitudeDeg - 51.5074) < 0.000001)
+    #expect(abs(frame.sei.longitudeDeg - -0.1278) < 0.000001)
+    #expect(abs(frame.sei.headingDeg - 271.5) < 0.000001)
   }
 
   @Test func telemetryProcessorRoutePointsCollapsesSameSecondAndStationaryFrames() async throws {
@@ -1761,6 +1872,80 @@ private func makeVideo(at url: URL, duration: Double, size: CGSize) throws {
   if let error = writer.error {
     throw error
   }
+}
+
+private func makeMp4WithTeslaSei(metadata: SeiMetadata) -> Data {
+  let nal = makeTeslaSeiNal(metadata: metadata)
+  var mdatPayload = Data()
+  appendUInt32BE(UInt32(nal.count), to: &mdatPayload)
+  mdatPayload.append(nal)
+
+  var data = Data()
+  appendUInt32BE(UInt32(8 + mdatPayload.count), to: &data)
+  data.append(contentsOf: [0x6D, 0x64, 0x61, 0x74])
+  data.append(mdatPayload)
+  return data
+}
+
+private func makeTeslaSeiNal(metadata: SeiMetadata) -> Data {
+  var payload = Data()
+  appendProtoVarint(field: 1, value: UInt64(metadata.version), to: &payload)
+  appendProtoVarint(field: 2, value: UInt64(metadata.gearState.rawValue), to: &payload)
+  appendProtoVarint(field: 3, value: metadata.frameSeqNo, to: &payload)
+  appendProtoFixed32(field: 4, value: metadata.vehicleSpeedMps.bitPattern, to: &payload)
+  appendProtoFixed32(field: 5, value: metadata.acceleratorPedalPosition.bitPattern, to: &payload)
+  appendProtoFixed32(field: 6, value: metadata.steeringWheelAngle.bitPattern, to: &payload)
+  appendProtoVarint(field: 7, value: metadata.blinkerLeft ? 1 : 0, to: &payload)
+  appendProtoVarint(field: 8, value: metadata.blinkerRight ? 1 : 0, to: &payload)
+  appendProtoVarint(field: 9, value: metadata.brakeApplied ? 1 : 0, to: &payload)
+  appendProtoVarint(field: 10, value: UInt64(metadata.autopilotState.rawValue), to: &payload)
+  appendProtoFixed64(field: 11, value: metadata.latitudeDeg.bitPattern, to: &payload)
+  appendProtoFixed64(field: 12, value: metadata.longitudeDeg.bitPattern, to: &payload)
+  appendProtoFixed64(field: 13, value: metadata.headingDeg.bitPattern, to: &payload)
+  appendProtoFixed64(field: 14, value: metadata.linearAccelX.bitPattern, to: &payload)
+  appendProtoFixed64(field: 15, value: metadata.linearAccelY.bitPattern, to: &payload)
+  appendProtoFixed64(field: 16, value: metadata.linearAccelZ.bitPattern, to: &payload)
+
+  var nal = Data([0x06, 0x05, 0x00, 0x42, 0x69])
+  nal.append(payload)
+  nal.append(0x80)
+  return nal
+}
+
+private func appendProtoVarint(field: Int, value: UInt64, to data: inout Data) {
+  appendVarint(UInt64(field << 3), to: &data)
+  appendVarint(value, to: &data)
+}
+
+private func appendProtoFixed32(field: Int, value: UInt32, to data: inout Data) {
+  appendVarint(UInt64((field << 3) | 5), to: &data)
+  data.append(UInt8(value & 0xFF))
+  data.append(UInt8((value >> 8) & 0xFF))
+  data.append(UInt8((value >> 16) & 0xFF))
+  data.append(UInt8((value >> 24) & 0xFF))
+}
+
+private func appendProtoFixed64(field: Int, value: UInt64, to data: inout Data) {
+  appendVarint(UInt64((field << 3) | 1), to: &data)
+  for shift in stride(from: 0, through: 56, by: 8) {
+    data.append(UInt8((value >> UInt64(shift)) & 0xFF))
+  }
+}
+
+private func appendVarint(_ value: UInt64, to data: inout Data) {
+  var value = value
+  while value >= 0x80 {
+    data.append(UInt8(value & 0x7F) | 0x80)
+    value >>= 7
+  }
+  data.append(UInt8(value))
+}
+
+private func appendUInt32BE(_ value: UInt32, to data: inout Data) {
+  data.append(UInt8((value >> 24) & 0xFF))
+  data.append(UInt8((value >> 16) & 0xFF))
+  data.append(UInt8((value >> 8) & 0xFF))
+  data.append(UInt8(value & 0xFF))
 }
 
 private func teslaTimestampDate(_ timestamp: String) -> Date? {

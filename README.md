@@ -58,6 +58,8 @@ teslacam-cli /path/to/TeslaCam --dry-run-json manifest.json
 teslacam-cli /path/to/TeslaCam --dry-run-json -
 ```
 
+Dry-run JSON states telemetry capability explicitly. The CLI keeps rendering ffmpeg-only and does not inspect SEI metadata; native app exports can burn timestamp, speed, AP, pedal/brake, steering, heading, and route overlays.
+
 ## Architecture
 
 - Domain behavior is fixture-backed and documented in `docs/domain-contract.md`.

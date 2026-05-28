@@ -34,9 +34,9 @@ enum TelemetryProcessor {
   }
 
   /// Compact one-line telemetry overlay text. Returns empty when no SEI frame is available.
-  static func formatTelemetryCompact(_ sei: SeiMetadata?) -> String {
+  static func formatTelemetryCompact(_ sei: SeiMetadata?, unit: TelemetrySpeedUnit = .kilometersPerHour) -> String {
     guard let sei else { return "" }
-    return TelemetryDisplayModel(sei: sei).compactText
+    return TelemetryDisplayModel(sei: sei).compactText(unit: unit)
   }
 
   /// Produces a human-readable duration label like "1h 12m total" or "5m total".

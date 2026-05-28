@@ -173,6 +173,13 @@ def dry_run_manifest(
         "fps": round(fps, 6),
         "duplicate_policy": duplicate_policy.value,
         "output_conflict": output_conflict.value,
+        "telemetry": {
+            "sei_inspection": "not_performed",
+            "cli_render_overlay": False,
+            "native_export_overlay": True,
+            "speed_units": ["km/h", "mph"],
+            "hud_modes": ["minimal", "detailed"],
+        },
         "scan": scan_manifest(scan_result, source_dir),
         "selection": selected_sets_manifest(selected_sets_list, source_dir),
         "layout": layout_manifest(layout),

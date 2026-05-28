@@ -25,6 +25,7 @@ from typing import Iterable
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SHIPPING_ROOT = REPO_ROOT / "teslacam_cli"
 SWIFT_SHIPPING_ROOT = REPO_ROOT / "TeslaCam"
+XCODE_PROJECT_FILE = REPO_ROOT / "TeslaCam.xcodeproj" / "project.pbxproj"
 
 
 def _shipping_python_files() -> Iterable[Path]:
@@ -171,6 +172,110 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
             [],
             f"_legacy/ references must not appear in shipping Swift source:\n{_format_hits(hits)}",
         )
+
+    def test_ipad_target_does_not_support_portrait_orientation(self):
+        # Justification: the iPad UI is a dense fixed CCTV-style
+        # workspace. Portrait/narrow stacked layouts caused overlap
+        # and unusable controls, so the iPad app must stay landscape.
+        text = XCODE_PROJECT_FILE.read_text(encoding="utf-8")
+        orientation_lines = [
+            line.strip()
+            for line in text.splitlines()
+            if "INFOPLIST_KEY_UISupportedInterfaceOrientations" in line
+        ]
+        self.assertTrue(orientation_lines, "expected supported-orientation build settings in project file")
+        portrait_lines = [line for line in orientation_lines if "UIInterfaceOrientationPortrait" in line]
+        self.assertEqual(
+            portrait_lines,
+            [],
+            "iPad build settings must not allow portrait orientation:\n" + "\n".join(portrait_lines),
+        )
+
+    def test_ipad_dashboard_has_no_static_top_app_title(self):
+        # Justification: the iPad dashboard uses the footage grid as
+        # the app identity. A static top title wastes vertical space.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        self.assertNotIn("TeslaCam CCTV", source)
+
+    def test_ipad_inspector_is_fixed_not_scrolling_or_graph_heavy(self):
+        # Justification: the loaded iPad workspace is a CCTV player.
+        # The right inspector must stay fixed and focused on useful
+        # telemetry/export controls, not duplicate event labels or
+        # graph widgets that force scrolling.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("private struct IPadTelemetryRail")
+        end = source.index("private struct TelemetryGrid")
+        inspector_source = source[start:end]
+        self.assertNotIn("ScrollView", inspector_source)
+        self.assertNotIn("TelemetryEventLanes", inspector_source)
+        self.assertNotIn("RouteMiniMapView", inspector_source)
+        self.assertIn(".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)", inspector_source)
+
+    def test_ipad_timeline_track_has_enough_vertical_room(self):
+        # Justification: the timeline track internally offsets its
+        # lane/handles. Its external frame must be tall enough so it
+        # cannot overlap the preset row below.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("TimelineSelectionTrack(")
+        end = source.index("HStack(spacing: TeslaCamTheme.Spacing.s) {", start)
+        timeline_source = source[start:end]
+        self.assertIn(".frame(height: 56)", timeline_source)
+
+    def test_ipad_export_panel_avoids_system_pill_controls(self):
+        # Justification: export controls sit in the visible iPad
+        # inspector. They should use the app's 10px chip controls, not
+        # system switches or segmented pills.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("private struct IPadExportOptionsPanel")
+        end = source.index("#endif", start)
+        export_source = source[start:end]
+        self.assertNotIn("Toggle(", export_source)
+        self.assertNotIn(".pickerStyle(.segmented)", export_source)
+
+    def test_ipad_export_panel_uses_dense_side_controls(self):
+        # Justification: the iPad side rail should not contain one
+        # large button per row. Export controls need grouped dense
+        # glass chips plus useful status content in the remaining
+        # space.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("private struct IPadExportOptionsPanel")
+        end = source.index("#endif", start)
+        export_source = source[start:end]
+        self.assertIn("InspectorControlGrid", export_source)
+        self.assertIn("InspectorCameraGrid", export_source)
+        self.assertIn("IPadExportStatusPanel", source)
+        self.assertNotIn("OptionChip", export_source)
+        self.assertLessEqual(export_source.count("CommandChip("), 1)
+
+    def test_ipad_inspector_typography_uses_theme_fonts(self):
+        # Justification: tiny one-off system fonts made the iPad
+        # inspector inconsistent and hard to scan. Dense controls must
+        # still use named readable type roles from the theme.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("private struct IPadExportStatusPanel")
+        end = source.index("#endif", start)
+        inspector_controls = source[start:end]
+        self.assertNotIn(".font(.system(size:", inspector_controls)
+        self.assertIn("TeslaCamTheme.Typography.metricValue", source)
+        self.assertIn("TeslaCamTheme.Typography.miniMetricValue", inspector_controls)
+        self.assertIn("TeslaCamTheme.Typography.inspectorChip", inspector_controls)
+        self.assertIn("TeslaCamTheme.Typography.inspectorSymbol", inspector_controls)
+
+    def test_ipad_map_page_uses_mapkit_route_view(self):
+        # Justification: the iPad Map workspace should be a real MapKit
+        # route viewer, not the lightweight SwiftUI Map stub. We need a
+        # native MKMapView so route overlays, event annotations, and fit
+        # behavior stay controllable in the dense dashboard.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("private struct IPadMapPage")
+        end = source.index("private struct CameraTrackStrip", start)
+        map_source = source[start:end]
+        self.assertIn("IPadMapKitRouteView", map_source)
+        self.assertIn("MKMapView", map_source)
+        self.assertIn("MKPolylineRenderer", map_source)
+        self.assertIn("MapEventAnnotation", map_source)
+        self.assertNotIn("Map(position:", map_source)
+        self.assertNotIn("MapPolyline(", map_source)
 
 
 class TestSurfaceTests(unittest.TestCase):

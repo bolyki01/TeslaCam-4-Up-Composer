@@ -70,8 +70,9 @@ extension Array {
 #if canImport(SwiftUI)
 enum TeslaCamTheme {
   enum Colors {
-    static let background = Color(red: 0.07, green: 0.07, blue: 0.08)
-    static let backgroundGlow = Color.white.opacity(0.035)
+    static let background = Color(red: 0.045, green: 0.047, blue: 0.055)
+    static let backgroundGlow = Color(red: 0.22, green: 0.45, blue: 0.92).opacity(0.16)
+    static let backgroundWarmGlow = Color(red: 0.93, green: 0.38, blue: 0.28).opacity(0.08)
     static let surface = Color.white.opacity(0.04)
     static let surfaceElevated = Color.white.opacity(0.065)
     static let chromeBar = Color.white.opacity(0.055)
@@ -98,17 +99,17 @@ enum TeslaCamTheme {
     /// Standard chrome strip height (toolbars, status bars).
     static let toolbarHeight: CGFloat = 52
 
-    static let cardCorner: CGFloat = 16
-    static let controlCorner: CGFloat = 12
+    static let cardCorner: CGFloat = 10
+    static let controlCorner: CGFloat = 10
     static let compactCorner: CGFloat = 10
 
     /// Padding inside a primary content card (e.g. TimelineExportCard, PreviewPanelCard).
     static let cardPadding: CGFloat = 20
     /// Padding inside a secondary / compact card (e.g. StatCard, RangeControlCard, TelemetryMetric).
     static let cardPaddingCompact: CGFloat = 14
-    /// Padding inside a small inline pill (chips, info banners).
-    static let pillPaddingHorizontal: CGFloat = 12
-    static let pillPaddingVertical: CGFloat = 8
+    /// Padding inside a small inline chip (chips, info banners).
+    static let chipPaddingHorizontal: CGFloat = 12
+    static let chipPaddingVertical: CGFloat = 8
 
     /// Outer screen-edge padding for top-level content.
     static let contentPadding: CGFloat = 24
@@ -159,6 +160,130 @@ enum TeslaCamTheme {
     static let monoSmall = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let numericBody = Font.system(size: 15, weight: .semibold, design: .monospaced)
     static let numericLarge = Font.system(size: 18, weight: .semibold, design: .monospaced)
+    static let metricValue = Font.system(size: 13, weight: .semibold, design: .monospaced)
+    static let miniMetricValue = Font.system(size: 12, weight: .semibold, design: .monospaced)
+    static let inspectorChip = Font.system(size: 11, weight: .semibold)
+    static let inspectorSymbol = Font.system(size: 12, weight: .semibold)
+  }
+}
+
+enum SurfaceRole: CaseIterable {
+  case panel
+  case rail
+  case overlay
+  case control
+  case selected
+
+  var fill: Color {
+    switch self {
+    case .panel:
+      return TeslaCamTheme.Colors.surface
+    case .rail:
+      return Color.white.opacity(0.032)
+    case .overlay:
+      return TeslaCamTheme.Colors.overlaySurfaceStrong
+    case .control:
+      return TeslaCamTheme.Colors.surfaceElevated
+    case .selected:
+      return TeslaCamTheme.Colors.accentSoft
+    }
+  }
+
+  var stroke: Color {
+    switch self {
+    case .selected:
+      return TeslaCamTheme.Colors.accent.opacity(0.52)
+    default:
+      return TeslaCamTheme.Colors.stroke
+    }
+  }
+
+  var glassTint: Color? {
+    switch self {
+    case .selected:
+      return TeslaCamTheme.Colors.accent.opacity(0.18)
+    case .overlay:
+      return Color.black.opacity(0.18)
+    case .control:
+      return Color.white.opacity(0.06)
+    case .panel, .rail:
+      return nil
+    }
+  }
+}
+
+enum CompactControlSize: CaseIterable {
+  case icon
+  case chip
+  case command
+
+  var visualWidth: CGFloat {
+    switch self {
+    case .icon:
+      return 36
+    case .chip:
+      return 72
+    case .command:
+      return 120
+    }
+  }
+
+  var visualHeight: CGFloat {
+    switch self {
+    case .icon:
+      return 34
+    case .chip:
+      return 34
+    case .command:
+      return 36
+    }
+  }
+
+  var hitTargetWidth: CGFloat { 44 }
+  var hitTargetHeight: CGFloat { 44 }
+
+  var maxWidth: CGFloat {
+    switch self {
+    case .icon:
+      return 44
+    case .chip:
+      return 120
+    case .command:
+      return 160
+    }
+  }
+}
+
+struct IPadGridMetrics: Equatable {
+  enum LayoutMode {
+    case threeZone
+  }
+
+  let containerWidth: CGFloat
+
+  var layoutMode: LayoutMode {
+    .threeZone
+  }
+
+  var gutter: CGFloat { 8 }
+  var outerPadding: CGFloat { 8 }
+
+  var eventRailWidth: CGFloat {
+    if containerWidth < 900 {
+      return min(220, max(152, floor(containerWidth * 0.22 / 4) * 4))
+    }
+    return min(280, max(240, floor(containerWidth * 0.235 / 4) * 4))
+  }
+
+  var inspectorWidth: CGFloat {
+    if containerWidth < 900 {
+      return min(260, max(196, floor(containerWidth * 0.28 / 4) * 4))
+    }
+    return min(340, max(300, floor(containerWidth * 0.30 / 4) * 4))
+  }
+
+  var centerWidth: CGFloat {
+    max(320, containerWidth - eventRailWidth - inspectorWidth - gutter * 2)
   }
 }
 
@@ -167,11 +292,25 @@ struct TeslaCamSceneBackground: View {
     TeslaCamTheme.Colors.background
       .overlay(
         LinearGradient(
-          colors: [TeslaCamTheme.Colors.backgroundGlow, .clear],
+          colors: [Color.white.opacity(0.04), .clear],
           startPoint: .top,
           endPoint: .bottom
         )
       )
+      .overlay(alignment: .topLeading) {
+        Rectangle()
+          .fill(TeslaCamTheme.Colors.backgroundGlow)
+          .frame(width: 520, height: 520)
+          .blur(radius: 80)
+          .offset(x: -180, y: -220)
+      }
+      .overlay(alignment: .bottomTrailing) {
+        Rectangle()
+          .fill(TeslaCamTheme.Colors.backgroundWarmGlow)
+          .frame(width: 460, height: 460)
+          .blur(radius: 90)
+          .offset(x: 180, y: 180)
+      }
       .ignoresSafeArea()
   }
 }
@@ -180,22 +319,160 @@ private struct TeslaCamCardModifier: ViewModifier {
   let fill: Color
   let radius: CGFloat
 
+  @ViewBuilder
   func body(content: Content) -> some View {
+    #if os(iOS)
+    if #available(iOS 26.0, *) {
+      content
+        .background(fill.opacity(0.35), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .glassEffect(.regular.tint(fill), in: .rect(cornerRadius: radius))
+        .overlay(
+          RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .stroke(TeslaCamTheme.Colors.stroke, lineWidth: 1)
+        )
+    } else {
+      content
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .overlay(
+          RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .stroke(TeslaCamTheme.Colors.stroke, lineWidth: 1)
+        )
+    }
+    #else
     content
       .background(fill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
       .overlay(
         RoundedRectangle(cornerRadius: radius, style: .continuous)
           .stroke(TeslaCamTheme.Colors.stroke, lineWidth: 1)
       )
+    #endif
+  }
+}
+
+private struct GlassSurfaceModifier: ViewModifier {
+  let role: SurfaceRole
+  let radius: CGFloat
+  let interactive: Bool
+
+  @ViewBuilder
+  func body(content: Content) -> some View {
+    #if os(iOS)
+    if #available(iOS 26.0, *) {
+      if let tint = role.glassTint {
+        content
+          .background(role.fill.opacity(0.28), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+          .glassEffect(
+            .regular.tint(tint).interactive(interactive),
+            in: .rect(cornerRadius: radius)
+          )
+          .overlay(
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+              .stroke(role.stroke, lineWidth: 1)
+          )
+      } else {
+        content
+          .background(role.fill.opacity(0.28), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+          .glassEffect(
+            .regular.interactive(interactive),
+            in: .rect(cornerRadius: radius)
+          )
+          .overlay(
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+              .stroke(role.stroke, lineWidth: 1)
+          )
+      }
+    } else {
+      content
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .overlay(
+          RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .stroke(role.stroke, lineWidth: 1)
+        )
+    }
+    #else
+    content
+      .background(role.fill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+      .overlay(
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+          .stroke(role.stroke, lineWidth: 1)
+      )
+    #endif
   }
 }
 
 extension View {
+  func glassSurface(
+    role: SurfaceRole = .panel,
+    radius: CGFloat = TeslaCamTheme.Metrics.cardCorner,
+    interactive: Bool = false
+  ) -> some View {
+    modifier(GlassSurfaceModifier(role: role, radius: radius, interactive: interactive))
+  }
+
   func teslaCamCard(
     fill: Color = TeslaCamTheme.Colors.surface,
     radius: CGFloat = TeslaCamTheme.Metrics.cardCorner
   ) -> some View {
     modifier(TeslaCamCardModifier(fill: fill, radius: radius))
+  }
+
+  func compactButtonStyle(
+    role: SurfaceRole = .control,
+    size: CompactControlSize = .chip
+  ) -> some View {
+    buttonStyle(CompactButtonStyle(role: role, size: size))
+  }
+}
+
+struct GlassEffectGroup<Content: View>: View {
+  let spacing: CGFloat
+  @ViewBuilder let content: () -> Content
+
+  init(spacing: CGFloat = TeslaCamTheme.Spacing.m, @ViewBuilder content: @escaping () -> Content) {
+    self.spacing = spacing
+    self.content = content
+  }
+
+  @ViewBuilder
+  var body: some View {
+    #if os(iOS)
+    if #available(iOS 26.0, *) {
+      GlassEffectContainer(spacing: spacing) {
+        content()
+      }
+    } else {
+      content()
+    }
+    #else
+    content()
+    #endif
+  }
+}
+
+struct CompactButtonStyle: ButtonStyle {
+  let role: SurfaceRole
+  let size: CompactControlSize
+
+  func makeBody(configuration: Configuration) -> some View {
+    ZStack {
+      configuration.label
+        .font(TeslaCamTheme.Typography.label)
+        .foregroundStyle(TeslaCamTheme.Colors.textPrimary.opacity(configuration.isPressed ? 0.72 : 0.96))
+        .lineLimit(1)
+        .minimumScaleFactor(0.78)
+        .padding(.horizontal, size == .icon ? 0 : TeslaCamTheme.Spacing.m)
+        .frame(minWidth: size == .icon ? size.visualWidth : nil)
+        .frame(maxWidth: size.maxWidth)
+        .frame(height: size.visualHeight)
+        .glassSurface(
+          role: role,
+          radius: TeslaCamTheme.Metrics.compactCorner,
+          interactive: true
+        )
+    }
+    .frame(minWidth: size.hitTargetWidth, minHeight: size.hitTargetHeight)
+    .opacity(configuration.isPressed ? 0.82 : 1)
+    .contentShape(Rectangle())
   }
 }
 #endif

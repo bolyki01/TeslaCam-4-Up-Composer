@@ -338,6 +338,9 @@ final class AppState: ObservableObject {
   @Published var telemetryRoute: [TelemetryRoutePoint] = []
   @Published var telemetryEventMarkers: [TelemetryEventMarker] = []
   @Published var eventSummaries: [TeslaCamEventSummary] = []
+  @Published var eventSearchText: String = ""
+  @Published var eventReasonFilter: String = "all"
+  @Published var eventSortMode: TeslaCamEventSortMode = .oldestFirst
   @Published var currentEvent: TeslaCamEventSummary?
   @Published var previewLayoutMode: PreviewLayoutMode = .grid
   @Published var layoutRequest: CameraLayoutRequest = .auto
@@ -480,6 +483,18 @@ final class AppState: ObservableObject {
     #endif
   }
 
+  func loadDemoTimeline() {
+    guard !exporter.isExporting else { return }
+    isIndexing = false
+    indexStatus = ""
+    scanStage = .scanningNestedFolders
+    scanDiscoveredClipCount = 0
+    errorMessage = ""
+    showError = false
+    loadSampleTimeline()
+    debug("demo timeline loaded", category: "demo")
+  }
+
   func indexFolder(_ url: URL) {
     indexSources([url])
   }
@@ -505,6 +520,8 @@ final class AppState: ObservableObject {
     telemetryRoute = []
     telemetryEventMarkers = []
     telemetryText = ""
+    eventSearchText = ""
+    eventReasonFilter = "all"
     cameraTrack = .empty
     clipHealthFacts = []
     layoutPresetStatus = ""
@@ -603,6 +620,15 @@ final class AppState: ObservableObject {
 
   func setPlaybackRate(_ rate: Double) {
     playbackRate = rate
+  }
+
+  func refreshTelemetryOverlay() {
+    let local = max(0, currentSeconds - currentSegmentStartSeconds)
+    updateOverlayAndTelemetry(
+      globalSeconds: currentSeconds,
+      clipIndex: currentSegmentClipIndex,
+      localSeconds: local
+    )
   }
 
   func cyclePlaybackRate() {
@@ -864,6 +890,38 @@ final class AppState: ObservableObject {
 
   var canExport: Bool {
     !clipSets.isEmpty && !exporter.isExporting
+  }
+
+  var eventReasonOptions: [String] {
+    let reasons = Set(eventSummaries.map { $0.reasonTitle }.filter { !$0.isEmpty })
+    return ["All"] + reasons.sorted()
+  }
+
+  var filteredEventSummaries: [TeslaCamEventSummary] {
+    let query = eventSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let selectedReason = eventReasonFilter == "all" ? "" : eventReasonFilter.lowercased()
+    let filtered = eventSummaries.filter { event in
+      let matchesReason = selectedReason.isEmpty || event.reasonTitle.lowercased() == selectedReason
+      guard matchesReason else { return false }
+      guard !query.isEmpty else { return true }
+      return event.locationTitle.lowercased().contains(query)
+        || event.reasonTitle.lowercased().contains(query)
+        || TeslaCamFormatters.timelineSameDay.string(from: event.timestamp).lowercased().contains(query)
+    }
+
+    switch eventSortMode {
+    case .oldestFirst:
+      return filtered.sorted { $0.timestamp < $1.timestamp }
+    case .newestFirst:
+      return filtered.sorted { $0.timestamp > $1.timestamp }
+    case .location:
+      return filtered.sorted {
+        if $0.locationTitle == $1.locationTitle {
+          return $0.timestamp < $1.timestamp
+        }
+        return $0.locationTitle.localizedCaseInsensitiveCompare($1.locationTitle) == .orderedAscending
+      }
+    }
   }
 
   var scanDateRangeSummary: String {
@@ -1197,7 +1255,7 @@ final class AppState: ObservableObject {
   }
 
   private func formatTelemetry(_ sei: SeiMetadata?) -> String {
-    TelemetryProcessor.formatTelemetryCompact(sei)
+    TelemetryProcessor.formatTelemetryCompact(sei, unit: exportOverlayOptions.speedUnit)
   }
 
   private func orderCameras(_ cams: [Camera], profile: CameraLayoutProfile) -> [Camera] {
@@ -1381,7 +1439,7 @@ final class AppState: ObservableObject {
       case "blank":
         return true
       case "sample":
-        loadSampleTimeline()
+        loadDemoTimeline()
         return true
       default:
         break
@@ -1466,8 +1524,17 @@ final class AppState: ObservableObject {
     camerasDetected = [.front, .back, .left, .right, .left_pillar, .right_pillar]
     selectedExportCameras = Set(camerasDetected)
     exportPreset = .fastHEVC
-    eventSummaries = buildEventSummaries(from: sampleSets)
+    eventSummaries = demoEventSummaries(for: sampleSets)
     clipHealthFacts = buildClipHealthFacts(from: sampleSets)
+    duplicateSummary = DuplicateResolutionSummary(
+      duplicateFileCount: 0,
+      duplicateTimestampCount: 0,
+      overlapMinuteCount: 0
+    )
+    currentEvent = eventSummaries.first
+    eventSearchText = ""
+    eventReasonFilter = "all"
+    layoutPresetStatus = ""
     cameraTrack = .empty
     currentIndex = 0
     overlayText = formatDateTime(base)
@@ -1475,6 +1542,81 @@ final class AppState: ObservableObject {
     setTrimRange(startSeconds: 0, endSeconds: totalDuration, snapToMinute: true)
     currentSeconds = 0
     seekToGlobalTime(0, exact: true)
+    applyDemoTelemetry(for: sampleSets)
+  }
+
+  private func demoEventSummaries(for sets: [ClipSet]) -> [TeslaCamEventSummary] {
+    let coordinates = demoCoordinates
+    return sets.enumerated().map { index, set in
+      TeslaCamEventSummary(
+        id: "demo-\(index)",
+        clipIndex: index,
+        timestamp: set.date,
+        folderURL: nil,
+        thumbnailURL: nil,
+        city: "Demo",
+        street: "Sample route",
+        reason: index == 1 ? "sentry" : "drive",
+        camera: Camera.front.rawValue,
+        coordinate: coordinates[index % coordinates.count]
+      )
+    }
+  }
+
+  private func applyDemoTelemetry(for sets: [ClipSet]) {
+    telemetryTimeline = demoTelemetryTimeline()
+    telemetryURL = nil
+    telemetryRoute = demoTelemetryRoute(for: sets)
+    telemetryEventMarkers = demoTelemetryEventMarkers()
+    updateOverlayAndTelemetry(globalSeconds: 0, clipIndex: 0, localSeconds: 0)
+  }
+
+  private func demoTelemetryTimeline() -> TelemetryTimeline {
+    TelemetryTimeline(frames: [
+      TelemetryFrame(timestampMs: 0, sei: demoTelemetryMetadata())
+    ])
+  }
+
+  private func demoTelemetryMetadata() -> SeiMetadata {
+    var metadata = SeiMetadata()
+    metadata.gearState = .drive
+    metadata.vehicleSpeedMps = 13.4
+    metadata.acceleratorPedalPosition = 18
+    metadata.steeringWheelAngle = -4
+    metadata.autopilotState = .tacc
+    metadata.latitudeDeg = demoCoordinates[0].latitude
+    metadata.longitudeDeg = demoCoordinates[0].longitude
+    metadata.headingDeg = 272
+    return metadata
+  }
+
+  private func demoTelemetryRoute(for sets: [ClipSet]) -> [TelemetryRoutePoint] {
+    let coordinates = demoCoordinates
+    return sets.enumerated().map { index, set in
+      TelemetryRoutePoint(
+        id: index,
+        seconds: max(0, set.date.timeIntervalSince(sets.first?.date ?? set.date)),
+        coordinate: coordinates[index % coordinates.count],
+        speedKmh: [48, 52, 41][index % 3],
+        headingDeg: [272, 279, 285][index % 3]
+      )
+    }
+  }
+
+  private func demoTelemetryEventMarkers() -> [TelemetryEventMarker] {
+    [
+      TelemetryEventMarker(seconds: 12, kind: .accelerator, intensity: 0.52),
+      TelemetryEventMarker(seconds: 66, kind: .autopilot, intensity: 1),
+      TelemetryEventMarker(seconds: 126, kind: .brake, intensity: 0.8)
+    ]
+  }
+
+  private var demoCoordinates: [TelemetryCoordinate] {
+    [
+      TelemetryCoordinate(latitude: 51.50740, longitude: -0.12780),
+      TelemetryCoordinate(latitude: 51.50795, longitude: -0.13210),
+      TelemetryCoordinate(latitude: 51.50860, longitude: -0.13620)
+    ]
   }
 
 }

@@ -681,14 +681,15 @@ final class NativeExportController: ObservableObject {
     drawReportLine("Output: \(plan.outputURL.lastPathComponent)", y: 610, size: 12, context: context, mediaBox: mediaBox)
     drawReportLine("Clip spans: \(plan.sets.count)", y: 590, size: 12, context: context, mediaBox: mediaBox)
     drawReportLine("Graph: \(NativeFilterGraphSummary(plan: plan).description)", y: 570, size: 10, context: context, mediaBox: mediaBox)
+    drawReportLine("HUD: \(plan.overlayOptions.telemetryHUD ? plan.overlayOptions.telemetryHUDMode.displayName : "Off") - Units: \(plan.overlayOptions.speedUnit.displayName)", y: 550, size: 12, context: context, mediaBox: mediaBox)
     if plan.isPreviewSample {
-      drawReportLine("Type: Preview sample", y: 550, size: 12, context: context, mediaBox: mediaBox)
+      drawReportLine("Type: Preview sample", y: 530, size: 12, context: context, mediaBox: mediaBox)
     }
     if !plan.cameraTrack.isEmpty {
-      drawReportLine("Camera cuts: \(plan.cameraTrack.keyframes.count)", y: plan.isPreviewSample ? 530 : 550, size: 12, context: context, mediaBox: mediaBox)
+      drawReportLine("Camera cuts: \(plan.cameraTrack.keyframes.count)", y: plan.isPreviewSample ? 510 : 530, size: 12, context: context, mediaBox: mediaBox)
     }
     if plan.partialClipCount > 0 {
-      drawReportLine("Partial spans: \(plan.partialClipCount)", y: 510, size: 12, context: context, mediaBox: mediaBox)
+      drawReportLine("Partial spans: \(plan.partialClipCount)", y: 490, size: 12, context: context, mediaBox: mediaBox)
     }
     context.endPDFPage()
     context.closePDF()
@@ -1268,6 +1269,7 @@ private final class TimelineFrameComposer {
         options: overlayOptions,
         telemetry: telemetry,
         route: route,
+        timestamp: set.date.addingTimeInterval(max(0, localSeconds)),
         localSeconds: localSeconds,
         context: context,
         canvasSize: layout.canvasSize
@@ -1350,10 +1352,27 @@ private final class TimelineFrameComposer {
 }
 
 private enum ExportOverlayDrawing {
+  private static let dateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone.current
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter
+  }()
+
+  private static let timeFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone.current
+    formatter.dateFormat = "HH:mm:ss"
+    return formatter
+  }()
+
   static func drawTelemetryOverlay(
     options: ExportOverlayOptions,
     telemetry: TelemetryDisplayModel?,
     route: [TelemetryRoutePoint],
+    timestamp: Date,
     localSeconds: Double,
     context: CGContext,
     canvasSize: CGSize
@@ -1362,20 +1381,39 @@ private enum ExportOverlayDrawing {
       drawRouteMap(route: route, currentSeconds: localSeconds, context: context, canvasSize: canvasSize)
     }
 
-    guard options.telemetryHUD, let telemetry else { return }
-    let panel = CGRect(x: 26, y: 26, width: min(540, canvasSize.width * 0.34), height: 174)
+    guard options.telemetryHUD else { return }
+    drawTimestampOverlay(date: timestamp, context: context, canvasSize: canvasSize)
+
+    let panelHeight: CGFloat = options.telemetryHUDMode == .minimal ? 92 : 174
+    let panel = CGRect(x: 26, y: 26, width: min(560, canvasSize.width * 0.36), height: panelHeight)
     context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.58))
     context.fill(panel)
     context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.16))
     context.stroke(panel, width: 1)
 
-    let lines = [
-      "Speed  \(telemetry.speedText)",
-      "Pedal  \(telemetry.acceleratorText)    Brake  \(telemetry.brakeApplied ? "On" : "Off")",
-      "Steer  \(telemetry.steeringText)    Gear  \(telemetry.gear)",
-      "AP     \(telemetry.autopilot)",
-      "Head   \(telemetry.headingText)"
-    ]
+    let lines: [String]
+    if let telemetry {
+      switch options.telemetryHUDMode {
+      case .minimal:
+        lines = [
+          "\(telemetry.speedText(unit: options.speedUnit))   Gear \(telemetry.gear)",
+          "AP \(telemetry.autopilot)   Brake \(telemetry.brakeApplied ? "On" : "Off")"
+        ]
+      case .detailed:
+        lines = [
+          "Speed  \(telemetry.speedText(unit: options.speedUnit))",
+          "Pedal  \(telemetry.acceleratorText)    Brake  \(telemetry.brakeApplied ? "On" : "Off")",
+          "Steer  \(telemetry.steeringText)    Gear  \(telemetry.gear)",
+          "AP     \(telemetry.autopilot)",
+          "Head   \(telemetry.headingText)"
+        ]
+      }
+    } else {
+      lines = [
+        "No Tesla telemetry",
+        "Speed/AP unavailable for this clip"
+      ]
+    }
     for (index, line) in lines.enumerated() {
       drawText(
         line,
@@ -1386,6 +1424,31 @@ private enum ExportOverlayDrawing {
         color: CGColor(red: 1, green: 1, blue: 1, alpha: index == 0 ? 0.95 : 0.78)
       )
     }
+  }
+
+  private static func drawTimestampOverlay(date: Date, context: CGContext, canvasSize: CGSize) {
+    let panel = CGRect(x: 26, y: max(26, canvasSize.height - 104), width: min(360, canvasSize.width * 0.30), height: 78)
+    context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.58))
+    context.fill(panel)
+    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.16))
+    context.stroke(panel, width: 1)
+
+    drawText(
+      ExportOverlayDrawing.dateFormatter.string(from: date),
+      in: CGRect(x: panel.minX + 16, y: panel.minY + 14, width: panel.width - 32, height: 24),
+      context: context,
+      canvasHeight: canvasSize.height,
+      size: 18,
+      color: CGColor(red: 1, green: 1, blue: 1, alpha: 0.95)
+    )
+    drawText(
+      ExportOverlayDrawing.timeFormatter.string(from: date),
+      in: CGRect(x: panel.minX + 16, y: panel.minY + 42, width: panel.width - 32, height: 24),
+      context: context,
+      canvasHeight: canvasSize.height,
+      size: 19,
+      color: CGColor(red: 1, green: 1, blue: 1, alpha: 0.78)
+    )
   }
 
   static func drawPrivacyMask(context: CGContext, canvasSize: CGSize, tileRects: [CGRect]) {
