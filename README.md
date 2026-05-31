@@ -47,6 +47,21 @@ python3 teslacam.py
 ./teslacam.sh
 ```
 
+## Verification quick reference
+
+Use the runbook for details, but these are the repo-backed checks:
+
+```sh
+python3 -m unittest discover tests
+script/test_native.sh
+git diff --check
+```
+
+`tests.test_integration` and real CLI rendering require working `ffmpeg` and
+`ffprobe`. No dedicated lint, format, or Python typecheck config is present.
+Swift compile/typecheck coverage comes from the native Xcode build/test lane.
+That lane requires `TESLACAM_BUILD_ENV` or `/Users/bolyki/dev/source/build-env.sh`.
+
 ## Domain parity and dry runs
 
 The app and CLI share a fixture-backed domain contract for timestamp parsing, camera normalization, duplicate handling, layout selection, and output conflict naming. See `docs/domain-contract.md`. Shared fixtures live under `fixtures/domain/cases`.

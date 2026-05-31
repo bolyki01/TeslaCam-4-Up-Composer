@@ -749,6 +749,74 @@ struct TeslaCamTests {
     #expect(route[1].coordinate.latitude == 51.501)
   }
 
+  @Test func telemetryRouteReplayInterpolatesFrameBetweenRoutePoints() async throws {
+    let route = [
+      TelemetryRoutePoint(
+        id: 0,
+        seconds: 10,
+        coordinate: TelemetryCoordinate(latitude: 51.5000, longitude: -0.1000),
+        speedKmh: 36,
+        headingDeg: 350
+      ),
+      TelemetryRoutePoint(
+        id: 1,
+        seconds: 20,
+        coordinate: TelemetryCoordinate(latitude: 51.5100, longitude: -0.0900),
+        speedKmh: 72,
+        headingDeg: 10
+      )
+    ]
+
+    let frame = TelemetryRouteReplay(route: route).frame(at: 15)
+
+    #expect(abs(frame.coordinate.latitude - 51.5050) < 0.000001)
+    #expect(abs(frame.coordinate.longitude - -0.0950) < 0.000001)
+    #expect(abs(frame.speedKmh - 54) < 0.000001)
+    #expect(abs(frame.headingDeg - 0) < 0.000001)
+  }
+
+  @Test func telemetryRouteReplayKeepsEndpointsWhenDecimatingDisplaySamples() async throws {
+    let route = (0..<12).map { index in
+      TelemetryRoutePoint(
+        id: index,
+        seconds: Double(index),
+        coordinate: TelemetryCoordinate(latitude: 51.5 + Double(index) * 0.001, longitude: -0.1),
+        speedKmh: Double(index),
+        headingDeg: 0
+      )
+    }
+
+    let display = TelemetryRouteReplay.displaySamples(from: route, maxPoints: 5)
+
+    #expect(display.count == 5)
+    #expect(display.first?.id == 0)
+    #expect(display.last?.id == 11)
+  }
+
+  @Test func telemetryRouteStyleUsesSpanAwareLineWidthAndStableSignature() async throws {
+    #expect(TelemetryRouteStyle.lineWidth(latitudeDelta: 9, longitudeDelta: 1) == 2.0)
+    #expect(TelemetryRouteStyle.lineWidth(latitudeDelta: 0.4, longitudeDelta: 0.4) == 4.0)
+
+    let route = [
+      TelemetryRoutePoint(
+        id: 0,
+        seconds: 1.0,
+        coordinate: TelemetryCoordinate(latitude: 51.5000001, longitude: -0.1000001),
+        speedKmh: 10,
+        headingDeg: 90
+      ),
+      TelemetryRoutePoint(
+        id: 1,
+        seconds: 2.0,
+        coordinate: TelemetryCoordinate(latitude: 51.5000002, longitude: -0.1000002),
+        speedKmh: 12,
+        headingDeg: 92
+      )
+    ]
+
+    #expect(TelemetryRouteSignature.route(route) == "1:51.5,-0.1|2:51.5,-0.1")
+  }
+
   @Test func telemetryProcessorDurationStringFormatsHoursAndMinutes() async throws {
     #expect(TelemetryProcessor.durationString(seconds: 0) == "0m total")
     #expect(TelemetryProcessor.durationString(seconds: 540) == "9m total")

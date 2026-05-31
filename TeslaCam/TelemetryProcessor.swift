@@ -213,6 +213,188 @@ enum TelemetryProcessor {
   }
 }
 
+struct TelemetryRouteFrame: Equatable, Hashable {
+  let seconds: Double
+  let coordinate: TelemetryCoordinate
+  let speedKmh: Double
+  let headingDeg: Double
+  let progress: Double
+}
+
+struct TelemetryRouteReplay {
+  let route: [TelemetryRoutePoint]
+
+  init(route: [TelemetryRoutePoint]) {
+    self.route = route.sorted { $0.seconds < $1.seconds }
+  }
+
+  func frame(at seconds: Double) -> TelemetryRouteFrame {
+    guard let first = route.first else {
+      return TelemetryRouteFrame(
+        seconds: 0,
+        coordinate: TelemetryCoordinate(latitude: 0, longitude: 0),
+        speedKmh: 0,
+        headingDeg: 0,
+        progress: 0
+      )
+    }
+    guard let last = route.last, last != first else {
+      return Self.frame(from: first, progress: 0)
+    }
+
+    if seconds <= first.seconds {
+      return Self.frame(from: first, progress: 0)
+    }
+    if seconds >= last.seconds {
+      return Self.frame(from: last, progress: 1)
+    }
+
+    let upperIndex = upperBound(for: seconds)
+    let lower = route[max(0, upperIndex - 1)]
+    let upper = route[min(upperIndex, route.count - 1)]
+    let span = max(upper.seconds - lower.seconds, 0.0001)
+    let ratio = min(max((seconds - lower.seconds) / span, 0), 1)
+    let duration = max(last.seconds - first.seconds, 0.0001)
+
+    return TelemetryRouteFrame(
+      seconds: seconds,
+      coordinate: TelemetryCoordinate(
+        latitude: Self.interpolate(lower.coordinate.latitude, upper.coordinate.latitude, ratio),
+        longitude: Self.interpolate(lower.coordinate.longitude, upper.coordinate.longitude, ratio)
+      ),
+      speedKmh: Self.interpolate(lower.speedKmh, upper.speedKmh, ratio),
+      headingDeg: Self.interpolateHeading(from: lower.headingDeg, to: upper.headingDeg, ratio: ratio),
+      progress: min(max((seconds - first.seconds) / duration, 0), 1)
+    )
+  }
+
+  static func displaySamples(from route: [TelemetryRoutePoint], maxPoints: Int = 8_000) -> [TelemetryRoutePoint] {
+    guard route.count > maxPoints, maxPoints > 2 else { return route }
+
+    struct ScoredPoint {
+      let index: Int
+      let score: Double
+    }
+
+    var scored: [ScoredPoint] = []
+    scored.reserveCapacity(route.count - 2)
+    for index in 1..<(route.count - 1) {
+      let previous = route[index - 1]
+      let current = route[index]
+      let next = route[index + 1]
+      let headingDelta = Self.headingDelta(from: previous.headingDeg, to: next.headingDeg)
+      let distance = Self.distanceMeters(from: previous.coordinate, to: next.coordinate)
+      let speedBoost = min(max(current.speedKmh, 0), 140) * 2
+      scored.append(ScoredPoint(index: index, score: abs(headingDelta) * 30 + distance + speedBoost))
+    }
+
+    let keepCount = maxPoints - 2
+    let kept = Set(scored.sorted { $0.score > $1.score }.prefix(keepCount).map(\.index))
+    var result = [route[0]]
+    result.reserveCapacity(maxPoints)
+    for index in 1..<(route.count - 1) where kept.contains(index) {
+      result.append(route[index])
+    }
+    result.append(route[route.count - 1])
+    return result
+  }
+
+  private static func frame(from point: TelemetryRoutePoint, progress: Double) -> TelemetryRouteFrame {
+    TelemetryRouteFrame(
+      seconds: point.seconds,
+      coordinate: point.coordinate,
+      speedKmh: point.speedKmh,
+      headingDeg: point.headingDeg,
+      progress: progress
+    )
+  }
+
+  private func upperBound(for seconds: Double) -> Int {
+    var low = 0
+    var high = route.count
+    while low < high {
+      let mid = (low + high) / 2
+      if route[mid].seconds <= seconds {
+        low = mid + 1
+      } else {
+        high = mid
+      }
+    }
+    return low
+  }
+
+  private static func interpolate(_ left: Double, _ right: Double, _ ratio: Double) -> Double {
+    left + ((right - left) * ratio)
+  }
+
+  private static func interpolateHeading(from left: Double, to right: Double, ratio: Double) -> Double {
+    let delta = headingDelta(from: left, to: right)
+    let value = left + (delta * ratio)
+    if value < 0 {
+      return value + 360
+    }
+    if value >= 360 {
+      return value - 360
+    }
+    return value
+  }
+
+  private static func headingDelta(from left: Double, to right: Double) -> Double {
+    var delta = right - left
+    if delta > 180 {
+      delta -= 360
+    } else if delta < -180 {
+      delta += 360
+    }
+    return delta
+  }
+
+  private static func distanceMeters(from left: TelemetryCoordinate, to right: TelemetryCoordinate) -> Double {
+    let earthRadius = 6_371_000.0
+    let lat1 = left.latitude * .pi / 180
+    let lat2 = right.latitude * .pi / 180
+    let dLat = (right.latitude - left.latitude) * .pi / 180
+    let dLon = (right.longitude - left.longitude) * .pi / 180
+    let a = sin(dLat / 2) * sin(dLat / 2)
+      + cos(lat1) * cos(lat2) * sin(dLon / 2) * sin(dLon / 2)
+    return earthRadius * 2 * atan2(sqrt(a), sqrt(1 - a))
+  }
+}
+
+enum TelemetryRouteStyle {
+  static func lineWidth(latitudeDelta: Double, longitudeDelta: Double) -> Double {
+    let delta = max(latitudeDelta, longitudeDelta)
+    switch delta {
+    case let value where value > 8.0:
+      return 2.0
+    case let value where value > 4.0:
+      return 2.6
+    case let value where value > 1.5:
+      return 3.1
+    case let value where value > 0.7:
+      return 3.6
+    default:
+      return 4.0
+    }
+  }
+}
+
+enum TelemetryRouteSignature {
+  static func route(_ route: [TelemetryRoutePoint]) -> String {
+    route.map { point in
+      "\(roundedString(point.seconds)):\(roundedString(point.coordinate.latitude)),\(roundedString(point.coordinate.longitude))"
+    }.joined(separator: "|")
+  }
+
+  private static func roundedString(_ value: Double) -> String {
+    let rounded = (value * 1000).rounded() / 1000
+    if rounded.rounded() == rounded {
+      return "\(Int(rounded))"
+    }
+    return "\(rounded)"
+  }
+}
+
 private struct EventJSON: Decodable {
   let timestamp: String?
   let city: String?

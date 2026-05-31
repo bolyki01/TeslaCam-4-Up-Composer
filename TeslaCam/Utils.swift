@@ -70,6 +70,27 @@ extension Array {
 #if canImport(SwiftUI)
 enum TeslaCamTheme {
   enum Colors {
+    #if os(iOS)
+    static let background = Color(red: 0.045, green: 0.047, blue: 0.055)
+    static let backgroundGlow = Color(red: 0.18, green: 0.36, blue: 0.78).opacity(0.22)
+    static let backgroundWarmGlow = Color(red: 0.90, green: 0.34, blue: 0.22).opacity(0.10)
+    static let surface = Color.white.opacity(0.055)
+    static let surfaceElevated = Color.white.opacity(0.09)
+    static let chromeBar = Color.white.opacity(0.07)
+    static let stroke = Color.white.opacity(0.12)
+    static let accent = Color(red: 0.34, green: 0.58, blue: 0.98)
+    static let accentSoft = accent.opacity(0.24)
+    static let textPrimary = Color.white.opacity(0.94)
+    static let textSecondary = Color.white.opacity(0.72)
+    static let textTertiary = Color.white.opacity(0.50)
+    static let gapFill = Color(red: 0.18, green: 0.13, blue: 0.18)
+    static let gapAccent = Color(red: 0.95, green: 0.42, blue: 0.30)
+    static let overlayScrim = Color.black.opacity(0.56)
+    static let overlaySurface = Color.black.opacity(0.32)
+    static let overlaySurfaceStrong = Color.black.opacity(0.54)
+    static let controlKnob = Color.white.opacity(0.90)
+    static let controlKnobStroke = Color.white.opacity(0.24)
+    #else
     static let background = Color(red: 0.045, green: 0.047, blue: 0.055)
     static let backgroundGlow = Color(red: 0.22, green: 0.45, blue: 0.92).opacity(0.16)
     static let backgroundWarmGlow = Color(red: 0.93, green: 0.38, blue: 0.28).opacity(0.08)
@@ -89,6 +110,7 @@ enum TeslaCamTheme {
     static let overlaySurfaceStrong = Color.black.opacity(0.36)
     static let controlKnob = Color.white.opacity(0.88)
     static let controlKnobStroke = Color.white.opacity(0.2)
+    #endif
   }
 
   enum Metrics {
@@ -179,7 +201,7 @@ enum SurfaceRole: CaseIterable {
     case .panel:
       return TeslaCamTheme.Colors.surface
     case .rail:
-      return Color.white.opacity(0.032)
+      return TeslaCamTheme.Colors.surface
     case .overlay:
       return TeslaCamTheme.Colors.overlaySurfaceStrong
     case .control:
@@ -203,9 +225,13 @@ enum SurfaceRole: CaseIterable {
     case .selected:
       return TeslaCamTheme.Colors.accent.opacity(0.18)
     case .overlay:
+      #if os(iOS)
+      return Color.white.opacity(0.30)
+      #else
       return Color.black.opacity(0.18)
+      #endif
     case .control:
-      return Color.white.opacity(0.06)
+      return TeslaCamTheme.Colors.surfaceElevated
     case .panel, .rail:
       return nil
     }
@@ -265,21 +291,21 @@ struct IPadGridMetrics: Equatable {
     .threeZone
   }
 
-  var gutter: CGFloat { 8 }
-  var outerPadding: CGFloat { 8 }
+  var gutter: CGFloat { 12 }
+  var outerPadding: CGFloat { 12 }
 
   var eventRailWidth: CGFloat {
     if containerWidth < 900 {
       return min(220, max(152, floor(containerWidth * 0.22 / 4) * 4))
     }
-    return min(280, max(240, floor(containerWidth * 0.235 / 4) * 4))
+    return min(300, max(276, floor(containerWidth * 0.215 / 4) * 4))
   }
 
   var inspectorWidth: CGFloat {
     if containerWidth < 900 {
       return min(260, max(196, floor(containerWidth * 0.28 / 4) * 4))
     }
-    return min(340, max(300, floor(containerWidth * 0.30 / 4) * 4))
+    return min(380, max(340, floor(containerWidth * 0.265 / 4) * 4))
   }
 
   var centerWidth: CGFloat {
@@ -324,7 +350,7 @@ private struct TeslaCamCardModifier: ViewModifier {
     #if os(iOS)
     if #available(iOS 26.0, *) {
       content
-        .background(fill.opacity(0.35), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .background(fill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
         .glassEffect(.regular.tint(fill), in: .rect(cornerRadius: radius))
         .overlay(
           RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -360,7 +386,7 @@ private struct GlassSurfaceModifier: ViewModifier {
     if #available(iOS 26.0, *) {
       if let tint = role.glassTint {
         content
-          .background(role.fill.opacity(0.28), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+          .background(role.fill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
           .glassEffect(
             .regular.tint(tint).interactive(interactive),
             in: .rect(cornerRadius: radius)
@@ -371,7 +397,7 @@ private struct GlassSurfaceModifier: ViewModifier {
           )
       } else {
         content
-          .background(role.fill.opacity(0.28), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+          .background(role.fill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
           .glassEffect(
             .regular.interactive(interactive),
             in: .rect(cornerRadius: radius)
@@ -421,6 +447,10 @@ extension View {
     size: CompactControlSize = .chip
   ) -> some View {
     buttonStyle(CompactButtonStyle(role: role, size: size))
+  }
+
+  func preferredTeslaCamColorScheme() -> some View {
+    environment(\.colorScheme, .dark)
   }
 }
 

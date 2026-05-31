@@ -247,6 +247,21 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         self.assertNotIn("OptionChip", export_source)
         self.assertLessEqual(export_source.count("CommandChip("), 1)
 
+    def test_ipad_export_chips_are_compact_inline_controls(self):
+        # Justification: the export panel must not look like a grid of
+        # large button tiles. Chips should be short inline controls with
+        # tight spacing so the side rail stays useful.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("private struct IPadExportOptionsPanel")
+        end = source.index("#endif", start)
+        export_source = source[start:end]
+        self.assertIn("VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.xs)", export_source)
+        self.assertIn(".padding(TeslaCamTheme.Spacing.s)", export_source)
+        self.assertIn("GridItem(.flexible(), spacing: TeslaCamTheme.Spacing.xs)", export_source)
+        self.assertIn("HStack(alignment: .center, spacing: TeslaCamTheme.Spacing.tightGap)", export_source)
+        self.assertIn(".frame(height: 28)", export_source)
+        self.assertNotIn(".frame(minHeight: 44)", export_source)
+
     def test_ipad_inspector_typography_uses_theme_fonts(self):
         # Justification: tiny one-off system fonts made the iPad
         # inspector inconsistent and hard to scan. Dense controls must
@@ -276,6 +291,129 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         self.assertIn("MapEventAnnotation", map_source)
         self.assertNotIn("Map(position:", map_source)
         self.assertNotIn("MapPolyline(", map_source)
+
+    def test_ipad_dashboard_tracks_dark_material_reference(self):
+        # Justification: the iPad dashboard design target is a dark CCTV
+        # workspace with Apple-material controls and a dominant footage
+        # stage. Keep this guarded so it does not drift back to beige.
+        content = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        utils = (SWIFT_SHIPPING_ROOT / "Utils.swift").read_text(encoding="utf-8")
+        self.assertIn("preferredTeslaCamColorScheme()", content)
+        self.assertIn("IPadStageTelemetryOverlay", content)
+        self.assertIn("DemoVideoWallPlaceholder", content)
+        self.assertIn("videoWallAspectRatio", content)
+        self.assertIn("currentPreviewNaturalSizes", content)
+        self.assertIn("Color(red: 0.045, green: 0.047, blue: 0.055)", utils)
+        self.assertIn("Color.white.opacity(0.94)", utils)
+        self.assertIn("environment(\\.colorScheme, .dark)", utils)
+        self.assertNotIn("Color(red: 0.965, green: 0.955, blue: 0.935)", utils)
+        self.assertNotIn("DemoRoadSceneView", content)
+        self.assertNotIn("mountainLayer", content)
+
+    def test_ipad_map_uses_dark_style(self):
+        # Justification: Map must not flash a light rectangle inside the
+        # dark CCTV dashboard.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("private struct IPadMapKitRouteView")
+        end = source.index("private final class MapEventAnnotation", start)
+        map_source = source[start:end]
+        self.assertIn("overrideUserInterfaceStyle = .dark", map_source)
+        self.assertIn("mapType = .mutedStandard", map_source)
+        self.assertIn("UIColor(red: 0.045, green: 0.047, blue: 0.055", map_source)
+        self.assertNotIn("overrideUserInterfaceStyle = .light", map_source)
+
+    def test_ipad_scope_bar_has_no_outer_backdrop(self):
+        # Justification: Browse/Map are already glass controls. A second
+        # rounded rail behind them reads as an unnecessary extra shape.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("private struct ScopeBar")
+        end = source.index("private struct IPadLoadedScreen", start)
+        scope_source = source[start:end]
+        self.assertNotIn(".glassSurface(role: .rail", scope_source)
+        self.assertNotIn(".padding(2)", scope_source)
+        self.assertNotIn("GlassEffectGroup", scope_source)
+
+    def test_ipad_panel_headers_are_single_line_without_subtitles(self):
+        # Justification: section subtitles like "3 shown", "Live HUD",
+        # and "HUD · output · queue" add noise in the dense CCTV
+        # workspace. Panel headers should be one compact label row.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("private struct PanelHeader")
+        end = source.index("private struct MetricTile", start)
+        panel_header_source = source[start:end]
+        self.assertNotIn("detail", panel_header_source)
+        self.assertNotIn("VStack(alignment: .leading", panel_header_source)
+        self.assertNotIn("monoSmall", panel_header_source)
+        self.assertNotRegex(source, r"PanelHeader\(\s*\n(?:[^\n]*\n){0,5}\s*detail\s*:")
+
+    def test_ipad_video_stage_has_no_duplicate_bottom_hud_text(self):
+        # Justification: speed/camera stats belong on the video wall
+        # or the exported overlay. A second text strip below the video
+        # wastes space and duplicates the telemetry.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("private struct IPadVideoStage")
+        end = source.index("private struct IPadStageTelemetryOverlay", start)
+        ipad_video_stage = source[start:end]
+        self.assertNotIn("statusText", ipad_video_stage)
+        self.assertNotIn("playbackUI.telemetryText", ipad_video_stage)
+        self.assertNotIn("ForEach(state.camerasDetected", ipad_video_stage)
+
+    def test_ipad_video_stage_telemetry_is_bottom_landscape_hud(self):
+        # Justification: the iPad video wall should read like a CCTV
+        # player. Telemetry belongs as a compact horizontal HUD at the
+        # bottom of the footage, not as a tall overlay blocking a camera.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        stage_start = source.index("private struct IPadVideoStage")
+        stage_end = source.index("private struct IPadStageTelemetryOverlay", stage_start)
+        stage_source = source[stage_start:stage_end]
+        overlay_start = stage_end
+        overlay_end = source.index("private struct StageTelemetryMetric", overlay_start)
+        overlay_source = source[overlay_start:overlay_end]
+
+        self.assertIn("alignment: .bottom", stage_source)
+        self.assertNotIn("alignment: .topLeading", stage_source)
+        self.assertIn("HStack(spacing:", overlay_source)
+        self.assertNotIn("VStack(spacing:", overlay_source)
+        self.assertIn("StageTelemetryMetric(value: model.speedText", overlay_source)
+        self.assertIn("StageTelemetryMetric(value: model.autopilot", overlay_source)
+
+    def test_ipad_timeline_range_includes_30m_chip(self):
+        # Justification: common one-off exports need a 30 minute quick
+        # range beside the shorter presets so the bottom control row uses
+        # its grid space without adding bigger buttons.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("private struct IPadTimelineDock")
+        end = source.index("private struct IPadRangeOptionsPanel", start)
+        timeline_source = source[start:end]
+        self.assertIn('Button("30m")', timeline_source)
+        self.assertIn('state.setRecentRange(minutes: 30)', timeline_source)
+        self.assertIn('accessibilityIdentifier("range-last-30m")', timeline_source)
+
+    def test_ipad_demo_wall_uses_camera_aspects_without_stretching(self):
+        # Justification: demo mode is the design surface. Its camera wall
+        # must respect camera aspect classes instead of stretching cameras
+        # into arbitrary tall cells.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("private struct DemoVideoWallPlaceholder")
+        end = source.index("private struct DemoVideoWallTile", start)
+        wall_source = source[start:end]
+        self.assertIn("effectiveNaturalSizes", wall_source)
+        self.assertIn("normalizedAspectRatio", wall_source)
+        self.assertIn("16.0 / 9.0", wall_source)
+        self.assertIn("4.0 / 3.0", wall_source)
+        self.assertNotIn("LazyVGrid", wall_source)
+
+    def test_metal_preview_grid_uses_known_camera_natural_sizes(self):
+        # Justification: real preview should size HW4/HW3 grid cells from
+        # clip dimensions when available. Otherwise 16:9 HW4 footage can
+        # be placed inside a stale 4:3 preview grid.
+        metal = (SWIFT_SHIPPING_ROOT / "MetalRenderer.swift").read_text(encoding="utf-8")
+        ipad_view = (SWIFT_SHIPPING_ROOT / "MetalPlayerView_iPad.swift").read_text(encoding="utf-8")
+        mac_view = (SWIFT_SHIPPING_ROOT / "MetalPlayerView.swift").read_text(encoding="utf-8")
+        self.assertIn("var naturalSizes: [Camera: CGSize]", metal)
+        self.assertIn("naturalSizes: naturalSizes", metal)
+        self.assertIn("var naturalSizes: [Camera: CGSize]", ipad_view)
+        self.assertIn("var naturalSizes: [Camera: CGSize]", mac_view)
 
 
 class TestSurfaceTests(unittest.TestCase):

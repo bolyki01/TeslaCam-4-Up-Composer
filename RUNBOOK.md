@@ -1,5 +1,22 @@
 # Runbook
 
+## Setup
+
+Use Python 3.9+ for the CLI. The package has no runtime Python
+dependencies in `pyproject.toml`.
+
+```bash
+python3 -m pip install -e .
+```
+
+For render and integration coverage, keep `ffmpeg` and `ffprobe` on `PATH`.
+For HEVC CLI export, the local ffmpeg build needs `libx265` support.
+
+Native app builds use Xcode. `script/test_native.sh` and
+`script/build_and_run.sh` resolve `TESLACAM_BUILD_ENV` first, then fall back
+to `/Users/bolyki/dev/source/build-env.sh`. If neither exists, the scripts stop
+before invoking `xcodebuild`; treat that as a setup blocker.
+
 ## CLI
 
 Primary command from the repo root:
@@ -38,6 +55,22 @@ teslacam-cli /absolute/path/to/TeslaCam --dry-run-json manifest.json
 
 The integration test expects working `ffmpeg` fixtures.
 
+## Lint, format, and typecheck
+
+No dedicated lint, formatter, or Python typecheck config is present in this
+repo. Do not add or run a guessed tool as if it were canonical.
+
+Available hygiene checks:
+
+```bash
+git diff --check
+python3 -m unittest discover tests
+script/test_native.sh
+```
+
+Use the native lane as the Swift compile/typecheck check. Use Python
+`unittest` as the Python regression gate.
+
 ## Native macOS app
 
 Use `script/test_native.sh` for the native lane. It resolves `TESLACAM_BUILD_ENV` first and falls back to `/Users/bolyki/dev/source/build-env.sh`, then runs build-for-testing plus the app and UI test targets.
@@ -45,6 +78,24 @@ Use `script/test_native.sh` for the native lane. It resolves `TESLACAM_BUILD_ENV
 ```bash
 script/test_native.sh
 ```
+
+Use `script/build_and_run.sh` to build and launch the app locally. The Codex
+environment file `.codex/environments/environment.toml` points its Run action
+at this script.
+
+Known Xcode schemes:
+
+- `TeslaCam`
+- `TeslaCam iPad`
+
+CI runs `TeslaCamTests` only; UI tests are local via `script/test_native.sh`.
+
+## CI
+
+- `.github/workflows/python-tests.yml` installs ffmpeg, installs the package
+  editable, and runs `python -m unittest discover tests` on Python 3.10 and 3.12.
+- `.github/workflows/native-tests.yml` builds `TeslaCam` on `macos-26`, disables
+  code signing, and runs `TeslaCamTests` with `test-without-building`.
 
 ## Architecture checks
 
@@ -70,6 +121,15 @@ script/test_native.sh
 - HW4 names `left`, `right`, `left_pillar`, and `right_pillar` map to the centered 3x3 layout.
 - Native export stays the only shipping mac app path.
 - Debug builds show recent debug events for fast triage.
+
+## Done criteria for Codex tasks
+
+- Current worktree state was checked and unrelated dirty changes were preserved.
+- Commands and conventions used were derived from this repo, CI, scripts, or project files.
+- Docs stay aligned across app and CLI when shared behavior changes.
+- Domain behavior changes update `docs/domain-contract.md`, fixtures, Python tests, and Swift parity tests.
+- Relevant verification ran, or the blocker is named with the command that failed.
+- Generated exports, build products, `_legacy/`, and vendor/runtime assets remain untouched unless explicitly in scope.
 
 ## Optional pre-commit hook
 

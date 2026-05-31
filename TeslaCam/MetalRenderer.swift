@@ -215,6 +215,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
   var layoutRequest: CameraLayoutRequest = .auto
   var previewLayoutMode: PreviewLayoutMode = .grid
   var focusedCamera: Camera?
+  var naturalSizes: [Camera: CGSize] = [:]
   var itemTimeProvider: (() -> CMTime)?
   var fileURLsProvider: (() -> [Camera: URL])?
   var cameraDurationsProvider: (() -> [Camera: Double])?
@@ -417,7 +418,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         requestedProfile: layoutRequest,
         detectedCameras: detected,
         enabledCameras: detected,
-        naturalSizes: [:]
+        naturalSizes: naturalSizes
       )
       let scaleX = width / max(1, Double(layout.canvasSize.width))
       let scaleY = height / max(1, Double(layout.canvasSize.height))

@@ -10,6 +10,7 @@ struct MetalPlayerView: UIViewRepresentable {
   var layoutRequest: CameraLayoutRequest = .auto
   var previewLayoutMode: PreviewLayoutMode = .grid
   var focusedCamera: Camera?
+  var naturalSizes: [Camera: CGSize] = [:]
 
   func makeCoordinator() -> Coordinator {
     Coordinator()
@@ -47,6 +48,7 @@ struct MetalPlayerView: UIViewRepresentable {
     renderer.layoutRequest = layoutRequest
     renderer.previewLayoutMode = previewLayoutMode
     renderer.focusedCamera = focusedCamera
+    renderer.naturalSizes = naturalSizes
     renderer.itemTimeProvider = { playback.currentItemTime() }
     renderer.fileURLsProvider = { playback.files }
     renderer.cameraDurationsProvider = { playback.cameraDurations }

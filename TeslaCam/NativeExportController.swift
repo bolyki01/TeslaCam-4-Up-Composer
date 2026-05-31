@@ -1492,6 +1492,7 @@ private enum ExportOverlayDrawing {
     context: CGContext,
     canvasSize: CGSize
   ) {
+    let displayRoute = TelemetryRouteReplay.displaySamples(from: route, maxPoints: 900)
     let side = min(310, min(canvasSize.width, canvasSize.height) * 0.28)
     let panel = CGRect(x: canvasSize.width - side - 26, y: 26, width: side, height: side)
     context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.58))
@@ -1499,7 +1500,7 @@ private enum ExportOverlayDrawing {
     context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.18))
     context.stroke(panel, width: 1)
 
-    let points = route.map(\.coordinate)
+    let points = displayRoute.map(\.coordinate)
     let latitudes = points.map(\.latitude)
     let longitudes = points.map(\.longitude)
     guard let minLat = latitudes.min(),
@@ -1518,7 +1519,7 @@ private enum ExportOverlayDrawing {
     }
 
     let path = CGMutablePath()
-    for (index, item) in route.enumerated() {
+    for (index, item) in displayRoute.enumerated() {
       let p = point(for: item.coordinate)
       if index == 0 {
         path.move(to: p)
@@ -1527,16 +1528,14 @@ private enum ExportOverlayDrawing {
       }
     }
     context.setStrokeColor(CGColor(red: 0.22, green: 0.58, blue: 1, alpha: 0.95))
-    context.setLineWidth(max(3, side * 0.012))
+    context.setLineWidth(max(3, CGFloat(TelemetryRouteStyle.lineWidth(latitudeDelta: latSpan, longitudeDelta: lonSpan))))
     context.addPath(path)
     context.strokePath()
 
-    let current = route.last { $0.seconds <= currentSeconds } ?? route.first
-    if let current {
-      let p = point(for: current.coordinate)
-      context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.96))
-      context.fillEllipse(in: CGRect(x: p.x - 6, y: p.y - 6, width: 12, height: 12))
-    }
+    let current = TelemetryRouteReplay(route: route).frame(at: currentSeconds)
+    let p = point(for: current.coordinate)
+    context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.96))
+    context.fillEllipse(in: CGRect(x: p.x - 6, y: p.y - 6, width: 12, height: 12))
   }
 
   static func drawText(

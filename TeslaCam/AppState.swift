@@ -1034,6 +1034,11 @@ final class AppState: ObservableObject {
     }
   }
 
+  var currentPreviewNaturalSizes: [Camera: CGSize] {
+    guard clipSets.indices.contains(currentIndex) else { return [:] }
+    return clipSets[currentIndex].naturalSizes
+  }
+
   var timelineStartOffsetForCurrentClip: Double {
     currentSegmentStartSeconds
   }
