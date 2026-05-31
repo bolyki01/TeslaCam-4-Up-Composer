@@ -63,3 +63,6 @@ __pycache__/
 .pytest_cache/
 .cache/
 *.egg-info/
+
+# Xcode build artifacts
+build-dd/
