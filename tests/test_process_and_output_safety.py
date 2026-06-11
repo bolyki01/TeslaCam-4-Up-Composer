@@ -50,7 +50,16 @@ class ProcessAndOutputSafetyTests(unittest.TestCase):
             path = Path(temp_dir) / "clip with 'quote'.mp4"
             path.write_bytes(b"x")
             escaped = ffconcat_path(path)
-            self.assertIn("'\\\\''", escaped)
+            # A literal single quote must be emitted as the 4-char ffmpeg
+            # sequence '\'' (close, escaped-quote, reopen) — NOT the
+            # doubled-backslash form '\\'' which ffmpeg mis-parses.
+            self.assertIn("'\\''", escaped)
+            self.assertNotIn("'\\\\''", escaped)
+            # Round-trip: wrap in single quotes as the concat writer does and
+            # decode the escape; it must reproduce the original resolved path.
+            wrapped = f"'{escaped}'"
+            decoded = wrapped[1:-1].replace("'\\''", "'")
+            self.assertEqual(decoded, str(path.resolve()))
             bad = Path(temp_dir) / "bad\nname.mp4"
             with self.assertRaises(UnsafeConcatPath):
                 validate_ffconcat_path(bad)

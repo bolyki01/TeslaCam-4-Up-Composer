@@ -383,7 +383,70 @@ def choose_encoder(
                 "0",
             ],
         )
+    if mode in _DELIVERY_MODES:
+        return _delivery_encoder(mode, x265_preset, encoders)
     raise ValueError(f"Unsupported encoder mode: {mode}")
+
+
+# Practical delivery presets sized for review/sharing rather than archival.
+# ``review`` keeps near-source fidelity at a fraction of lossless size;
+# ``share`` trades a little more quality for small, messageable files.
+# Each maps to a hardware (VideoToolbox) quality target when available and a
+# libx265 CRF fallback otherwise — so these modes do NOT hard-require libx265.
+_DELIVERY_MODES = {
+    # mode -> (libx265 CRF, VideoToolbox -q:v target)
+    "review": (23, 60),
+    "share": (28, 45),
+}
+
+
+def _delivery_encoder(mode: str, x265_preset: str, encoders: str) -> EncoderPlan:
+    crf, vt_quality = _DELIVERY_MODES[mode]
+    have_videotoolbox = "hevc_videotoolbox" in encoders
+    have_x265 = "libx265" in encoders
+    label = f"hevc_{mode}"
+    if have_videotoolbox:
+        return EncoderPlan(
+            mode=mode,
+            label=label,
+            output_extension="mp4",
+            args=[
+                "-c:v",
+                "hevc_videotoolbox",
+                "-q:v",
+                str(vt_quality),
+                "-tag:v",
+                "hvc1",
+                "-pix_fmt",
+                "yuv420p",
+            ],
+        )
+    if have_x265:
+        return EncoderPlan(
+            mode=mode,
+            label=label,
+            output_extension="mp4",
+            args=[
+                "-c:v",
+                "libx265",
+                "-preset",
+                x265_preset,
+                "-crf",
+                str(crf),
+                "-x265-params",
+                "log-level=error",
+                "-tag:v",
+                "hvc1",
+                "-pix_fmt",
+                "yuv420p",
+                "-threads",
+                "0",
+            ],
+        )
+    raise ToolResolutionError(
+        f"The '{mode}' mode needs an HEVC encoder. This ffmpeg build has neither "
+        "hevc_videotoolbox nor libx265."
+    )
 
 
 def extract_filter_complex(args: Sequence[str]) -> Optional[str]:

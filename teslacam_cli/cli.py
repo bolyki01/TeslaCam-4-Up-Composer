@@ -23,6 +23,7 @@ from .composer import (
     select_clip_sets,
 )
 from .domain_contract import dry_run_manifest, write_manifest_json
+from .events import CamEvent, scan_events
 from .ffmpeg_tools import FfmpegRunner, MediaProbe, ToolResolutionError, resolve_tools
 from .layouts import PROFILE_LABELS, build_camera_layout_plan, fill_missing_dimensions
 from .models import (
@@ -252,9 +253,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=["lossless", "quality"],
+        choices=["lossless", "quality", "review", "share"],
         default="lossless",
-        help="lossless = x265 lossless HEVC MP4. quality = x265 CRF 6 HEVC MP4.",
+        help=(
+            "lossless = x265 lossless HEVC (archival, very large). "
+            "quality = x265 CRF 6 (near-lossless). "
+            "review = near-source quality at a fraction of the size "
+            "(VideoToolbox or x265 CRF 23). "
+            "share = small, messageable files (VideoToolbox or x265 CRF 28)."
+        ),
     )
     parser.add_argument(
         "--duplicate-policy",
@@ -275,6 +282,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--keep-workdir", action="store_true", help="Keep intermediate files")
     parser.add_argument("--loglevel", default="info", help="ffmpeg loglevel (default: info)")
     parser.add_argument("--interactive", action="store_true", help="Force prompt mode even when arguments are supplied")
+    parser.add_argument(
+        "--list-events",
+        action="store_true",
+        help="List Sentry/Saved events (from event.json) and exit, without rendering.",
+    )
+    parser.add_argument(
+        "--event",
+        type=int,
+        metavar="N",
+        help="Export the Nth event from --list-events, as a window centred on its trigger moment.",
+    )
+    parser.add_argument(
+        "--pre",
+        type=float,
+        default=30.0,
+        help="Seconds of footage before the trigger moment when using --event (default: 30).",
+    )
+    parser.add_argument(
+        "--post",
+        type=float,
+        default=30.0,
+        help="Seconds of footage after the trigger moment when using --event (default: 30).",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Scan and print resolved plan without rendering")
     parser.add_argument(
         "--dry-run-json",
@@ -299,6 +329,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         ffmpeg, ffprobe = resolve_tools(repo_root, args.ffmpeg, args.ffprobe)
         duplicate_policy = DuplicatePolicy(args.duplicate_policy)
         output_conflict = OutputConflictPolicy(args.output_conflict)
+
+        if args.list_events or args.event is not None:
+            if args.source is None:
+                raise RuntimeError("--list-events / --event require a source folder.")
+            source_dir = Path(args.source).expanduser().resolve()
+            events = scan_events(source_dir)
+            if args.list_events:
+                print_events_table(events)
+                return 0
+            event_start, event_end = resolve_event_window(events, args.event, args.pre, args.post)
+            args.start = format_clip_timestamp(event_start)
+            args.end = format_clip_timestamp(event_end)
+            interactive = False
 
         if interactive:
             options = prompt_run_options(
@@ -356,6 +399,46 @@ def main(argv: Optional[list[str]] = None) -> int:
 def selected_sets_to_clip_sets(selected_sets):
     for selected in selected_sets:
         yield selected.clip_set
+
+
+def print_events_table(events: list[CamEvent]) -> None:
+    if not events:
+        print("No Sentry/Saved events found (no event.json under SentryClips/ or SavedClips/).")
+        return
+    print(f"{len(events)} event(s):")
+    print(f"  {'#':>3}  {'When':19}  {'Kind':6}  {'Reason':32}  Location")
+    for index, event in enumerate(events, start=1):
+        when = event.timestamp.strftime("%Y-%m-%d %H:%M:%S") if event.timestamp else "(no timestamp)"
+        kind = "sentry" if event.category == "SentryClips" else "saved"
+        reason = event.reason or "-"
+        print(f"  {index:>3}  {when:19}  {kind:6}  {reason:32.32}  {event.location}")
+    print("\nExport one with: teslacam-cli <source> --event N -o <out.mp4>")
+
+
+def resolve_event_window(
+    events: list[CamEvent],
+    index: int,
+    pre_seconds: float,
+    post_seconds: float,
+) -> tuple[datetime, datetime]:
+    """Resolve a 1-based --event index to a (start, end) window around its trigger."""
+    if not events:
+        raise RuntimeError("No Sentry/Saved events found to export.")
+    if index < 1 or index > len(events):
+        raise RuntimeError(f"--event {index} is out of range (1..{len(events)}). Use --list-events to see them.")
+    event = events[index - 1]
+    if event.timestamp is None:
+        raise RuntimeError(
+            f"Event {index} ({event.folder.name}) has no parseable trigger timestamp; cannot centre a window on it."
+        )
+    pre = max(0.0, pre_seconds)
+    post = max(0.0, post_seconds)
+    if pre + post <= 0.0:
+        raise RuntimeError("--pre and --post cannot both be zero.")
+    return (
+        event.timestamp - timedelta(seconds=pre),
+        event.timestamp + timedelta(seconds=post),
+    )
 
 
 
@@ -497,8 +580,14 @@ def prompt_run_options(
     print("Output mode:")
     print("  1) lossless - H.265 MP4, x265 lossless, very large files")
     print("  2) quality  - H.265 MP4, x265 CRF 6, smaller files")
-    mode = prompt_choice("Mode [lossless]: ", default="lossless", allowed={"lossless", "quality", "1", "2"})
-    mode = {"1": "lossless", "2": "quality"}.get(mode, mode)
+    print("  3) review   - near-source quality, much smaller (VideoToolbox/x265 CRF 23)")
+    print("  4) share    - small, messageable files (VideoToolbox/x265 CRF 28)")
+    mode = prompt_choice(
+        "Mode [lossless]: ",
+        default="lossless",
+        allowed={"lossless", "quality", "review", "share", "1", "2", "3", "4"},
+    )
+    mode = {"1": "lossless", "2": "quality", "3": "review", "4": "share"}.get(mode, mode)
 
     default_output = resolve_output_path(
         source_dir,
