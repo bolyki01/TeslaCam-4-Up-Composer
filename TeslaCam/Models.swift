@@ -974,6 +974,23 @@ struct TelemetryDisplayModel: Equatable, Hashable {
     return String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude)
   }
 
+  var signalText: String {
+    switch (blinkerLeft, blinkerRight) {
+    case (true, true):
+      return "Hazard"
+    case (true, false):
+      return "Left"
+    case (false, true):
+      return "Right"
+    case (false, false):
+      return "Off"
+    }
+  }
+
+  var gForceText: String {
+    String(format: "%.2f/%.2f/%.2f", accelX, accelY, accelZ)
+  }
+
   var compactText: String {
     compactText(unit: .kilometersPerHour)
   }

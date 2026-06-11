@@ -23,8 +23,9 @@ private final class PreviewImageResultBox: @unchecked Sendable {
 final class PreviewFrameCache: PreviewFrameCaching {
   private let textureLoader: MTKTextureLoader
   private var fallbackGenerators: [URL: PreviewImageGeneratorBox] = [:]
-  private let decodeQueue = DispatchQueue(label: "com.magrathean.TeslaCam.preview-cache", qos: .userInitiated)
+  private let decodeQueue = DispatchQueue(label: "com.magrathean.TeslaCam.preview-cache", qos: .userInitiated, attributes: .concurrent)
   private let cacheLock = NSLock()
+  private let generatorLock = NSLock()
   private var pendingFrameKeys: Set<String> = []
   private var queuedFrameKeysByCamera: [Camera: String] = [:]
   private var lastFrameKeysByCamera: [Camera: String] = [:]
@@ -113,6 +114,7 @@ final class PreviewFrameCache: PreviewFrameCaching {
   }
 
   private func copyPreviewImage(url: URL, seconds: Double) -> CGImage? {
+    generatorLock.lock()
     let generator = fallbackGenerators[url] ?? {
       let asset = AVURLAsset(url: url)
       let tolerance = CMTime(seconds: 1.0, preferredTimescale: 600)
@@ -120,6 +122,7 @@ final class PreviewFrameCache: PreviewFrameCaching {
       fallbackGenerators[url] = generator
       return generator
     }()
+    generatorLock.unlock()
 
     let attempts = [seconds, max(0, seconds - 0.15), seconds + 0.15, seconds + 0.5, seconds + 1.0]
     for candidate in attempts {

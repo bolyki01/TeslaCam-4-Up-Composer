@@ -490,6 +490,8 @@ private struct IPadStageTelemetryOverlay: View {
       StageTelemetryMetric(value: model.gear, label: "Gear")
       StageTelemetryMetric(value: model.autopilot, label: "AP")
       StageTelemetryMetric(value: model.brakeApplied ? "On" : "Off", label: "Brake")
+      StageTelemetryMetric(value: model.signalText, label: "Signal")
+      StageTelemetryMetric(value: model.headingText.replacingOccurrences(of: " deg", with: "°"), label: "Head")
     }
     .padding(.horizontal, TeslaCamTheme.Spacing.s)
     .padding(.vertical, TeslaCamTheme.Spacing.xs)
@@ -1403,6 +1405,10 @@ private struct TelemetryGrid: View {
       MetricTile(title: "Gear", value: model.gear)
       MetricTile(title: "AP", value: model.autopilot)
       MetricTile(title: "Brake", value: model.brakeApplied ? "On" : "Off", warning: model.brakeApplied)
+      MetricTile(title: "Signal", value: model.signalText)
+      MetricTile(title: "Heading", value: model.headingText)
+      MetricTile(title: "GPS", value: model.locationText)
+      MetricTile(title: "G-Force", value: model.gForceText)
     }
   }
 }
@@ -2149,7 +2155,7 @@ private struct PreviewPanelCard: View {
           Text(playbackUI.telemetryText)
             .font(TeslaCamTheme.Typography.monoSmall)
             .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-            .lineLimit(2)
+            .lineLimit(3)
             .padding(.horizontal, TeslaCamTheme.Metrics.chipPaddingHorizontal)
             .padding(.vertical, TeslaCamTheme.Metrics.chipPaddingVertical)
             .teslaCamCard(fill: TeslaCamTheme.Colors.overlaySurfaceStrong, radius: TeslaCamTheme.Metrics.compactCorner)

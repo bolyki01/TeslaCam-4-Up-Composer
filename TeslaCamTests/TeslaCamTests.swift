@@ -138,6 +138,34 @@ struct TeslaCamTests {
     #expect(model.speedText(unit: .milesPerHour) == "22.4 mph")
   }
 
+  @Test func telemetryProcessorFormatsDetailedDriveData() async throws {
+    var metadata = SeiMetadata()
+    metadata.vehicleSpeedMps = 13.4
+    metadata.acceleratorPedalPosition = 42
+    metadata.steeringWheelAngle = -12
+    metadata.gearState = .drive
+    metadata.autopilotState = .tacc
+    metadata.brakeApplied = true
+    metadata.blinkerLeft = true
+    metadata.headingDeg = 271.5
+    metadata.latitudeDeg = 51.5074
+    metadata.longitudeDeg = -0.1278
+    metadata.linearAccelX = 0.12
+    metadata.linearAccelY = -0.34
+    metadata.linearAccelZ = 0.98
+
+    let text = TelemetryProcessor.formatTelemetryDetailed(metadata, unit: .milesPerHour)
+
+    #expect(text.contains("Speed: 30.0 mph"))
+    #expect(text.contains("Gear: D"))
+    #expect(text.contains("AP: TACC"))
+    #expect(text.contains("Brake: On"))
+    #expect(text.contains("Signal: Left"))
+    #expect(text.contains("Heading: 272 deg"))
+    #expect(text.contains("GPS: 51.50740, -0.12780"))
+    #expect(text.contains("G: 0.12/-0.34/0.98"))
+  }
+
   @Test func iPadGridMetricsKeepsRegularDashboardWithinPlannedRails() async throws {
     let metrics = IPadGridMetrics(containerWidth: 1032)
 
@@ -441,6 +469,55 @@ struct TeslaCamTests {
     #expect(summary.blockingIssues.contains { $0.message.contains("Export preflight requires at least") })
   }
 
+  @Test func exportPreflightEstimatesRecordedClipDurationForSparseTimeline() async throws {
+    let start = Date(timeIntervalSince1970: 1_700_000_000)
+    let later = start.addingTimeInterval(15 * 24 * 60 * 60)
+    let sets = [
+      ClipSet(
+        timestamp: "first",
+        date: start,
+        duration: 60,
+        files: [.front: URL(fileURLWithPath: "/tmp/first-front.mov")],
+        cameraDurations: [.front: 60],
+        naturalSizes: [.front: CGSize(width: 1920, height: 1080)]
+      ),
+      ClipSet(
+        timestamp: "second",
+        date: later,
+        duration: 60,
+        files: [.front: URL(fileURLWithPath: "/tmp/second-front.mov")],
+        cameraDurations: [.front: 60],
+        naturalSizes: [.front: CGSize(width: 1920, height: 1080)]
+      )
+    ]
+    let request = ExportRequest(
+      sets: sets,
+      outputURL: URL(fileURLWithPath: "/tmp/sparse.mov"),
+      useSixCam: false,
+      preset: .editFriendlyProRes,
+      enabledCameras: [.front],
+      trimStartSeconds: 0,
+      trimEndSeconds: later.addingTimeInterval(60).timeIntervalSince(start),
+      trimStartDate: start,
+      trimEndDate: later.addingTimeInterval(60),
+      selectedRangeText: "sparse",
+      partialClipCount: 0
+    )
+    let plan = try ExportPlan(request: request)
+    let preflight = ExportPreflight(
+      fileAccess: StubExportPreflightFileAccess(
+        canWrite: true,
+        availableCapacity: 272 * 1024 * 1024 * 1024
+      )
+    )
+
+    let summary = preflight.summary(for: plan)
+
+    #expect(plan.totalDuration > 15 * 24 * 60 * 60)
+    #expect(abs(plan.renderDuration - 120) < 0.001)
+    #expect(summary.canExport)
+  }
+
   @Test func exportPreflightBlocksOversizedHevcCanvasButAllowsProRes() async throws {
     let cameras: Set<Camera> = [.front]
     let oversized = CGSize(width: 9000, height: 2400)
@@ -505,6 +582,16 @@ struct TeslaCamTests {
     #expect(access.canWrite(to: output))
     let data = try Data(contentsOf: output)
     #expect(String(data: data, encoding: .utf8) == "original")
+  }
+
+  @Test func preflightWriteCheckAllowsChosenNonExistingOutputFile() async throws {
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+    let output = root.url.appendingPathComponent("new-export.mp4")
+
+    let access = FileManagerExportPreflightFileAccess()
+    #expect(access.canWrite(to: output))
+    #expect(!FileManager.default.fileExists(atPath: output.path))
   }
 
   @Test func healthSummaryMixedCoverageFlagReflectsCounts() async throws {
@@ -605,6 +692,24 @@ struct TeslaCamTests {
 
     controller.seek(to: 1.25)
     #expect(abs(controller.currentItemTime().seconds - 1.25) < 0.001)
+  }
+
+  @Test func playbackControllerProjectsPreviewTimeBetweenUITicks() async throws {
+    var hostTime: CFTimeInterval = 100
+    let controller = MultiCamPlaybackController(timeProvider: { hostTime })
+    let set = ClipSet(
+      timestamp: "sample",
+      date: Date(timeIntervalSince1970: 100),
+      duration: 12,
+      files: [:]
+    )
+
+    controller.load(set: set)
+    controller.play()
+    hostTime += 0.05
+
+    #expect(abs(controller.currentItemTime().seconds - 0.05) < 0.005)
+    controller.pause()
   }
 
   @Test func duplicateFilesPreferNewestWhenRequested() async throws {

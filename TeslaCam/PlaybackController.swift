@@ -16,9 +16,15 @@ final class MultiCamPlaybackController: ObservableObject {
   private var currentSecondsValue: Double = 0
   private var timer: Timer?
   private var lastTickHostTime: CFTimeInterval = 0
+  private let timeProvider: () -> CFTimeInterval
+  private let uiUpdateInterval: TimeInterval = 1.0 / 12.0
+
+  init(timeProvider: @escaping () -> CFTimeInterval = CACurrentMediaTime) {
+    self.timeProvider = timeProvider
+  }
 
   func currentItemTime() -> CMTime {
-    CMTime(seconds: currentSecondsValue, preferredTimescale: 600)
+    CMTime(seconds: projectedCurrentSeconds(), preferredTimescale: 600)
   }
 
   func load(set: ClipSet, startSeconds: Double = 0) {
@@ -40,14 +46,15 @@ final class MultiCamPlaybackController: ObservableObject {
     self.cameraDurations = cameraDurations
     currentDuration = max(0.1, duration)
     currentSecondsValue = min(max(0, startSeconds), currentDuration)
+    lastTickHostTime = timeProvider()
     onTimeUpdate?(currentSecondsValue)
   }
 
   func play() {
     guard currentDuration > 0, !isPlaying else { return }
     isPlaying = true
-    lastTickHostTime = CACurrentMediaTime()
-    let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+    lastTickHostTime = timeProvider()
+    let timer = Timer(timeInterval: uiUpdateInterval, repeats: true) { [weak self] _ in
       self?.advancePlayback()
     }
     RunLoop.main.add(timer, forMode: .common)
@@ -55,6 +62,10 @@ final class MultiCamPlaybackController: ObservableObject {
   }
 
   func pause() {
+    if isPlaying {
+      currentSecondsValue = projectedCurrentSeconds()
+      lastTickHostTime = timeProvider()
+    }
     timer?.invalidate()
     timer = nil
     isPlaying = false
@@ -71,12 +82,19 @@ final class MultiCamPlaybackController: ObservableObject {
   func seek(to seconds: Double, exact: Bool = true) {
     let _ = exact
     currentSecondsValue = min(max(0, seconds), currentDuration)
+    lastTickHostTime = timeProvider()
     onTimeUpdate?(currentSecondsValue)
+  }
+
+  private func projectedCurrentSeconds() -> Double {
+    guard isPlaying else { return currentSecondsValue }
+    let elapsed = max(0, timeProvider() - lastTickHostTime)
+    return min(currentDuration, currentSecondsValue + (elapsed * max(0.1, playbackRate)))
   }
 
   private func advancePlayback() {
     guard isPlaying else { return }
-    let now = CACurrentMediaTime()
+    let now = timeProvider()
     let delta = max(0, now - lastTickHostTime)
     lastTickHostTime = now
     currentSecondsValue = min(currentDuration, currentSecondsValue + (delta * max(0.1, playbackRate)))

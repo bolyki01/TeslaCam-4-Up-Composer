@@ -1260,7 +1260,7 @@ final class AppState: ObservableObject {
   }
 
   private func formatTelemetry(_ sei: SeiMetadata?) -> String {
-    TelemetryProcessor.formatTelemetryCompact(sei, unit: exportOverlayOptions.speedUnit)
+    TelemetryProcessor.formatTelemetryDetailed(sei, unit: exportOverlayOptions.speedUnit)
   }
 
   private func orderCameras(_ cams: [Camera], profile: CameraLayoutProfile) -> [Camera] {

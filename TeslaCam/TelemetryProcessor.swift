@@ -39,6 +39,23 @@ enum TelemetryProcessor {
     return TelemetryDisplayModel(sei: sei).compactText(unit: unit)
   }
 
+  static func formatTelemetryDetailed(_ sei: SeiMetadata?, unit: TelemetrySpeedUnit = .kilometersPerHour) -> String {
+    guard let sei else { return "" }
+    let model = TelemetryDisplayModel(sei: sei)
+    return [
+      "Speed: \(model.speedText(unit: unit))",
+      "Pedal: \(model.acceleratorText)",
+      "Steer: \(model.steeringText)",
+      "Gear: \(model.gear)",
+      "AP: \(model.autopilot)",
+      "Brake: \(model.brakeApplied ? "On" : "Off")",
+      "Signal: \(model.signalText)",
+      "Heading: \(model.headingText)",
+      "GPS: \(model.locationText)",
+      "G: \(model.gForceText)"
+    ].joined(separator: "  ")
+  }
+
   /// Produces a human-readable duration label like "1h 12m total" or "5m total".
   static func durationString(seconds: Double) -> String {
     let totalMinutes = max(0, Int((seconds / 60).rounded()))

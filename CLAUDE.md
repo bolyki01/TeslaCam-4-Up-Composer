@@ -6,8 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Two surfaces, one repo:
 
-- **Native macOS app** — Swift / SwiftUI (`TeslaCam.xcodeproj`, sources in `TeslaCam/`). Shipping export path. Uses AVFoundation + Metal renderer + native HEVC/ProRes export. Recent in-progress work extends to an iPad target (`IPadMain.swift`, `MetalPlayerView_iPad.swift`, `TeslaCam_iPad.entitlements`).
+- **Native macOS app** — Swift / SwiftUI (`TeslaCam.xcodeproj`, sources in `TeslaCam/`). Shipping export path. Uses AVFoundation + Metal renderer + native HEVC/ProRes export.
+- **iPad target** — `TeslaCam iPad` (iOS) in the same project shares the macOS sources but swaps `Main.swift` for `IPadMain.swift` (plus `MetalPlayerView_iPad.swift`, `TeslaCam_iPad.entitlements`). Landscape-only dashboard with a telemetry map; its UI design decisions are pinned by tripwire tests (see below).
 - **Python CLI** — `teslacam_cli/` package, `pyproject.toml`, no Python runtime deps. Requires `ffmpeg` / `ffprobe`, plus `libx265` for HEVC presets. Cross-platform (macOS / Linux / Windows).
+
+When adding a new Swift source file, do not hand-edit `project.pbxproj` — follow the existing pattern of an idempotent Ruby script using the `xcodeproj` gem (see `script/add_source_store.rb`, `script/add_telemetry_processor.rb`).
 
 ## Build & test
 
@@ -17,18 +20,26 @@ Native (canonical lane — runs unit + UI tests):
 script/test_native.sh
 ```
 
-It sources `$TESLACAM_BUILD_ENV` (defaulting to `/Users/bolyki/dev/source/build-env.sh`), then `xcodebuild build-for-testing` + `test-without-building` against `TeslaCamTests` and `TeslaCamUITests`. A bare `xcodebuild ... build` works for compile-only.
+It sources `$TESLACAM_BUILD_ENV` (defaulting to `/Users/bolyki/dev/source/build-env.sh`), then `xcodebuild build-for-testing` + `test-without-building` against `TeslaCamTests` and `TeslaCamUITests` (scheme `TeslaCam`, `platform=macOS` — the iPad target is not in this lane). A bare `xcodebuild ... build` works for compile-only. `script/build_and_run.sh` builds Debug and launches the app.
 
 Python CLI (this project uses `unittest`, **not pytest**):
 
 ```bash
-pip install -e . --break-system-packages          # editable install, exposes teslacam-cli
+python3 -m venv .cache/venv && source .cache/venv/bin/activate  # repo-local venv (gitignored); never --break-system-packages
+python3 -m pip install -q --upgrade pip           # stock macOS pip (21.x) cannot editable-install a pyproject-only package
+pip install -e .                                  # editable install, exposes teslacam-cli
 python3 -m unittest discover tests                # full suite
 python3 -m unittest tests.test_domain_contract    # single module
 python3 -m unittest tests.test_cli.SomeCase.test_x  # single test
 ```
 
 The integration test (`tests.test_integration`) requires working `ffmpeg`. CLI entry: `teslacam_cli.cli:main`. From repo root, `./teslacam-cli` is the primary command; `teslacam.py` and `teslacam.sh` are compatibility adapters to the same module.
+
+Opt-in real-footage tests (Python `tests.test_integration` and Swift `TeslaCamTests`) run against an actual TeslaCam dump: set `TESLACAM_REAL_FOOTAGE_SOURCE=/abs/path` (or have `~/Downloads/Teslacam` present); the heavier render test additionally needs `TESLACAM_REAL_FOOTAGE_RENDER=1`. They skip silently otherwise. Baseline characterization lives in `docs/improvement/real-footage-baseline-2026-05-09.md`.
+
+CI (`.github/workflows/`): `python-tests.yml` runs the unittest suite on Ubuntu with Python 3.10 + 3.12; `native-tests.yml` runs `TeslaCamTests` on a macOS runner with code signing disabled.
+
+There is no lint, formatter, or Python type-check config — do not invent one. The available checks are `git diff --check`, the unittest suite, and the native lane.
 
 Dry-run manifest (no rendering, used for parity checks):
 
@@ -48,7 +59,8 @@ Canonical cameras: `front, back, left_repeater, right_repeater, left, right, lef
 
 - **Native export is the shipping app path.** Do not reintroduce CLI-only / ffmpeg-only export assumptions into the mac app — the App Store build does not bundle ffmpeg. Native presets are intent labels (Evidence HEVC, Fast Review HEVC, Social 25 MB HEVC, Proxy HEVC, Master ProRes) backed by `NativeExportController.swift`.
 - **CLI planning stays pure.** `teslacam_cli/cli.py` builds a `RunPlan`; rendering and human output go through adapters (`composer.py`, `ffmpeg_tools.py`, render reporters). Don't fold I/O back into planning.
-- **App state is split.** `AppState.swift` separates timeline / export / playback / UI-facing state so logic is testable without driving the full app. `ExportPlan` in `NativeExportController.swift` validates before any preflight or render.
+- **App state is split.** `AppState.swift` separates timeline / export / playback / UI-facing state so logic is testable without driving the full app. `ExportPlan` in `NativeExportController.swift` validates before any preflight or render. Pieces carved out of `AppState` stay carved out: `SourceStore.swift` owns input-folder URLs, security-scoped access, and persisted bookmarks; `TelemetryProcessor.swift` is a stateless namespace for telemetry-derived computation.
+- **Telemetry stays native and local.** `TelemetryParser.swift` decodes Tesla's per-frame SEI metadata embedded in clips (GPS, speed, gear, autopilot state, blinkers); `TelemetryProcessor` turns it into route points for the iPad map. The CLI has no telemetry surface.
 - **Camera-track cuts** layer over the base grid in native preview/export only. The portable CLI does not currently apply them.
 - **HW3/HW4 mixed inputs** use the 6-cam centered grid and record HW3 repeaters as hidden — never silently change the grid.
 
@@ -68,7 +80,7 @@ source .cache/build-env.sh         # exports XCODE_DERIVED_DATA_PATH etc. under 
 source .cache/venv/bin/activate    # repo-local Python venv; never --break-system-packages
 ```
 
-Both directories live under `$REPO_ROOT/.cache/` and are gitignored. The native lane and full Python suite both honor this isolation; recipes inside RUNBOOK.md and the per-loop log entries reference these vars.
+Everything under `$REPO_ROOT/.cache/` is gitignored and machine-local — it may be absent in a fresh checkout. Recreate the venv with `python3 -m venv .cache/venv`; if `.cache/build-env.sh` is missing, the native lane falls back to `$TESLACAM_BUILD_ENV` / `/Users/bolyki/dev/source/build-env.sh`. `script/pre-commit.example.sh` sources both only if present.
 
 Fixture + analysis tooling:
 
@@ -83,13 +95,16 @@ Audit + analysis docs (read these before re-doing the work):
 - `docs/improvement/security-audit-2026-05-09.md` — bookmark lifecycle pairing; process-spawn surface; entitlements; `OSLog` privacy redaction.
 - `docs/improvement/churn-analysis-2026-05-09.md` — 3-month churn snapshot; AppState.swift + NativeExportController.swift are the refactor targets.
 - `docs/improvement/cli-memory-baseline.md` — planning-phase memory characterization at 10 / 100 / 1k / 10k events.
+- `docs/improvement/real-footage-baseline-2026-05-09.md` — real HW3 dump characterization (257 clips, ~6 GB) backing the opt-in real-footage tests.
+- `docs/architecture-deepening/` — deeper write-ups of the domain-contract ownership, native export pipeline, AppState split, and repo hygiene.
 
-`tests/test_codebase_invariants.py` is a tripwire: failing forbidden patterns (`shell=True`, `os.system(`, `eval(` / `exec(`, `__import__(`, `--break-system-packages`) in `teslacam_cli/` will fail loudly so a regression cannot land silently.
+`tests/test_codebase_invariants.py` is a tripwire that gates **both languages** — Swift edits can fail the Python suite. It forbids `shell=True`, `os.system(`, `eval(` / `exec(`, `__import__(`, `--break-system-packages` in `teslacam_cli/`; forbids `print(`, Sentry references, and `_legacy` references in shipping Swift under `TeslaCam/`; and pins iPad UI design decisions (landscape-only, fixed inspector, dense export controls, etc.) against `ContentView.swift`. If an intentional design change trips one of the iPad assertions, update the test alongside the change.
 
 ## Debug env vars
 
 - `TESLACAM_DEBUG_SOURCE=/abs/path/to/TeslaCam` — inject a source folder in Debug builds (skips onboarding).
 - `TESLACAM_UI_TEST_MODE=blank` — empty onboarding for UI tests.
 - `TESLACAM_UI_TEST_MODE=sample` — sample timeline for UI tests.
-- `TESLACAM_BUILD_ENV=/path/to/build-env.sh` — override the sourced build env for `script/test_native.sh`.
+- `TESLACAM_BUILD_ENV=/path/to/build-env.sh` — override the sourced build env for `script/test_native.sh` and `script/build_and_run.sh`.
+- `TESLACAM_REAL_FOOTAGE_SOURCE=/abs/path` — opt in to the real-footage tests (Python + Swift); `TESLACAM_REAL_FOOTAGE_RENDER=1` additionally enables the render test.
 - In the running app, the **Show Log** action surfaces recent debug events for triage after a failed/cancelled export.

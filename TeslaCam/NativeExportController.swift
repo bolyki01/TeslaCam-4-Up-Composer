@@ -56,6 +56,13 @@ struct ExportPlan {
 
   var totalParts: Int { sets.count }
   var totalDuration: Double { trimEndDate.timeIntervalSince(trimStartDate) }
+  var renderDuration: Double {
+    TimelineFrameProvider.renderDuration(
+      sets: sets,
+      trimStartDate: trimStartDate,
+      trimEndDate: trimEndDate
+    )
+  }
   var canvasSize: CGSize { layout.canvasSize }
   var tileSize: CGSize { layout.tileSize }
   var cameraOrder: [Camera] { layout.cameraOrder }
@@ -115,11 +122,11 @@ struct FileManagerExportPreflightFileAccess: ExportPreflightFileAccess {
   func canWrite(to outputURL: URL) -> Bool {
     let targetDirectory = outputURL.deletingLastPathComponent()
     let scopeURL = beginSecurityScope(outputURL: outputURL, targetDirectory: targetDirectory)
-    var probeURL: URL?
+    let outputExists = fileManager.fileExists(atPath: outputURL.path)
 
     defer {
-      if let probeURL {
-        try? fileManager.removeItem(at: probeURL)
+      if !outputExists, fileManager.fileExists(atPath: outputURL.path) {
+        try? fileManager.removeItem(at: outputURL)
       }
       scopeURL?.stopAccessingSecurityScopedResource()
     }
@@ -127,20 +134,14 @@ struct FileManagerExportPreflightFileAccess: ExportPreflightFileAccess {
     do {
       let values = try targetDirectory.resourceValues(forKeys: [.isDirectoryKey])
       guard values.isDirectory == true else { return false }
-      let tempProbe = targetDirectory.appendingPathComponent(
-        ".teslacam-write-test-\(UUID().uuidString).tmp",
-        isDirectory: false
-      )
-      probeURL = tempProbe
-      let created = fileManager.createFile(
-        atPath: tempProbe.path,
+      if outputExists {
+        return fileManager.isWritableFile(atPath: outputURL.path)
+      }
+      return fileManager.createFile(
+        atPath: outputURL.path,
         contents: Data(),
         attributes: [.posixPermissions: NSNumber(value: Int16(0o600))]
       )
-      guard created else { return false }
-      try fileManager.removeItem(at: tempProbe)
-      probeURL = nil
-      return true
     } catch {
       return false
     }
@@ -233,7 +234,7 @@ struct ExportPreflight {
   }
 
   private func estimatedRequiredDiskBytes(for plan: ExportPlan) -> Int64 {
-    let seconds = max(1, plan.totalDuration)
+    let seconds = max(1, plan.renderDuration)
     let bytesPerSecond: Double
     switch plan.preset {
     case .editFriendlyProRes:
@@ -336,6 +337,7 @@ final class NativeExportController: ObservableObject {
       return
     }
 
+    let renderDuration = (try? ExportPlan(request: request).renderDuration) ?? request.totalDuration
     let session = MutableExportSession(
       id: UUID(),
       request: request,
@@ -352,7 +354,7 @@ final class NativeExportController: ObservableObject {
       completedParts: 0,
       totalParts: request.totalParts,
       completedDuration: 0,
-      totalDuration: request.totalDuration,
+      totalDuration: renderDuration,
       isIndeterminate: false,
       isTerminal: false,
       canRevealOutput: false,
@@ -520,6 +522,7 @@ final class NativeExportController: ObservableObject {
         trimStartDate: plan.trimStartDate,
         trimEndDate: plan.trimEndDate
       )
+      let renderDuration = frameProvider.totalDuration
       let layout = plan.layout
       appendLog("Canvas: \(Int(layout.canvasSize.width))x\(Int(layout.canvasSize.height))\n")
       appendLog("Graph: \(NativeFilterGraphSummary(plan: plan).description)\n")
@@ -551,7 +554,7 @@ final class NativeExportController: ObservableObject {
 
         let renderSeconds = Double(frameIndex) / fps
         let context = frameProvider.context(for: renderSeconds)
-        let cameraOverride = plan.cameraTrack.camera(at: request.trimStartSeconds + renderSeconds)
+        let cameraOverride = plan.cameraTrack.camera(at: request.trimStartSeconds + context.sourceSecondsFromTrimStart)
 
         if frameIndex == 0 || frameIndex % Int(max(1, fps / 2)) == 0 {
           let completedParts = min(
@@ -561,10 +564,10 @@ final class NativeExportController: ObservableObject {
           runOnMain {
             self.updateSession {
               $0.completedParts = completedParts
-              $0.completedDuration = min(renderSeconds, request.totalDuration)
+              $0.completedDuration = min(renderSeconds, renderDuration)
               $0.phase = .renderingParts
               $0.phaseLabel = "Rendering timeline"
-              $0.progress = self.renderProgress(completed: renderSeconds, total: request.totalDuration)
+              $0.progress = self.renderProgress(completed: renderSeconds, total: renderDuration)
             }
           }
         }
@@ -582,7 +585,7 @@ final class NativeExportController: ObservableObject {
           $0.phase = .finishing
           $0.phaseLabel = "Finalizing movie"
           $0.completedParts = request.totalParts
-          $0.completedDuration = request.totalDuration
+          $0.completedDuration = renderDuration
           $0.progress = 0.98
         }
       }
@@ -600,7 +603,7 @@ final class NativeExportController: ObservableObject {
           $0.progress = 1.0
           $0.finishedAt = Date()
           $0.completedParts = request.totalParts
-          $0.completedDuration = request.totalDuration
+          $0.completedDuration = renderDuration
           $0.isTerminal = true
           $0.canRevealOutput = true
           $0.canRevealWorkingFiles = false
@@ -919,6 +922,19 @@ private struct TimelineFrameContext {
   let clipIndex: Int?
   let set: ClipSet?
   let localSeconds: Double
+  let sourceSecondsFromTrimStart: Double
+}
+
+private struct TimelineFrameSegment {
+  let clipIndex: Int
+  let set: ClipSet
+  let sourceStartSeconds: Double
+  let renderStartSeconds: Double
+  let duration: Double
+
+  var renderEndSeconds: Double {
+    renderStartSeconds + duration
+  }
 }
 
 private struct NativeFilterGraphSummary {
@@ -949,7 +965,9 @@ private struct TimelineFrameProvider {
   let trimEndDate: Date
   let totalDuration: Double
 
-  private let coverage: TimelineCoverageMap
+  private let segments: [TimelineFrameSegment]
+  private let segmentStartSeconds: [Double]
+  private let segmentEndSeconds: [Double]
 
   init(sets: [ClipSet], trimStartDate: Date, trimEndDate: Date) {
     self.sets = sets.sorted { lhs, rhs in
@@ -960,36 +978,108 @@ private struct TimelineFrameProvider {
     }
     self.trimStartDate = trimStartDate
     self.trimEndDate = max(trimEndDate, trimStartDate.addingTimeInterval(1.0 / 30.0))
-    self.totalDuration = max(1.0 / 30.0, self.trimEndDate.timeIntervalSince(trimStartDate))
-    self.coverage = TimelineCoverageMap(sets: self.sets)
+    self.segments = Self.segments(
+      for: self.sets,
+      trimStartDate: self.trimStartDate,
+      trimEndDate: self.trimEndDate
+    )
+    self.segmentStartSeconds = self.segments.map(\.renderStartSeconds)
+    self.segmentEndSeconds = self.segments.map(\.renderEndSeconds)
+    self.totalDuration = max(1.0 / 30.0, self.segments.last?.renderEndSeconds ?? 0)
+  }
+
+  static func renderDuration(sets: [ClipSet], trimStartDate: Date, trimEndDate: Date) -> Double {
+    let orderedSets = sets.sorted { lhs, rhs in
+      if lhs.date == rhs.date {
+        return lhs.timestamp < rhs.timestamp
+      }
+      return lhs.date < rhs.date
+    }
+    let endDate = max(trimEndDate, trimStartDate.addingTimeInterval(1.0 / 30.0))
+    let segments = Self.segments(for: orderedSets, trimStartDate: trimStartDate, trimEndDate: endDate)
+    return max(1.0 / 30.0, segments.last?.renderEndSeconds ?? 0)
+  }
+
+  private static func segments(
+    for sets: [ClipSet],
+    trimStartDate: Date,
+    trimEndDate: Date
+  ) -> [TimelineFrameSegment] {
+    var renderStartSeconds = 0.0
+    var segments: [TimelineFrameSegment] = []
+    segments.reserveCapacity(sets.count)
+
+    for (index, set) in sets.enumerated() {
+      let clipStartDate = set.date
+      let clipEndDate = set.date.addingTimeInterval(max(1.0 / 30.0, set.duration))
+      let segmentStartDate = max(clipStartDate, trimStartDate)
+      let segmentEndDate = min(clipEndDate, trimEndDate)
+      let duration = segmentEndDate.timeIntervalSince(segmentStartDate)
+      guard duration > 0 else { continue }
+
+      segments.append(
+        TimelineFrameSegment(
+          clipIndex: index,
+          set: set,
+          sourceStartSeconds: segmentStartDate.timeIntervalSince(clipStartDate),
+          renderStartSeconds: renderStartSeconds,
+          duration: duration
+        )
+      )
+      renderStartSeconds += duration
+    }
+
+    return segments
   }
 
   func context(for renderSeconds: Double) -> TimelineFrameContext {
-    guard !sets.isEmpty else {
-      return TimelineFrameContext(clipIndex: nil, set: nil, localSeconds: 0)
+    guard !segments.isEmpty else {
+      return TimelineFrameContext(clipIndex: nil, set: nil, localSeconds: 0, sourceSecondsFromTrimStart: 0)
     }
 
     let clamped = max(0, min(renderSeconds, totalDuration))
-    let renderDate = trimStartDate.addingTimeInterval(clamped)
-    let coverageSeconds = coverage.globalSeconds(for: renderDate)
-
-    if let activeIndex = coverage.activeClipIndex(at: coverageSeconds) {
-      let set = sets[activeIndex]
+    if clamped >= totalDuration, let segment = segments.last {
       return TimelineFrameContext(
-        clipIndex: activeIndex,
-        set: set,
-        localSeconds: max(0, renderDate.timeIntervalSince(set.date))
+        clipIndex: segment.clipIndex,
+        set: segment.set,
+        localSeconds: segment.sourceStartSeconds + segment.duration,
+        sourceSecondsFromTrimStart: segment.set.date
+          .addingTimeInterval(segment.sourceStartSeconds + segment.duration)
+          .timeIntervalSince(trimStartDate)
       )
     }
 
-    return TimelineFrameContext(clipIndex: nil, set: nil, localSeconds: 0)
+    let index = max(0, min(segments.count - 1, upperBound(in: segmentStartSeconds, for: clamped) - 1))
+    let segment = segments[index]
+    let localSeconds = segment.sourceStartSeconds + clamped - segment.renderStartSeconds
+    return TimelineFrameContext(
+      clipIndex: segment.clipIndex,
+      set: segment.set,
+      localSeconds: localSeconds,
+      sourceSecondsFromTrimStart: segment.set.date
+        .addingTimeInterval(localSeconds)
+        .timeIntervalSince(trimStartDate)
+    )
+
   }
 
   func completedSetCount(at renderSeconds: Double) -> Int {
     let clamped = max(0, min(renderSeconds, totalDuration))
-    let renderDate = trimStartDate.addingTimeInterval(clamped)
-    let coverageSeconds = coverage.globalSeconds(for: renderDate)
-    return coverage.completedClipCount(at: coverageSeconds)
+    return upperBound(in: segmentEndSeconds, for: clamped)
+  }
+
+  private func upperBound(in values: [Double], for target: Double) -> Int {
+    var low = 0
+    var high = values.count
+    while low < high {
+      let mid = (low + high) / 2
+      if values[mid] <= target {
+        low = mid + 1
+      } else {
+        high = mid
+      }
+    }
+    return low
   }
 }
 
@@ -1136,6 +1226,13 @@ private actor ExportPreviewImageGeneratorBox {
   }
 }
 
+private struct FrameImageRequest {
+  let camera: Camera
+  let url: URL
+  let seconds: Double
+  let rect: CGRect
+}
+
 private final class TimelineFrameComposer {
   let layout: TimelineFrameLayout
   let enabledCameras: Set<Camera>
@@ -1227,15 +1324,15 @@ private final class TimelineFrameComposer {
       enabledCameras.contains(camera) && set.file(for: camera) != nil ? camera : nil
     }
 
+    let imageRequests: [FrameImageRequest]
     if let camera = drawFocusCamera, let url = set.file(for: camera) {
       if let duration = set.duration(for: camera), localSeconds > duration + (1.0 / 30.0) {
         return buffer
       }
-      if let image = image(for: url, seconds: localSeconds) {
-        let fitted = AVMakeRect(aspectRatio: CGSize(width: image.width, height: image.height), insideRect: focusRect)
-        context.draw(image, in: fitted)
-      }
+      imageRequests = [FrameImageRequest(camera: camera, url: url, seconds: localSeconds, rect: focusRect)]
     } else {
+      var requests: [FrameImageRequest] = []
+      requests.reserveCapacity(layout.cameraOrder.count)
       for camera in layout.cameraOrder {
         guard enabledCameras.contains(camera),
               let rect = layout.boundsByCamera[camera],
@@ -1245,10 +1342,16 @@ private final class TimelineFrameComposer {
         if let duration = set.duration(for: camera), localSeconds > duration + (1.0 / 30.0) {
           continue
         }
-        guard let image = image(for: url, seconds: localSeconds) else { continue }
-        let fitted = AVMakeRect(aspectRatio: CGSize(width: image.width, height: image.height), insideRect: rect)
-        context.draw(image, in: fitted)
+        requests.append(FrameImageRequest(camera: camera, url: url, seconds: localSeconds, rect: rect))
       }
+      imageRequests = requests
+    }
+
+    let images = images(for: imageRequests)
+    for request in imageRequests {
+      guard let image = images[request.camera] else { continue }
+      let fitted = AVMakeRect(aspectRatio: CGSize(width: image.width, height: image.height), insideRect: request.rect)
+      context.draw(image, in: fitted)
     }
 
     if overlayOptions.privacyMask {
@@ -1313,7 +1416,61 @@ private final class TimelineFrameComposer {
     return points
   }
 
-  private func image(for url: URL, seconds: Double) -> CGImage? {
+  private func images(for requests: [FrameImageRequest]) -> [Camera: CGImage] {
+    guard !requests.isEmpty else { return [:] }
+    struct PreparedRequest {
+      let request: FrameImageRequest
+      let generator: ExportPreviewImageGeneratorBox
+      let attempts: [Double]
+      let fallback: CGImage?
+    }
+    let prepared = requests.map { request in
+      PreparedRequest(
+        request: request,
+        generator: generator(for: request.url),
+        attempts: [
+          max(0, request.seconds),
+          max(0, request.seconds - 0.10),
+          max(0, request.seconds - 0.25)
+        ],
+        fallback: lastImages[request.url]
+      )
+    }
+
+    let group = DispatchGroup()
+    let lock = NSLock()
+    var results: [Camera: (url: URL, image: CGImage)] = [:]
+
+    for item in prepared {
+      group.enter()
+      DispatchQueue.global(qos: .userInitiated).async {
+        let image = self.image(from: item.generator, attempts: item.attempts) ?? item.fallback
+        if let image {
+          lock.lock()
+          results[item.request.camera] = (item.request.url, image)
+          lock.unlock()
+        }
+        group.leave()
+      }
+    }
+    group.wait()
+
+    for (_, result) in results {
+      lastImages[result.url] = result.image
+    }
+    return results.mapValues(\.image)
+  }
+
+  private func image(from generator: ExportPreviewImageGeneratorBox, attempts: [Double]) -> CGImage? {
+    for candidate in attempts {
+      if let image = waitForImage(from: generator, at: CMTime(seconds: candidate, preferredTimescale: 600)) {
+        return image
+      }
+    }
+    return nil
+  }
+
+  private func generator(for url: URL) -> ExportPreviewImageGeneratorBox {
     let generator = generators[url] ?? {
       let asset = AVURLAsset(url: url)
       // Tesla clips can fail exact-frame decode; allow nearest-frame lookup.
@@ -1322,21 +1479,7 @@ private final class TimelineFrameComposer {
       generators[url] = generator
       return generator
     }()
-
-    let attempts: [Double] = [
-      max(0, seconds),
-      max(0, seconds - 0.10),
-      max(0, seconds - 0.25)
-    ]
-
-    for candidate in attempts {
-      if let image = waitForImage(from: generator, at: CMTime(seconds: candidate, preferredTimescale: 600)) {
-        lastImages[url] = image
-        return image
-      }
-    }
-
-    return lastImages[url]
+    return generator
   }
 
   private func waitForImage(from generator: ExportPreviewImageGeneratorBox, at time: CMTime) -> CGImage? {
