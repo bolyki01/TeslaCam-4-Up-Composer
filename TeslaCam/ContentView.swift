@@ -818,7 +818,7 @@ private struct IPadMapPage: View {
             .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
           Text(
             state.telemetryAvailability == .unavailable
-              ? "This footage has no embedded telemetry (GPS, speed, gear). Many HW3 cars record none."
+              ? "This clip has no embedded telemetry (GPS, speed). Saved-event clips usually include it."
               : "This export has no located events."
           )
           .font(TeslaCamTheme.Typography.monoSmall)

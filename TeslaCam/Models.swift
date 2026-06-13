@@ -1032,8 +1032,9 @@ struct TeslaCamEventSummary: Identifiable, Hashable {
 }
 
 /// Whether the loaded clip carries usable per-frame telemetry. Drives an
-/// explicit "no telemetry" UI state instead of a silently empty map/HUD —
-/// many real HW3 cars embed no SEI telemetry at all.
+/// explicit "no telemetry" UI state instead of a silently empty map/HUD.
+/// Telemetry presence is per-clip, not per-car: on a typical HW3 dump the
+/// SavedClips carry it (all cameras) while SentryClips/RecentClips do not.
 enum TelemetryAvailability {
   case unknown      // nothing loaded yet
   case available    // usable route/telemetry present

@@ -337,9 +337,10 @@ final class AppState: ObservableObject {
   @Published var telemetryModel: TelemetryDisplayModel?
   @Published var telemetryRoute: [TelemetryRoutePoint] = []
   @Published var telemetryEventMarkers: [TelemetryEventMarker] = []
-  /// Whether the currently-loaded clip carries usable telemetry. Many real
-  /// HW3 cars embed no per-frame SEI at all, so the map/HUD would otherwise be
-  /// silently empty; the UI uses this to show an explicit "no telemetry" state.
+  /// Whether the currently-loaded clip carries usable telemetry. Presence is
+  /// per-clip (SavedClips typically embed it, RecentClips often don't), so the
+  /// map/HUD would otherwise be silently empty on a telemetry-less clip; the
+  /// UI uses this to show an explicit "no telemetry" state.
   @Published var telemetryAvailability: TelemetryAvailability = .unknown
   @Published var eventSummaries: [TeslaCamEventSummary] = []
   @Published var eventSearchText: String = ""
