@@ -22,6 +22,13 @@ private final class PreviewImageResultBox: @unchecked Sendable {
 
 final class PreviewFrameCache: PreviewFrameCaching {
   private let textureLoader: MTKTextureLoader
+  // Sequential-decode path (zero-copy AVAssetReader -> CVMetalTextureCache) used
+  // during linear playback; falls back to the image-generator path below for
+  // seeks/scrubs/backward motion. nil when no Metal device was supplied (tests).
+  private let device: MTLDevice?
+  private let metalTextureCache: CVMetalTextureCache?
+  private var sequentialDecoders: [Camera: SequentialCameraDecoder] = [:]
+  private var lastLinearTime: [Camera: Double] = [:]
   private var fallbackGenerators: [URL: PreviewImageGeneratorBox] = [:]
   private var generatorOrder: [URL] = []
   // Bound the per-URL generator dictionary (previously unbounded — one
@@ -47,8 +54,24 @@ final class PreviewFrameCache: PreviewFrameCaching {
   private var failedFrameKeys: [String: Date] = [:]
   private let failedFrameRetryInterval: TimeInterval = 1.0
 
-  init(textureLoader: MTKTextureLoader) {
+  init(textureLoader: MTKTextureLoader, device: MTLDevice? = nil) {
     self.textureLoader = textureLoader
+    self.device = device
+    if let device {
+      var cache: CVMetalTextureCache?
+      CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &cache)
+      self.metalTextureCache = cache
+    } else {
+      self.metalTextureCache = nil
+    }
+  }
+
+  private func sequentialDecoder(for camera: Camera) -> SequentialCameraDecoder? {
+    guard let metalTextureCache else { return nil }
+    if let existing = sequentialDecoders[camera] { return existing }
+    let decoder = SequentialCameraDecoder(textureCache: metalTextureCache)
+    sequentialDecoders[camera] = decoder
+    return decoder
   }
 
   func texture(
@@ -68,6 +91,34 @@ final class PreviewFrameCache: PreviewFrameCaching {
     if let duration = cameraDurations[camera], seconds > duration + (1.0 / 30.0) {
       invalidate(camera: camera)
       return nil
+    }
+
+    // Sequential-decode fast path for linear playback: when time advances
+    // forward by a small step within the same clip, drive a per-camera
+    // AVAssetReader that decodes in order and hands back zero-copy textures.
+    // This delivers native-frame-rate playback without the per-frame
+    // random-access GOP decode + main-thread upload the generator path does.
+    if let decoder = sequentialDecoder(for: camera) {
+      let previousLinear = lastLinearTime[camera]
+      let sameClip = decoder.currentURL == url
+      let isLinearForward = sameClip
+        && previousLinear != nil
+        && seconds >= (previousLinear! - 0.05)
+        && (seconds - previousLinear!) < 1.0
+      if isLinearForward {
+        lastLinearTime[camera] = seconds
+        if let texture = decoder.requestTexture(url: url, at: seconds, onReady: onReady) {
+          lastFrameKeysByCamera[camera] = nil
+          return texture
+        }
+        return previousTexture
+      } else {
+        // New clip / seek / scrub-backward: position the reader here for the
+        // playback that will follow, and serve this instant from the generator
+        // path below (fast and tolerant of arbitrary times).
+        decoder.reposition(url: url, at: seconds)
+        lastLinearTime[camera] = seconds
+      }
     }
 
     let bucket = Int((seconds * 12.0).rounded(.down))
@@ -96,9 +147,11 @@ final class PreviewFrameCache: PreviewFrameCaching {
 
   func invalidate(camera: Camera) {
     cacheLock.lock()
-    defer { cacheLock.unlock() }
     lastFrameKeysByCamera[camera] = nil
     queuedFrameKeysByCamera[camera] = nil
+    cacheLock.unlock()
+    lastLinearTime[camera] = nil
+    sequentialDecoders[camera]?.tearDown()
   }
 
   private func queuePreviewDecode(
@@ -285,6 +338,177 @@ private actor PreviewImageGeneratorBox {
   }
 }
 
+/// Per-camera sequential video decoder for linear playback. Runs an
+/// `AVAssetReader` that decodes BGRA frames in order on a background queue and
+/// publishes the most recent frame at/just-before the requested time as a
+/// zero-copy Metal texture (via `CVMetalTextureCache`). Returning nil is safe —
+/// `PreviewFrameCache` falls back to its image-generator path.
+private final class SequentialCameraDecoder {
+  private let textureCache: CVMetalTextureCache
+  private let queue = DispatchQueue(label: "com.magrathean.TeslaCam.seq-decoder", qos: .userInitiated)
+  private let lock = NSLock()
+
+  // Lock-guarded state shared with the main (draw) thread.
+  private var _currentURL: URL?
+  private var current: (time: Double, texture: MTLTexture, retain: CVMetalTexture)?
+  private var decoding = false
+
+  // Decode-thread-only state.
+  private var reader: AVAssetReader?
+  private var output: AVAssetReaderTrackOutput?
+  private var readerURL: URL?
+  private var pending: CMSampleBuffer?
+
+  init(textureCache: CVMetalTextureCache) {
+    self.textureCache = textureCache
+  }
+
+  var currentURL: URL? {
+    lock.lock(); defer { lock.unlock() }
+    return _currentURL
+  }
+
+  /// Returns the most recent decoded texture (or nil) and schedules a forward
+  /// decode toward `target`. Non-blocking; safe to call every draw.
+  func requestTexture(url: URL, at target: Double, onReady: @escaping () -> Void) -> MTLTexture? {
+    lock.lock()
+    let tex = current?.texture
+    let needAdvance = (_currentURL == url) && (current == nil || current!.time < target - 0.001)
+    let willDispatch = needAdvance && !decoding
+    if willDispatch { decoding = true }
+    lock.unlock()
+
+    if willDispatch {
+      queue.async { [weak self] in self?.advance(url: url, to: target, onReady: onReady) }
+    }
+    return tex
+  }
+
+  /// Point the reader at `seconds` in `url` for the playback that follows a
+  /// seek / clip change. The instant itself is served by the generator path.
+  func reposition(url: URL, at seconds: Double) {
+    lock.lock()
+    let sameURL = (_currentURL == url)
+    _currentURL = url
+    if !sameURL { current = nil }
+    let willDispatch = !decoding
+    if willDispatch { decoding = true }
+    lock.unlock()
+
+    if willDispatch {
+      queue.async { [weak self] in
+        guard let self else { return }
+        self.recreateReader(url: url, at: seconds)
+        self.lock.lock(); self.decoding = false; self.lock.unlock()
+      }
+    }
+  }
+
+  func tearDown() {
+    queue.async { [weak self] in
+      guard let self else { return }
+      self.reader?.cancelReading()
+      self.reader = nil
+      self.output = nil
+      self.readerURL = nil
+      self.pending = nil
+      self.lock.lock()
+      self.current = nil
+      self._currentURL = nil
+      self.decoding = false
+      self.lock.unlock()
+    }
+  }
+
+  // MARK: - Decode thread
+
+  private func advance(url: URL, to target: Double, onReady: @escaping () -> Void) {
+    if readerURL != url {
+      recreateReader(url: url, at: target)
+    }
+    guard let output, let reader, reader.status == .reading else {
+      lock.lock(); decoding = false; lock.unlock()
+      return
+    }
+    var produced = false
+    let epsilon = 1.0 / 120.0
+    while true {
+      let sample = pending ?? output.copyNextSampleBuffer()
+      pending = nil
+      guard let sample else { break } // EOF: keep the last frame
+      let pts = CMSampleBufferGetPresentationTimeStamp(sample).seconds
+      guard pts.isFinite else { continue }
+      if pts <= target + epsilon {
+        if let imageBuffer = CMSampleBufferGetImageBuffer(sample),
+           let made = makeTexture(from: imageBuffer) {
+          lock.lock()
+          current = (pts, made.texture, made.retain)
+          lock.unlock()
+          produced = true
+        }
+      } else {
+        pending = sample // future frame; consume on the next advance
+        break
+      }
+    }
+    lock.lock(); decoding = false; lock.unlock()
+    if produced { DispatchQueue.main.async { onReady() } }
+  }
+
+  private func recreateReader(url: URL, at seconds: Double) {
+    reader?.cancelReading()
+    reader = nil; output = nil; pending = nil; readerURL = nil
+
+    let asset = AVURLAsset(url: url)
+    guard let track = loadFirstVideoTrack(asset),
+          let newReader = try? AVAssetReader(asset: asset) else { return }
+    let settings: [String: Any] = [
+      kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+      kCVPixelBufferMetalCompatibilityKey as String: true
+    ]
+    let newOutput = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+    newOutput.alwaysCopiesSampleData = false
+    guard newReader.canAdd(newOutput) else { return }
+    newReader.add(newOutput)
+    if seconds > 0.05 {
+      newReader.timeRange = CMTimeRange(
+        start: CMTime(seconds: seconds, preferredTimescale: 600),
+        duration: .positiveInfinity
+      )
+    }
+    guard newReader.startReading() else { return }
+    reader = newReader
+    output = newOutput
+    readerURL = url
+  }
+
+  private func loadFirstVideoTrack(_ asset: AVURLAsset) -> AVAssetTrack? {
+    let semaphore = DispatchSemaphore(value: 0)
+    var result: AVAssetTrack?
+    Task.detached(priority: .userInitiated) {
+      result = try? await asset.loadTracks(withMediaType: .video).first
+      semaphore.signal()
+    }
+    semaphore.wait()
+    return result
+  }
+
+  private func makeTexture(from pixelBuffer: CVPixelBuffer) -> (texture: MTLTexture, retain: CVMetalTexture)? {
+    let width = CVPixelBufferGetWidth(pixelBuffer)
+    let height = CVPixelBufferGetHeight(pixelBuffer)
+    guard width > 0, height > 0 else { return nil }
+    var cvTexture: CVMetalTexture?
+    let status = CVMetalTextureCacheCreateTextureFromImage(
+      kCFAllocatorDefault, textureCache, pixelBuffer, nil,
+      .bgra8Unorm, width, height, 0, &cvTexture
+    )
+    guard status == kCVReturnSuccess,
+          let cvTexture,
+          let texture = CVMetalTextureGetTexture(cvTexture) else { return nil }
+    return (texture, cvTexture)
+  }
+}
+
 final class MetalRenderer: NSObject, MTKViewDelegate {
   private let device: MTLDevice
   private let commandQueue: MTLCommandQueue
@@ -312,7 +536,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     self.view = mtkView
     guard let queue = device.makeCommandQueue() else { return nil }
     self.commandQueue = queue
-    self.frameCache = PreviewFrameCache(textureLoader: MTKTextureLoader(device: device))
+    self.frameCache = PreviewFrameCache(textureLoader: MTKTextureLoader(device: device), device: device)
 
     mtkView.device = device
     mtkView.colorPixelFormat = .bgra8Unorm
