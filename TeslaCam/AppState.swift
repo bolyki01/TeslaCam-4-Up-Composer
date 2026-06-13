@@ -1136,7 +1136,13 @@ final class AppState: ObservableObject {
   private func advanceToNextTimelineSegment() {
     guard totalDuration > 0 else { return }
     let epsilon = 1.0 / 30.0
-    let nextStart = currentSegmentStartSeconds + playback.currentDuration + epsilon
+    var nextStart = currentSegmentStartSeconds + playback.currentDuration + epsilon
+    // Skip recording gaps during continuous playback: jump straight to the next
+    // real segment instead of playing dead air in real time (a 30-minute Sentry
+    // gap is otherwise 30 minutes of black screen). #22
+    while let gap = timelineStore.currentGapRange(at: nextStart), gap.endSeconds > nextStart {
+      nextStart = gap.endSeconds
+    }
     guard nextStart < totalDuration else {
       currentSeconds = totalDuration
       updateOverlayAndTelemetry(

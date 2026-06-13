@@ -23,6 +23,10 @@ private final class PreviewImageResultBox: @unchecked Sendable {
 final class PreviewFrameCache: PreviewFrameCaching {
   private let textureLoader: MTKTextureLoader
   private var fallbackGenerators: [URL: PreviewImageGeneratorBox] = [:]
+  private var generatorOrder: [URL] = []
+  // Bound the per-URL generator dictionary (previously unbounded — one
+  // AVAssetImageGenerator per clip ever opened). ~2 clip-sets of 6 cameras.
+  private let maxGenerators = 14
   private let decodeQueue = DispatchQueue(label: "com.magrathean.TeslaCam.preview-cache", qos: .userInitiated, attributes: .concurrent)
   private let cacheLock = NSLock()
   private let generatorLock = NSLock()
@@ -31,7 +35,17 @@ final class PreviewFrameCache: PreviewFrameCaching {
   private var lastFrameKeysByCamera: [Camera: String] = [:]
   private var cachedTextures: [String: MTLTexture] = [:]
   private var cachedTextureOrder: [String] = []
+  private var cachedTextureBytes = 0
   private let maxCachedTextureCount = 90
+  // Byte ceiling on the texture cache. 90 full-res BGRA frames can be ~1.9 GB;
+  // cap total bytes so memory stays bounded regardless of frame size.
+  private let maxCachedTextureBytes = 256 * 1024 * 1024
+  // Frame keys whose decode failed, with the time of the last failure. A
+  // corrupt/truncated clip would otherwise be re-queued on every 30 Hz draw
+  // (an unbounded decode spin); this backs each failed key off to one retry
+  // per interval and lets the tile fall back to black instead of a stale frame.
+  private var failedFrameKeys: [String: Date] = [:]
+  private let failedFrameRetryInterval: TimeInterval = 1.0
 
   init(textureLoader: MTKTextureLoader) {
     self.textureLoader = textureLoader
@@ -64,6 +78,16 @@ final class PreviewFrameCache: PreviewFrameCaching {
     if let texture = cachedTexture(for: frameKey) {
       lastFrameKeysByCamera[camera] = frameKey
       return texture
+    }
+
+    // If this exact frame recently failed to decode, don't re-queue it on every
+    // draw. Show black (not the previous clip's stale frame) until the backoff
+    // window elapses, then allow a single retry.
+    if let failedAt = recentDecodeFailure(for: frameKey) {
+      if Date().timeIntervalSince(failedAt) < failedFrameRetryInterval {
+        return nil
+      }
+      clearDecodeFailure(for: frameKey)
     }
 
     queuePreviewDecode(camera: camera, frameKey: frameKey, url: url, seconds: seconds, onReady: onReady)
@@ -106,8 +130,14 @@ final class PreviewFrameCache: PreviewFrameCaching {
                 cgImage: image,
                 options: [MTKTextureLoader.Option.SRGB: false]
               )
-        else { return }
+        else {
+          // Decode/upload failed — record it so the draw loop backs off
+          // instead of re-queuing this frame 30 times a second.
+          self.recordDecodeFailure(for: frameKey)
+          return
+        }
 
+        self.clearDecodeFailure(for: frameKey)
         self.storeCachedTexture(texture, for: frameKey)
       }
     }
@@ -115,16 +145,30 @@ final class PreviewFrameCache: PreviewFrameCaching {
 
   private func copyPreviewImage(url: URL, seconds: Double) -> CGImage? {
     generatorLock.lock()
-    let generator = fallbackGenerators[url] ?? {
+    let generator: PreviewImageGeneratorBox
+    if let existing = fallbackGenerators[url] {
+      generator = existing
+      generatorOrder.removeAll { $0 == url }
+      generatorOrder.append(url)
+    } else {
       let asset = AVURLAsset(url: url)
-      let tolerance = CMTime(seconds: 1.0, preferredTimescale: 600)
-      let generator = PreviewImageGeneratorBox(asset: asset, tolerance: tolerance)
-      fallbackGenerators[url] = generator
-      return generator
-    }()
+      // Half a frame (~1 cache bucket) instead of ±1.0s. The old 1-second
+      // tolerance let adjacent camera tiles show frames up to ~2s apart while
+      // presented as simultaneous — wrong for incident review. The remaining
+      // small ladder only covers keyframe-sparse clips.
+      let tolerance = CMTime(value: 1, timescale: 48)
+      let box = PreviewImageGeneratorBox(asset: asset, tolerance: tolerance)
+      fallbackGenerators[url] = box
+      generatorOrder.append(url)
+      while generatorOrder.count > maxGenerators {
+        let evicted = generatorOrder.removeFirst()
+        fallbackGenerators.removeValue(forKey: evicted)
+      }
+      generator = box
+    }
     generatorLock.unlock()
 
-    let attempts = [seconds, max(0, seconds - 0.15), seconds + 0.15, seconds + 0.5, seconds + 1.0]
+    let attempts = [seconds, max(0, seconds - 1.0 / 24.0), seconds + 1.0 / 24.0, seconds + 1.0 / 12.0]
     for candidate in attempts {
       if let image = waitForImage(from: generator, at: CMTime(seconds: candidate, preferredTimescale: 600)) {
         return image
@@ -179,13 +223,50 @@ final class PreviewFrameCache: PreviewFrameCaching {
   private func storeCachedTexture(_ texture: MTLTexture, for frameKey: String) {
     cacheLock.lock()
     defer { cacheLock.unlock() }
+    if let existing = cachedTextures[frameKey] {
+      cachedTextureBytes -= Self.textureByteSize(existing)
+    }
     cachedTextures[frameKey] = texture
+    cachedTextureBytes += Self.textureByteSize(texture)
     cachedTextureOrder.removeAll { $0 == frameKey }
     cachedTextureOrder.append(frameKey)
-    while cachedTextureOrder.count > maxCachedTextureCount {
+    // Evict by count AND by total bytes — 90 full-res BGRA frames can exceed
+    // 1.9 GB, so the byte ceiling is the real bound. Keep at least one frame.
+    while cachedTextureOrder.count > 1,
+          cachedTextureOrder.count > maxCachedTextureCount || cachedTextureBytes > maxCachedTextureBytes {
       let oldest = cachedTextureOrder.removeFirst()
-      cachedTextures.removeValue(forKey: oldest)
+      if let evicted = cachedTextures.removeValue(forKey: oldest) {
+        cachedTextureBytes -= Self.textureByteSize(evicted)
+      }
     }
+  }
+
+  private static func textureByteSize(_ texture: MTLTexture) -> Int {
+    // 4 bytes per pixel for the BGRA preview textures.
+    max(0, texture.width * texture.height * 4)
+  }
+
+  private func recordDecodeFailure(for frameKey: String) {
+    cacheLock.lock()
+    defer { cacheLock.unlock() }
+    failedFrameKeys[frameKey] = Date()
+    // Keep the failure map bounded; drop entries already past their backoff.
+    if failedFrameKeys.count > 256 {
+      let now = Date()
+      failedFrameKeys = failedFrameKeys.filter { now.timeIntervalSince($0.value) < failedFrameRetryInterval }
+    }
+  }
+
+  private func recentDecodeFailure(for frameKey: String) -> Date? {
+    cacheLock.lock()
+    defer { cacheLock.unlock() }
+    return failedFrameKeys[frameKey]
+  }
+
+  private func clearDecodeFailure(for frameKey: String) {
+    cacheLock.lock()
+    defer { cacheLock.unlock() }
+    failedFrameKeys.removeValue(forKey: frameKey)
   }
 }
 
