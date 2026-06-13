@@ -878,8 +878,15 @@ struct TelemetryCoordinate: Equatable, Hashable {
   let latitude: Double
   let longitude: Double
 
+  /// A coordinate is usable only when both components are finite, within valid
+  /// geographic bounds, and not the null-island origin. Corrupt SEI telemetry
+  /// can decode raw bit patterns into NaN/Inf or absurd magnitudes; feeding
+  /// those to MapKit or the export HUD is a crash/garbage risk, so they are
+  /// rejected here — the single gate every telemetry consumer goes through.
   var isUsable: Bool {
-    abs(latitude) > 0.0001 && abs(longitude) > 0.0001
+    latitude.isFinite && longitude.isFinite
+      && abs(latitude) <= 90.0 && abs(longitude) <= 180.0
+      && (abs(latitude) > 0.0001 || abs(longitude) > 0.0001)
   }
 }
 
@@ -921,10 +928,14 @@ struct TelemetryDisplayModel: Equatable, Hashable {
   let accelY: Double
   let accelZ: Double
 
+  /// Non-finite (NaN/Inf) guard. Corrupt SEI decodes raw bit patterns into
+  /// Float/Double, so a garbage clip could otherwise put "nan km/h" in the HUD.
+  private static func finite(_ value: Double) -> Double { value.isFinite ? value : 0 }
+
   init(sei: SeiMetadata) {
-    speedKmh = Double(sei.vehicleSpeedMps) * 3.6
-    acceleratorPercent = max(0, Double(sei.acceleratorPedalPosition))
-    steeringAngleDeg = Double(sei.steeringWheelAngle)
+    speedKmh = Self.finite(Double(sei.vehicleSpeedMps)) * 3.6
+    acceleratorPercent = max(0, Self.finite(Double(sei.acceleratorPedalPosition)))
+    steeringAngleDeg = Self.finite(Double(sei.steeringWheelAngle))
     switch sei.gearState {
     case .park: gear = "P"
     case .drive: gear = "D"
@@ -940,12 +951,12 @@ struct TelemetryDisplayModel: Equatable, Hashable {
     brakeApplied = sei.brakeApplied
     blinkerLeft = sei.blinkerLeft
     blinkerRight = sei.blinkerRight
-    headingDeg = sei.headingDeg
+    headingDeg = Self.finite(sei.headingDeg)
     let coordinate = TelemetryCoordinate(latitude: sei.latitudeDeg, longitude: sei.longitudeDeg)
     self.coordinate = coordinate.isUsable ? coordinate : nil
-    accelX = sei.linearAccelX
-    accelY = sei.linearAccelY
-    accelZ = sei.linearAccelZ
+    accelX = Self.finite(sei.linearAccelX)
+    accelY = Self.finite(sei.linearAccelY)
+    accelZ = Self.finite(sei.linearAccelZ)
   }
 
   var speedText: String {

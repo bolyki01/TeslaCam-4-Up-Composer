@@ -1210,6 +1210,35 @@ struct TeslaCamTests {
     }
   }
 
+  @Test func telemetryCoordinateRejectsNonFiniteAndOutOfRange() async throws {
+    // #15: the single gate every telemetry consumer (MapKit, export HUD) uses.
+    #expect(TelemetryCoordinate(latitude: 51.5074, longitude: -0.1278).isUsable)
+    #expect(!TelemetryCoordinate(latitude: 0, longitude: 0).isUsable)            // null island
+    #expect(!TelemetryCoordinate(latitude: .nan, longitude: -0.1).isUsable)      // NaN
+    #expect(!TelemetryCoordinate(latitude: 51.5, longitude: .infinity).isUsable) // Inf
+    #expect(!TelemetryCoordinate(latitude: 500, longitude: -0.1).isUsable)       // out of range
+    #expect(!TelemetryCoordinate(latitude: 51.5, longitude: 240).isUsable)       // out of range
+  }
+
+  @Test func telemetryDisplayModelSanitizesCorruptScalars() async throws {
+    // A corrupt SEI decodes raw bit patterns into NaN/Inf; the display model
+    // must not surface "nan km/h" or a bogus coordinate.
+    var sei = SeiMetadata()
+    sei.vehicleSpeedMps = .nan
+    sei.steeringWheelAngle = .infinity
+    sei.headingDeg = .nan
+    sei.linearAccelX = .infinity
+    sei.latitudeDeg = .nan
+    sei.longitudeDeg = 1.0e30
+    let model = TelemetryDisplayModel(sei: sei)
+    #expect(model.speedKmh.isFinite)
+    #expect(model.steeringAngleDeg.isFinite)
+    #expect(model.headingDeg.isFinite)
+    #expect(model.accelX.isFinite)
+    #expect(model.coordinate == nil)
+    #expect(!model.speedText(unit: .kilometersPerHour).lowercased().contains("nan"))
+  }
+
   @Test func sharedOutputFixturesMatchNativeOutputContractForEveryPolicy() async throws {
     // Swift parity for the expected_output block emitted by
     // script/regen_fixtures.py. Exercises DomainOutputContract's three
