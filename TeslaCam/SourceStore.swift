@@ -82,9 +82,20 @@ final class SourceStore {
           options: bookmarkResolutionOptions,
           relativeTo: nil,
           bookmarkDataIsStale: &stale
-        ),
-        fileManager.fileExists(atPath: url.path)
+        )
       else {
+        continue
+      }
+      // Existence must be probed with security-scoped access started: a
+      // sandboxed folder bookmark can read as "missing" even when it is
+      // present and reachable. (Plain, non-scoped bookmarks return false from
+      // startAccessing and the probe still works.)
+      let scoped = url.startAccessingSecurityScopedResource()
+      let exists = fileManager.fileExists(atPath: url.path)
+      if scoped {
+        url.stopAccessingSecurityScopedResource()
+      }
+      guard exists else {
         continue
       }
       restored.append(url)

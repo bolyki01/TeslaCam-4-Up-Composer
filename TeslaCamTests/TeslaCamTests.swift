@@ -1197,6 +1197,17 @@ struct TeslaCamTests {
     for clipSet in index.sets {
       #expect(clipSet.duration == 60.0, "expected 60s fallback for unreadable clip \(clipSet.timestamp), got \(clipSet.duration)")
     }
+
+    // The fallback duration is no longer silent: each corrupt clip is flagged
+    // so the health summary / UI can surface it rather than presenting a
+    // healthy-looking 60-second set (#19).
+    let byTimestamp = Dictionary(uniqueKeysWithValues: index.sets.map { ($0.timestamp, $0) })
+    #expect(byTimestamp["2026-07-01_00-00-00"]?.unreadableCameras == [.front])
+    #expect(byTimestamp["2026-07-01_00-01-00"]?.unreadableCameras == [.back])
+    #expect(byTimestamp["2026-07-01_00-02-00"]?.unreadableCameras == [.left_repeater])
+    for clipSet in index.sets {
+      #expect(clipSet.hasUnreadableCameras, "corrupt clip \(clipSet.timestamp) must be flagged unreadable")
+    }
   }
 
   @Test func sharedOutputFixturesMatchNativeOutputContractForEveryPolicy() async throws {

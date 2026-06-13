@@ -1478,6 +1478,10 @@ struct ClipSet: Identifiable, Hashable {
   var files: [Camera: URL]
   var cameraDurations: [Camera: Double]
   var naturalSizes: [Camera: CGSize]
+  /// Cameras in this set whose clip failed to probe (corrupt/truncated media).
+  /// Empty for a healthy set. The clip still occupies its grid cell (rendered
+  /// black) so the timeline is unbroken, but the UI can flag it.
+  var unreadableCameras: Set<Camera>
 
   init(
     id: String? = nil,
@@ -1486,7 +1490,8 @@ struct ClipSet: Identifiable, Hashable {
     duration: Double,
     files: [Camera: URL],
     cameraDurations: [Camera: Double] = [:],
-    naturalSizes: [Camera: CGSize] = [:]
+    naturalSizes: [Camera: CGSize] = [:],
+    unreadableCameras: Set<Camera> = []
   ) {
     self.id = id ?? timestamp
     self.timestamp = timestamp
@@ -1495,6 +1500,7 @@ struct ClipSet: Identifiable, Hashable {
     self.files = files
     self.cameraDurations = cameraDurations
     self.naturalSizes = naturalSizes
+    self.unreadableCameras = unreadableCameras
   }
 
   init(
@@ -1503,7 +1509,8 @@ struct ClipSet: Identifiable, Hashable {
     duration: Double,
     files: [Camera: URL],
     cameraDurations: [Camera: Double] = [:],
-    naturalSizes: [Camera: CGSize] = [:]
+    naturalSizes: [Camera: CGSize] = [:],
+    unreadableCameras: Set<Camera> = []
   ) {
     self.init(
       id: nil,
@@ -1512,9 +1519,13 @@ struct ClipSet: Identifiable, Hashable {
       duration: duration,
       files: files,
       cameraDurations: cameraDurations,
-      naturalSizes: naturalSizes
+      naturalSizes: naturalSizes,
+      unreadableCameras: unreadableCameras
     )
   }
+
+  /// Whether any camera in this set is corrupt/unreadable.
+  var hasUnreadableCameras: Bool { !unreadableCameras.isEmpty }
 
   func file(for camera: Camera) -> URL? {
     files[camera]

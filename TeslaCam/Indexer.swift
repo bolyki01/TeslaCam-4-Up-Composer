@@ -50,6 +50,9 @@ final class ClipIndexer {
         throw ClipIndexError.noClipsFound
       }
 
+      // Pass 1: enumerate every candidate file in a deterministic order
+      // (per input, path-sorted within a directory) WITHOUT probing media.
+      var orderedURLs: [URL] = []
       for input in normalizedInputs {
         let values = try? input.resourceValues(forKeys: Set(keys))
         let isDir = values?.isDirectory ?? false
@@ -94,41 +97,40 @@ final class ClipIndexer {
           }
 
           fileURLs.sort { $0.path < $1.path }
-          for fileURL in fileURLs {
-            parseClipFile(
-              fileURL,
-              duplicatePolicy: duplicatePolicy,
-              into: &map,
-              keepAllSets: &keepAllSets,
-              keepAllPrimaryIndexByTimestamp: &keepAllPrimaryIndexByTimestamp,
-              camerasFound: &camerasFound,
-              duplicateFileCount: &duplicateFileCount,
-              duplicateTimestampCount: &duplicateTimestampCount,
-              seenDuplicateTimestamps: &seenDuplicateTimestamps,
-              scanned: &scanned,
-              metadataCache: &metadataCache,
-              progress: progress
-            )
-          }
+          orderedURLs.append(contentsOf: fileURLs)
         } else {
           if values?.isSymbolicLink == true || values?.isRegularFile != true {
             continue
           }
-          parseClipFile(
-            input,
-            duplicatePolicy: duplicatePolicy,
-            into: &map,
-            keepAllSets: &keepAllSets,
-            keepAllPrimaryIndexByTimestamp: &keepAllPrimaryIndexByTimestamp,
-            camerasFound: &camerasFound,
-            duplicateFileCount: &duplicateFileCount,
-            duplicateTimestampCount: &duplicateTimestampCount,
-            seenDuplicateTimestamps: &seenDuplicateTimestamps,
-            scanned: &scanned,
-            metadataCache: &metadataCache,
-            progress: progress
-          )
+          orderedURLs.append(input)
         }
+      }
+
+      // Pass 2: probe the actual clips' media metadata concurrently. This is
+      // the cold-scan bottleneck on large dumps; parallelizing it is the win.
+      let clipURLs = orderedURLs.filter { url in
+        let ext = url.pathExtension.lowercased()
+        return (ext == "mp4" || ext == "mov") && firstMatch(in: url.lastPathComponent) != nil
+      }
+      prewarmMetadata(clipURLs, cache: &metadataCache)
+
+      // Pass 3: build the index in deterministic order. parseClipFile now hits
+      // the warmed cache, so this pass does no blocking media I/O.
+      for fileURL in orderedURLs {
+        parseClipFile(
+          fileURL,
+          duplicatePolicy: duplicatePolicy,
+          into: &map,
+          keepAllSets: &keepAllSets,
+          keepAllPrimaryIndexByTimestamp: &keepAllPrimaryIndexByTimestamp,
+          camerasFound: &camerasFound,
+          duplicateFileCount: &duplicateFileCount,
+          duplicateTimestampCount: &duplicateTimestampCount,
+          seenDuplicateTimestamps: &seenDuplicateTimestamps,
+          scanned: &scanned,
+          metadataCache: &metadataCache,
+          progress: progress
+        )
       }
 
       var sets: [ClipSet]
@@ -249,6 +251,8 @@ final class ClipIndexer {
           durations[camera] = metadata.duration
           var naturalSizes = keepAllSets[primaryIndex].naturalSizes
           naturalSizes[camera] = metadata.naturalSize
+          var unreadable = keepAllSets[primaryIndex].unreadableCameras
+          if metadata.isReadable { unreadable.remove(camera) } else { unreadable.insert(camera) }
           keepAllSets[primaryIndex] = ClipSet(
             id: keepAllSets[primaryIndex].id,
             timestamp: keepAllSets[primaryIndex].timestamp,
@@ -256,7 +260,8 @@ final class ClipIndexer {
             duration: max(keepAllSets[primaryIndex].duration, metadata.duration),
             files: files,
             cameraDurations: durations,
-            naturalSizes: naturalSizes
+            naturalSizes: naturalSizes,
+            unreadableCameras: unreadable
           )
         } else {
           duplicateFileCount += 1
@@ -273,7 +278,8 @@ final class ClipIndexer {
               duration: metadata.duration,
               files: [camera: fileURL],
               cameraDurations: [camera: metadata.duration],
-              naturalSizes: [camera: metadata.naturalSize]
+              naturalSizes: [camera: metadata.naturalSize],
+              unreadableCameras: metadata.isReadable ? [] : [camera]
             )
           )
         }
@@ -287,7 +293,8 @@ final class ClipIndexer {
             duration: metadata.duration,
             files: [camera: fileURL],
             cameraDurations: [camera: metadata.duration],
-            naturalSizes: [camera: metadata.naturalSize]
+            naturalSizes: [camera: metadata.naturalSize],
+            unreadableCameras: metadata.isReadable ? [] : [camera]
           )
         )
       }
@@ -373,26 +380,69 @@ final class ClipIndexer {
     if let cached = cache[fileURL.path] {
       return cached
     }
+    let probe = computeMetadata(for: fileURL)
+    cache[fileURL.path] = probe
+    return probe
+  }
 
+  /// Loads one clip's duration + natural size. Marks the clip unreadable when
+  /// the asset has no valid duration or no video track (corrupt/truncated).
+  private static func computeMetadata(for fileURL: URL) -> ClipAssetProbe {
     let asset = AVURLAsset(
       url: fileURL,
       options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
     )
     let loaded = loadAssetMetadata(for: asset)
+    let seconds = CMTimeGetSeconds(loaded.duration)
+    let durationValid = loaded.duration.isValid && seconds.isFinite && seconds > 0
+    let isReadable = durationValid && loaded.naturalSize != nil
     let durationSeconds = max(0.1, normalizedDuration(loaded.duration))
-    let probe: ClipAssetProbe
+    return ClipAssetProbe(
+      duration: durationSeconds,
+      naturalSize: loaded.naturalSize ?? CGSize(width: 1280, height: 960),
+      isReadable: isReadable
+    )
+  }
 
-    if let naturalSize = loaded.naturalSize {
-      probe = ClipAssetProbe(
-        duration: durationSeconds,
-        naturalSize: naturalSize
-      )
-    } else {
-      probe = ClipAssetProbe(duration: durationSeconds, naturalSize: CGSize(width: 1280, height: 960))
+  /// Probes every supplied clip's metadata concurrently, populating `cache`.
+  ///
+  /// AVAsset duration/track loading is I/O bound, so probing serially (one
+  /// blocking load per file) dominates cold-scan time on large dumps. This
+  /// fans the work out across `concurrentPerform`'s libdispatch worker pool;
+  /// each `computeMetadata` bridges its own async load via a private
+  /// semaphore on a worker thread, distinct from the Swift cooperative pool
+  /// that runs the loads — so there is no thread-pool deadlock.
+  private static func prewarmMetadata(_ urls: [URL], cache: inout [String: ClipAssetProbe]) {
+    var toProbe: [URL] = []
+    var seen = Set<String>()
+    toProbe.reserveCapacity(urls.count)
+    for url in urls {
+      let path = url.path
+      if cache[path] != nil { continue }
+      if seen.insert(path).inserted {
+        toProbe.append(url)
+      }
+    }
+    guard toProbe.count > 1 else {
+      for url in toProbe {
+        cache[url.path] = computeMetadata(for: url)
+      }
+      return
     }
 
-    cache[fileURL.path] = probe
-    return probe
+    let lock = NSLock()
+    var probed: [String: ClipAssetProbe] = [:]
+    probed.reserveCapacity(toProbe.count)
+    DispatchQueue.concurrentPerform(iterations: toProbe.count) { index in
+      let url = toProbe[index]
+      let probe = computeMetadata(for: url)
+      lock.lock()
+      probed[url.path] = probe
+      lock.unlock()
+    }
+    for (path, probe) in probed {
+      cache[path] = probe
+    }
   }
 
   private static func normalizedDuration(_ time: CMTime) -> Double {
@@ -449,6 +499,11 @@ final class ClipIndexer {
 private struct ClipAssetProbe {
   let duration: Double
   let naturalSize: CGSize
+  /// `false` when the asset failed to load a valid duration / video track —
+  /// i.e. a corrupt or truncated clip. Such clips still get a fallback
+  /// duration so the timeline stays intact, but they are flagged rather than
+  /// silently presented as a healthy 60-second set.
+  var isReadable: Bool = true
 }
 
 private struct IndexedClipSetBuilder {
@@ -457,17 +512,21 @@ private struct IndexedClipSetBuilder {
   var files: [Camera: URL] = [:]
   var durations: [Camera: Double] = [:]
   var naturalSizes: [Camera: CGSize] = [:]
+  var unreadableCameras: Set<Camera> = []
 
   mutating func insert(camera: Camera, url: URL, metadata: ClipAssetProbe) {
     files[camera] = url
     durations[camera] = metadata.duration
     naturalSizes[camera] = metadata.naturalSize
+    if metadata.isReadable {
+      unreadableCameras.remove(camera)
+    } else {
+      unreadableCameras.insert(camera)
+    }
   }
 
   mutating func replace(camera: Camera, url: URL, metadata: ClipAssetProbe) {
-    files[camera] = url
-    durations[camera] = metadata.duration
-    naturalSizes[camera] = metadata.naturalSize
+    insert(camera: camera, url: url, metadata: metadata)
   }
 
   func makeClipSet() -> ClipSet {
@@ -477,7 +536,8 @@ private struct IndexedClipSetBuilder {
       duration: durations.values.max() ?? 60.0,
       files: files,
       cameraDurations: durations,
-      naturalSizes: naturalSizes
+      naturalSizes: naturalSizes,
+      unreadableCameras: unreadableCameras
     )
   }
 }

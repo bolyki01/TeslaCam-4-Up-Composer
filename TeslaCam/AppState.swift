@@ -431,6 +431,10 @@ final class AppState: ObservableObject {
       return
     }
 #endif
+    // Re-open the folder(s) the user picked last time so they don't have to
+    // re-pick on every launch. No-op (falls through to onboarding) when no
+    // bookmarks are persisted or none currently resolve.
+    restoreLastSourcesIfPossible()
   }
 
   private func configurePlaybackCallbacks() {
@@ -505,34 +509,17 @@ final class AppState: ObservableObject {
     guard !normalizedSources.isEmpty else { return }
     debug("index start: \(normalizedSources.map { $0.lastPathComponent }.joined(separator: ", "))", category: "index")
 
+    let previousSources = sourceURLs
     activateSecurityScopedAccess(for: normalizedSources)
 
     isIndexing = true
     indexStatus = "Scanning..."
     scanStage = .scanningNestedFolders
     scanDiscoveredClipCount = 0
-    clipSets = []
-    camerasDetected = []
-    healthSummary = nil
-    eventSummaries = []
-    currentEvent = nil
-    telemetryModel = nil
-    telemetryRoute = []
-    telemetryEventMarkers = []
-    telemetryText = ""
-    eventSearchText = ""
-    eventReasonFilter = "all"
-    cameraTrack = .empty
-    clipHealthFacts = []
-    layoutPresetStatus = ""
-    duplicateSummary = DuplicateResolutionSummary(
-      duplicateFileCount: 0,
-      duplicateTimestampCount: 0,
-      overlapMinuteCount: 0
-    )
-    layoutProfile = .mixedUnknown
-    isDuplicateResolverPresented = false
-    duplicateResolverMessage = ""
+    // The current timeline and its derived state are deliberately NOT cleared
+    // here: a failed scan (ejected card, unreadable folder) must leave the
+    // working session intact. Derived state is reset in the success path
+    // below — atomically, just before the freshly-scanned index is applied.
 
     DispatchQueue.global(qos: .userInitiated).async {
       do {
@@ -545,6 +532,20 @@ final class AppState: ObservableObject {
         }
         DispatchQueue.main.async {
           self.scanStage = .parsingTimestamps
+          // Reset per-source derived/UI state now that a fresh index succeeded.
+          // (Previously done up front; moved here so a failed scan keeps the
+          // old session intact — see the prologue note above.)
+          self.currentEvent = nil
+          self.telemetryModel = nil
+          self.telemetryRoute = []
+          self.telemetryEventMarkers = []
+          self.telemetryText = ""
+          self.eventSearchText = ""
+          self.eventReasonFilter = "all"
+          self.cameraTrack = .empty
+          self.layoutPresetStatus = ""
+          self.isDuplicateResolverPresented = false
+          self.duplicateResolverMessage = ""
           self.rootURL = normalizedSources.first
           self.sourceURLs = normalizedSources
           self.clipSets = index.sets
@@ -580,7 +581,20 @@ final class AppState: ObservableObject {
       } catch {
         DispatchQueue.main.async {
           self.isIndexing = false
-          self.errorMessage = "No clips found in the selected files/folders."
+          if self.clipSets.isEmpty {
+            // No prior timeline to fall back to — surface the empty/onboarding error.
+            self.indexStatus = ""
+            self.errorMessage = "No clips found in the selected files/folders."
+          } else {
+            // A timeline is already loaded; keep it and re-acquire its security
+            // scope (the failed load switched scope to the new sources).
+            self.indexStatus = "Ready"
+            if !previousSources.isEmpty,
+               previousSources.map(\.path) != normalizedSources.map(\.path) {
+              self.activateSecurityScopedAccess(for: previousSources)
+            }
+            self.errorMessage = "Couldn't load the selected source. The current timeline is unchanged."
+          }
           self.showError = true
           self.debug("index failed: \(error.localizedDescription)", category: "index")
         }
