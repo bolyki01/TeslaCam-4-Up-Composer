@@ -63,28 +63,36 @@ struct ContentView: View {
     IPadLoadedScreen(state: state, playbackUI: state.playbackUI)
 #else
     GeometryReader { proxy in
-      VStack(spacing: 0) {
-        LoadedStatusBar(state: state)
+      HStack(spacing: 0) {
+        if !state.eventSummaries.isEmpty {
+          MacEventSidebar(state: state)
+            .frame(width: 300)
+            .padding(TeslaCamTheme.Metrics.contentPadding)
+        }
 
-        ScrollView(.vertical, showsIndicators: false) {
-          VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.cardGap) {
-            PreviewPanelCard(
-              state: state,
-              playbackUI: state.playbackUI,
-              maxAvailableHeight: loadedPreviewMaxHeight(for: proxy.size.height)
-            )
+        VStack(spacing: 0) {
+          LoadedStatusBar(state: state)
 
-            TimelineExportCard(
-              state: state,
-              playback: state.playback,
-              playbackUI: state.playbackUI,
-              timelineMarkers: timelineMarkers,
-              isSingleDayTimeline: isSingleDayTimeline
-            )
+          ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.cardGap) {
+              PreviewPanelCard(
+                state: state,
+                playbackUI: state.playbackUI,
+                maxAvailableHeight: loadedPreviewMaxHeight(for: proxy.size.height)
+              )
+
+              TimelineExportCard(
+                state: state,
+                playback: state.playback,
+                playbackUI: state.playbackUI,
+                timelineMarkers: timelineMarkers,
+                isSingleDayTimeline: isSingleDayTimeline
+              )
+            }
+            .frame(maxWidth: loadedContentMaxWidth, alignment: .top)
+            .padding(TeslaCamTheme.Metrics.contentPadding)
+            .frame(maxWidth: .infinity, alignment: .top)
           }
-          .frame(maxWidth: loadedContentMaxWidth, alignment: .top)
-          .padding(TeslaCamTheme.Metrics.contentPadding)
-          .frame(maxWidth: .infinity, alignment: .top)
         }
       }
     }
@@ -1850,6 +1858,152 @@ private struct InspectorChipLabel: View {
     .glassSurface(role: disabled ? .control : role, radius: TeslaCamTheme.Metrics.compactCorner, interactive: !disabled)
     .contentShape(Rectangle())
     .opacity(disabled ? 0.55 : 1)
+  }
+}
+#endif
+
+#if os(macOS)
+/// macOS event-triage sidebar: the dashcam-event browser the shipping Mac app
+/// previously lacked (it was iOS-only). Reuses the cross-platform AppState
+/// event data — search, sort, reason filter, and jump-to-event all flow through
+/// the same model the iPad dashboard uses.
+struct MacEventSidebar: View {
+  @ObservedObject var state: AppState
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
+      HStack(spacing: TeslaCamTheme.Spacing.xs) {
+        Image(systemName: "list.bullet.rectangle")
+          .font(TeslaCamTheme.Typography.label)
+          .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+        Text("Events")
+          .font(TeslaCamTheme.Typography.sectionTitle)
+          .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
+        Spacer(minLength: 0)
+        Text("\(state.filteredEventSummaries.count)")
+          .font(TeslaCamTheme.Typography.monoSmall)
+          .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+      }
+
+      HStack(spacing: TeslaCamTheme.Spacing.s) {
+        Image(systemName: "magnifyingglass")
+          .font(TeslaCamTheme.Typography.label)
+          .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+        TextField("Search", text: $state.eventSearchText)
+          .textFieldStyle(.plain)
+          .font(TeslaCamTheme.Typography.bodySmall)
+      }
+      .padding(.horizontal, TeslaCamTheme.Spacing.m)
+      .frame(height: 32)
+      .glassSurface(role: .control, radius: TeslaCamTheme.Metrics.compactCorner, interactive: true)
+      .accessibilityIdentifier("event-search")
+
+      HStack(spacing: TeslaCamTheme.Spacing.s) {
+        Picker("Sort", selection: $state.eventSortMode) {
+          ForEach(TeslaCamEventSortMode.allCases) { mode in
+            Text(mode.displayName).tag(mode)
+          }
+        }
+        .pickerStyle(.menu)
+        .frame(maxWidth: .infinity)
+
+        Picker("Type", selection: Binding(
+          get: { state.eventReasonFilter == "all" ? "All" : state.eventReasonFilter },
+          set: { state.eventReasonFilter = $0 == "All" ? "all" : $0 }
+        )) {
+          ForEach(state.eventReasonOptions, id: \.self) { reason in
+            Text(reason).tag(reason)
+          }
+        }
+        .pickerStyle(.menu)
+        .frame(maxWidth: .infinity)
+      }
+      .controlSize(.small)
+      .labelsHidden()
+
+      if state.filteredEventSummaries.isEmpty {
+        VStack(spacing: TeslaCamTheme.Spacing.xs) {
+          Text("No matching events")
+            .font(TeslaCamTheme.Typography.bodySmall)
+            .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        ScrollView(.vertical, showsIndicators: false) {
+          LazyVStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
+            ForEach(state.filteredEventSummaries) { event in
+              MacEventRow(
+                event: event,
+                active: state.currentEvent?.id == event.id
+              ) {
+                state.jumpToEvent(event)
+              }
+            }
+          }
+        }
+      }
+    }
+    .padding(TeslaCamTheme.Metrics.cardPaddingCompact)
+    .frame(maxHeight: .infinity, alignment: .top)
+    .glassSurface(role: .panel, radius: TeslaCamTheme.Metrics.cardCorner)
+    .accessibilityIdentifier("event-browser")
+  }
+}
+
+private struct MacEventRow: View {
+  let event: TeslaCamEventSummary
+  let active: Bool
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: TeslaCamTheme.Spacing.s) {
+        MacEventThumbnail(url: event.thumbnailURL)
+          .frame(width: 56, height: 42)
+          .clipShape(RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.compactCorner, style: .continuous))
+
+        VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.xs) {
+          Text(TeslaCamFormatters.timelineSameDay.string(from: event.timestamp))
+            .font(TeslaCamTheme.Typography.monoSmall)
+            .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
+          Text(event.locationTitle)
+            .font(TeslaCamTheme.Typography.label)
+            .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+            .lineLimit(1)
+          Text(event.reasonTitle)
+            .font(.system(size: 11))
+            .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+            .lineLimit(1)
+        }
+        Spacer(minLength: 0)
+      }
+      .padding(TeslaCamTheme.Spacing.s)
+      .glassSurface(role: active ? .selected : .control, radius: TeslaCamTheme.Metrics.compactCorner, interactive: true)
+    }
+    .buttonStyle(.plain)
+    .accessibilityIdentifier("event-row")
+  }
+}
+
+private struct MacEventThumbnail: View {
+  let url: URL?
+
+  var body: some View {
+    Group {
+      if let url, let image = NSImage(contentsOfFile: url.path) {
+        Image(nsImage: image)
+          .resizable()
+          .scaledToFill()
+      } else {
+        Rectangle()
+          .fill(TeslaCamTheme.Colors.surfaceElevated)
+          .overlay(
+            Image(systemName: "video")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+          )
+      }
+    }
   }
 }
 #endif

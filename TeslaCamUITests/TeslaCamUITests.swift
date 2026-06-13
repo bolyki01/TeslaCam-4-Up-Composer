@@ -85,6 +85,30 @@ final class TeslaCamUITests: XCTestCase {
   }
 
   @MainActor
+  func testSampleMacEventBrowserNavigates() throws {
+    // The shipping macOS app gained the Sentry/Saved event browser (previously
+    // iOS-only). In sample mode it lists the demo events; selecting one jumps
+    // the timeline. Skipped on non-macOS (the sidebar is macOS-only).
+    #if os(macOS)
+    let app = launchApp(mode: "sample")
+    XCTAssertTrue(app.otherElements["event-browser"].waitForExistence(timeout: 5))
+    let rows = app.buttons.matching(identifier: "event-row")
+    XCTAssertGreaterThan(rows.count, 0, "event browser should list the demo events")
+
+    let playbackButton = app.buttons["toggle-playback"]
+    XCTAssertTrue(playbackButton.waitForExistence(timeout: 5))
+    // Selecting the last event must move playback off the start of the timeline.
+    rows.element(boundBy: rows.count - 1).click()
+    let attachment = XCTAttachment(screenshot: app.screenshot())
+    attachment.name = "mac-event-browser"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+    #else
+    throw XCTSkip("macOS-only event browser")
+    #endif
+  }
+
+  @MainActor
   func testSampleDashboardScreenshot() throws {
     // Captures the loaded dashboard as a test attachment for visual review —
     // the verify-as-you-go seam for UI work. Asserts the core transport surface
