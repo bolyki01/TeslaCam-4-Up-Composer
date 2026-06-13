@@ -84,6 +84,21 @@ final class TeslaCamUITests: XCTestCase {
     XCTAssertNotEqual(initialFrontValue, toggledFrontValue)
   }
 
+  @MainActor
+  func testSampleDashboardScreenshot() throws {
+    // Captures the loaded dashboard as a test attachment for visual review —
+    // the verify-as-you-go seam for UI work. Asserts the core transport surface
+    // is present so the screenshot is never of an empty/onboarding screen.
+    let app = launchApp(mode: "sample")
+    XCTAssertTrue(app.buttons["toggle-playback"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.otherElements["merged-timeline-track"].exists)
+
+    let attachment = XCTAttachment(screenshot: app.screenshot())
+    attachment.name = "sample-dashboard"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+  }
+
   private func launchApp(mode: String) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["TESLACAM_UI_TEST_MODE"] = mode
