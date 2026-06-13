@@ -500,6 +500,13 @@ final class NativeExportController: ObservableObject {
   private func performExport(request: ExportRequest) throws {
     try measure("native_export_full") {
       let plan = try ExportPlan(request: request)
+      // Keep the machine awake and out of App Nap for the whole render. Long
+      // exports otherwise stall when the Mac idle-sleeps. No-op on iOS.
+      let activityToken = ProcessInfo.processInfo.beginActivity(
+        options: [.userInitiated, .idleSystemSleepDisabled],
+        reason: "TeslaCam export"
+      )
+      defer { ProcessInfo.processInfo.endActivity(activityToken) }
       let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("teslacam_export_\(UUID().uuidString)", isDirectory: true)
       try fm.createDirectory(at: tempRoot, withIntermediateDirectories: true)
@@ -544,11 +551,28 @@ final class NativeExportController: ObservableObject {
         enabledCameras: plan.enabledCameras,
         overlayOptions: plan.overlayOptions
       )
-      let fps: Double = 30
+      // Match the render clock to the actual source frame rate instead of a
+      // hardcoded 30. Tesla HW3 footage is 24/36 fps depending on firmware; a
+      // 30 fps clock duplicates (24->30) or drops (36->30) ~1 frame in 6 and
+      // wastes encode on the duplicates.
+      let fps = self.sampleSourceFps(for: plan)
+      appendLog("Render fps: \(String(format: "%.3f", fps))\n")
       let frameCount = max(1, Int((frameProvider.totalDuration * fps).rounded(.up)))
+      var renderedFrames = 0
 
       for frameIndex in 0..<frameCount {
         if cancelRequested {
+          if renderedFrames > 0 {
+            // Keep the footage rendered so far as a playable partial rather
+            // than discarding a long export the user cancelled near the end.
+            try? writer.finishWriting()
+            try? fm.removeItem(at: tempRoot)
+            runOnMain {
+              self.finishCancelled(request: request, outputURL: plan.outputURL, keptPartial: true)
+            }
+            return
+          }
+          writer.cancel()
           throw ExportError.cancelled
         }
 
@@ -572,12 +596,20 @@ final class NativeExportController: ObservableObject {
           }
         }
 
-        let buffer = try composer.makeFrameBuffer(
-          at: context.localSeconds,
-          set: context.set,
-          cameraOverride: cameraOverride
-        )
-        try writer.append(buffer: buffer, at: CMTime(seconds: renderSeconds, preferredTimescale: 600))
+        do {
+          let buffer = try composer.makeFrameBuffer(
+            at: context.localSeconds,
+            set: context.set,
+            cameraOverride: cameraOverride
+          )
+          try writer.append(buffer: buffer, at: CMTime(seconds: renderSeconds, preferredTimescale: 600))
+        } catch {
+          // A compose/encode failure mid-render: tear the writer down cleanly
+          // and report it as an encoding failure (not "Unknown Failure").
+          writer.cancel()
+          throw ExportError.encoding(error.localizedDescription)
+        }
+        renderedFrames += 1
       }
 
       runOnMain {
@@ -772,6 +804,70 @@ final class NativeExportController: ObservableObject {
     publishCurrentSession()
     isStatusPresented = true
     startNextQueuedExportIfIdle()
+  }
+
+  private func finishCancelled(request: ExportRequest, outputURL: URL, keptPartial: Bool) {
+    appendLog("Export cancelled\(keptPartial ? " — partial saved" : "").\n")
+    appendStructuredLogEvent(
+      "export_cancelled",
+      fields: [
+        "category": ExportFailureCategory.cancelled.rawValue,
+        "kept_partial": keptPartial ? "1" : "0"
+      ]
+    )
+    debug("cancelled\(keptPartial ? " (partial kept)" : "") \(outputURL.lastPathComponent)", category: "export")
+    if !keptPartial {
+      cleanupPartialOutput(at: outputURL)
+    }
+    updateSession {
+      $0.phase = .cancelled
+      $0.phaseLabel = keptPartial ? "Export cancelled — partial saved" : "Export cancelled"
+      $0.finishedAt = Date()
+      $0.failureCategory = .cancelled
+      $0.failureReason = "Export cancelled by user."
+      $0.isTerminal = true
+      $0.canRetry = true
+      $0.canRevealOutput = keptPartial
+      $0.canRevealWorkingFiles = false
+      $0.tempRootURL = nil
+      $0.isIndeterminate = false
+      $0.isCancelled = true
+    }
+    lastError = ""
+    endOutputScope()
+    publishCurrentSession()
+    isStatusPresented = true
+    startNextQueuedExportIfIdle()
+  }
+
+  /// Samples the source frame rate from the first readable clip in the plan so
+  /// the render clock matches the footage (HW3 is 24 or 36 fps). Falls back to
+  /// 30 fps when no clip yields a sane rate.
+  private func sampleSourceFps(for plan: ExportPlan) -> Double {
+    for set in plan.sets {
+      for camera in plan.cameraOrder {
+        guard let url = set.files[camera] else { continue }
+        if let fps = Self.probeNominalFrameRate(url: url), fps >= 12, fps <= 60 {
+          return fps
+        }
+      }
+    }
+    return 30.0
+  }
+
+  private static func probeNominalFrameRate(url: URL) -> Double? {
+    let asset = AVURLAsset(url: url)
+    let semaphore = DispatchSemaphore(value: 0)
+    var result: Double?
+    Task.detached(priority: .userInitiated) {
+      defer { semaphore.signal() }
+      guard let track = try? await asset.loadTracks(withMediaType: .video).first else { return }
+      if let rate = try? await track.load(.nominalFrameRate), rate > 0 {
+        result = Double(rate)
+      }
+    }
+    semaphore.wait()
+    return result
   }
 
   private func startNextQueuedExportIfIdle() {
@@ -1734,7 +1830,15 @@ private final class NativeMovieWriter {
     var settings: [String: Any] = [
       AVVideoCodecKey: codec.rawValue,
       AVVideoWidthKey: Int(size.width.rounded(.up)),
-      AVVideoHeightKey: Int(size.height.rounded(.up))
+      AVVideoHeightKey: Int(size.height.rounded(.up)),
+      // Tag the output as Rec.709 SDR. The composited frames are sRGB-ish BGRA;
+      // without explicit color properties the HEVC/ProRes stream is untagged
+      // and players guess, producing washed-out or oversaturated playback.
+      AVVideoColorPropertiesKey: [
+        AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+        AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+        AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2
+      ]
     ]
     if !compression.isEmpty {
       settings[AVVideoCompressionPropertiesKey] = compression
@@ -1786,6 +1890,14 @@ private final class NativeMovieWriter {
     group.wait()
     if let finishError {
       throw finishError
+    }
+  }
+
+  /// Tears the writer down on failure, releasing the encoder session and
+  /// discarding the incomplete file. Safe to call from any state.
+  func cancel() {
+    if writer.status == .writing {
+      writer.cancelWriting()
     }
   }
 }
