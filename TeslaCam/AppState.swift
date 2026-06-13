@@ -337,6 +337,10 @@ final class AppState: ObservableObject {
   @Published var telemetryModel: TelemetryDisplayModel?
   @Published var telemetryRoute: [TelemetryRoutePoint] = []
   @Published var telemetryEventMarkers: [TelemetryEventMarker] = []
+  /// Whether the currently-loaded clip carries usable telemetry. Many real
+  /// HW3 cars embed no per-frame SEI at all, so the map/HUD would otherwise be
+  /// silently empty; the UI uses this to show an explicit "no telemetry" state.
+  @Published var telemetryAvailability: TelemetryAvailability = .unknown
   @Published var eventSummaries: [TeslaCamEventSummary] = []
   @Published var eventSearchText: String = ""
   @Published var eventReasonFilter: String = "all"
@@ -661,10 +665,22 @@ final class AppState: ObservableObject {
 
   func jumpToEvent(_ event: TeslaCamEventSummary) {
     guard clipSets.indices.contains(event.clipIndex) else { return }
-    let seconds = clipStartOffset(at: event.clipIndex)
+    // Seek to the recorded trigger moment (event.json timestamp), not the start
+    // of the clip folder. Tesla writes ~70s of pre-roll before the trigger, so
+    // landing at the folder start buries the actual incident. #17
+    let folderStart = clipStartOffset(at: event.clipIndex)
+    let triggerSeconds = globalSeconds(for: event.timestamp)
+    let seconds: Double
+    if triggerSeconds.isFinite, triggerSeconds >= folderStart - 0.5, triggerSeconds < totalDuration {
+      seconds = triggerSeconds
+    } else {
+      // No / out-of-range trigger timestamp (e.g. a plain RecentClips folder) —
+      // fall back to the folder start.
+      seconds = folderStart
+    }
     seekToGlobalTime(seconds, exact: true)
     currentEvent = event
-    debug("event jump \(event.id)", category: "event")
+    debug("event jump \(event.id) -> \(String(format: "%.1f", seconds))s", category: "event")
   }
 
   func jumpToNextEvent(direction: Int = 1) {
@@ -1138,8 +1154,8 @@ final class AppState: ObservableObject {
     let epsilon = 1.0 / 30.0
     var nextStart = currentSegmentStartSeconds + playback.currentDuration + epsilon
     // Skip recording gaps during continuous playback: jump straight to the next
-    // real segment instead of playing dead air in real time (a 30-minute Sentry
-    // gap is otherwise 30 minutes of black screen). #22
+    // real segment instead of playing dead air in real time (a 30-minute gap
+    // between events is otherwise 30 minutes of black screen). #22
     while let gap = timelineStore.currentGapRange(at: nextStart), gap.endSeconds > nextStart {
       nextStart = gap.endSeconds
     }
@@ -1219,6 +1235,7 @@ final class AppState: ObservableObject {
     telemetryRoute = []
     telemetryEventMarkers = []
     telemetryText = ""
+    telemetryAvailability = .unknown
   }
 
   private func loadTelemetry(for set: ClipSet?) {
@@ -1229,6 +1246,7 @@ final class AppState: ObservableObject {
     telemetryEventMarkers = []
     telemetryURL = url
     telemetryText = ""
+    telemetryAvailability = .unknown
     guard let fileURL = url else { return }
     debug("telemetry load \(fileURL.lastPathComponent)", category: "telemetry")
     DispatchQueue.global(qos: .utility).async {
@@ -1241,6 +1259,7 @@ final class AppState: ObservableObject {
         self.telemetryRouteByURL[fileURL] = route
         self.telemetryRoute = route
         self.telemetryEventMarkers = markers
+        self.telemetryAvailability = route.isEmpty ? .unavailable : .available
         self.debug(
           timeline == nil ? "telemetry unavailable for \(fileURL.lastPathComponent)" : "telemetry ready for \(fileURL.lastPathComponent)",
           category: "telemetry"

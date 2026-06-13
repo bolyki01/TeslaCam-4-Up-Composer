@@ -805,12 +805,17 @@ private struct IPadMapPage: View {
 
       if coordinates.isEmpty {
         VStack(spacing: TeslaCamTheme.Spacing.s) {
-          Text("No GPS events")
+          Text(state.telemetryAvailability == .unavailable ? "No telemetry" : "No GPS events")
             .font(TeslaCamTheme.Typography.body.weight(.semibold))
             .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
-          Text("This export has no located events.")
-            .font(TeslaCamTheme.Typography.monoSmall)
-            .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+          Text(
+            state.telemetryAvailability == .unavailable
+              ? "This footage has no embedded telemetry (GPS, speed, gear). Many HW3 cars record none."
+              : "This export has no located events."
+          )
+          .font(TeslaCamTheme.Typography.monoSmall)
+          .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+          .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .glassSurface(role: .panel, radius: TeslaCamTheme.Metrics.cardCorner)

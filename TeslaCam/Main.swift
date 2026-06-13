@@ -87,6 +87,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     revealItem.target = self
     fileMenuItem.submenu = fileMenu
 
+    // Playback menu — the macOS app previously had no keyboard transport at all.
+    let playbackMenuItem = NSMenuItem()
+    mainMenu.addItem(playbackMenuItem)
+    let playbackMenu = NSMenu(title: "Playback")
+    let leftArrow = String(utf16CodeUnits: [unichar(NSLeftArrowFunctionKey)], count: 1)
+    let rightArrow = String(utf16CodeUnits: [unichar(NSRightArrowFunctionKey)], count: 1)
+
+    let playItem = playbackMenu.addItem(withTitle: "Play/Pause", action: #selector(togglePlay), keyEquivalent: " ")
+    playItem.keyEquivalentModifierMask = []
+    playItem.target = self
+    let backItem = playbackMenu.addItem(withTitle: "Back 5s", action: #selector(stepBack), keyEquivalent: leftArrow)
+    backItem.keyEquivalentModifierMask = [.command]
+    backItem.target = self
+    let fwdItem = playbackMenu.addItem(withTitle: "Forward 5s", action: #selector(stepForward), keyEquivalent: rightArrow)
+    fwdItem.keyEquivalentModifierMask = [.command]
+    fwdItem.target = self
+    playbackMenu.addItem(NSMenuItem.separator())
+    let prevEventItem = playbackMenu.addItem(withTitle: "Previous Event", action: #selector(previousEvent), keyEquivalent: leftArrow)
+    prevEventItem.keyEquivalentModifierMask = [.command, .shift]
+    prevEventItem.target = self
+    let nextEventItem = playbackMenu.addItem(withTitle: "Next Event", action: #selector(nextEvent), keyEquivalent: rightArrow)
+    nextEventItem.keyEquivalentModifierMask = [.command, .shift]
+    nextEventItem.target = self
+    let restartItem = playbackMenu.addItem(withTitle: "Restart", action: #selector(restartPlayback), keyEquivalent: "0")
+    restartItem.keyEquivalentModifierMask = [.command]
+    restartItem.target = self
+    playbackMenuItem.submenu = playbackMenu
+
     NSApp.mainMenu = mainMenu
   }
 
@@ -108,6 +136,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
   @objc private func revealLastExport() {
     state.revealLastExport()
+  }
+
+  @objc private func togglePlay() {
+    state.togglePlay()
+  }
+
+  @objc private func stepBack() {
+    state.stepPlayback(by: -5)
+  }
+
+  @objc private func stepForward() {
+    state.stepPlayback(by: 5)
+  }
+
+  @objc private func previousEvent() {
+    state.jumpToNextEvent(direction: -1)
+  }
+
+  @objc private func nextEvent() {
+    state.jumpToNextEvent(direction: 1)
+  }
+
+  @objc private func restartPlayback() {
+    state.restart()
   }
 
   @objc private func showSettingsWindow() {
@@ -142,6 +194,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
       return state.exporter.isExporting
     case #selector(revealLastExport):
       return !state.exporter.exportHistory.isEmpty
+    case #selector(togglePlay), #selector(stepBack), #selector(stepForward), #selector(restartPlayback):
+      return !state.clipSets.isEmpty
+    case #selector(previousEvent), #selector(nextEvent):
+      return !state.eventSummaries.isEmpty
     default:
       return true
     }
