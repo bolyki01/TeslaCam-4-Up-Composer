@@ -2,7 +2,7 @@ import Foundation
 
 /// Pure helpers extracted from `AppState` for telemetry-derived computation.
 /// Kept as a value-namespace so it has no instance state and is trivially testable.
-enum TelemetryProcessor {
+nonisolated enum TelemetryProcessor {
   /// Builds a deduplicated route from a parsed telemetry timeline. Skips frames
   /// inside the same whole second and frames whose coordinate did not move.
   static func routePoints(from timeline: TelemetryTimeline) -> [TelemetryRoutePoint] {
@@ -230,7 +230,7 @@ enum TelemetryProcessor {
   }
 }
 
-struct TelemetryRouteFrame: Equatable, Hashable {
+nonisolated struct TelemetryRouteFrame: Equatable, Hashable {
   let seconds: Double
   let coordinate: TelemetryCoordinate
   let speedKmh: Double
@@ -238,7 +238,7 @@ struct TelemetryRouteFrame: Equatable, Hashable {
   let progress: Double
 }
 
-struct TelemetryRouteReplay {
+nonisolated struct TelemetryRouteReplay {
   let route: [TelemetryRoutePoint]
 
   init(route: [TelemetryRoutePoint]) {
@@ -378,7 +378,7 @@ struct TelemetryRouteReplay {
   }
 }
 
-enum TelemetryRouteStyle {
+nonisolated enum TelemetryRouteStyle {
   static func lineWidth(latitudeDelta: Double, longitudeDelta: Double) -> Double {
     let delta = max(latitudeDelta, longitudeDelta)
     switch delta {
@@ -396,7 +396,7 @@ enum TelemetryRouteStyle {
   }
 }
 
-enum TelemetryRouteSignature {
+nonisolated enum TelemetryRouteSignature {
   static func route(_ route: [TelemetryRoutePoint]) -> String {
     route.map { point in
       "\(roundedString(point.seconds)):\(roundedString(point.coordinate.latitude)),\(roundedString(point.coordinate.longitude))"
@@ -412,7 +412,7 @@ enum TelemetryRouteSignature {
   }
 }
 
-private struct EventJSON: Decodable {
+nonisolated private struct EventJSON: Decodable {
   let timestamp: String?
   let city: String?
   let street: String?
@@ -433,6 +433,10 @@ private struct EventJSON: Decodable {
 
   var parsedTimestamp: Date? {
     guard let timestamp else { return nil }
-    return TeslaCamFormatters.eventTimestamp.date(from: timestamp)
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone.current
+    formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+    return formatter.date(from: timestamp)
   }
 }

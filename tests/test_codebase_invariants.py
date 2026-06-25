@@ -221,6 +221,30 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         timeline_source = source[start:end]
         self.assertIn(".frame(height: 56)", timeline_source)
 
+    def test_timeline_track_surfaces_event_markers_for_scrubbing(self):
+        # Justification: the seeker must give incident anchors while
+        # scrubbing instead of being an undifferentiated bar. Keep this
+        # bounded and visual-only so it does not affect playback logic.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        start = source.index("private struct TimelineSelectionTrack")
+        end = source.index("private struct TimelineGapBand", start)
+        timeline_source = source[start:end]
+        self.assertIn("let eventMarkers: [TelemetryEventMarker]", timeline_source)
+        self.assertIn("let eventMarkerOffsetSeconds: Double", timeline_source)
+        self.assertIn("eventMarkers.prefix(120)", timeline_source)
+        self.assertIn("markerColor(for: marker.kind)", timeline_source)
+        self.assertIn("allowsHitTesting(false)", timeline_source)
+
+    def test_export_action_label_uses_effective_preset(self):
+        # Justification: if overlays, reports, privacy masking, or
+        # camera cuts require rendered video, the action label must not
+        # still claim an original-track passthrough export.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        matches = re.findall(r'private var exportButtonTitle: String \{\s*"Export"', source)
+        self.assertEqual(len(matches), 2)
+        self.assertNotIn("state.exportPreset == .originalTracksMOV ? \"Export Original Tracks\"", source)
+        self.assertNotIn("\"Export Original Tracks\"", source)
+
     def test_ipad_export_panel_avoids_system_pill_controls(self):
         # Justification: export controls sit in the visible iPad
         # inspector. They should use the app's 10px chip controls, not
@@ -259,7 +283,7 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         self.assertIn(".padding(TeslaCamTheme.Spacing.s)", export_source)
         self.assertIn("GridItem(.flexible(), spacing: TeslaCamTheme.Spacing.xs)", export_source)
         self.assertIn("HStack(alignment: .center, spacing: TeslaCamTheme.Spacing.tightGap)", export_source)
-        self.assertIn(".frame(height: 28)", export_source)
+        self.assertIn(".frame(height: TeslaCamTheme.Metrics.compactControlHeight)", export_source)
         self.assertNotIn(".frame(minHeight: 44)", export_source)
 
     def test_ipad_inspector_typography_uses_theme_fonts(self):
@@ -385,7 +409,7 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         start = source.index("private struct IPadTimelineDock")
         end = source.index("private struct IPadRangeOptionsPanel", start)
         timeline_source = source[start:end]
-        self.assertIn('Button("30m")', timeline_source)
+        self.assertIn('Label("30m", systemImage:', timeline_source)
         self.assertIn('state.setRecentRange(minutes: 30)', timeline_source)
         self.assertIn('accessibilityIdentifier("range-last-30m")', timeline_source)
 

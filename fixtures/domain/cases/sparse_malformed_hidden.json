@@ -3,7 +3,7 @@
   "expected_layout": {
     "auto": {
       "canvas": {
-        "height": 2880,
+        "height": 1920,
         "width": 3840
       },
       "cells": {
@@ -11,37 +11,37 @@
           "height": 960,
           "width": 1280,
           "x": 1280,
-          "y": 960
+          "y": 0
         },
         "front": {
           "height": 960,
           "width": 1280,
-          "x": 1280,
+          "x": 0,
           "y": 0
         },
         "left": {
           "height": 960,
           "width": 1280,
-          "x": 0,
-          "y": 960
+          "x": 2560,
+          "y": 0
         },
         "left_pillar": {
           "height": 960,
           "width": 1280,
-          "x": 0,
-          "y": 1920
+          "x": 1280,
+          "y": 960
         },
         "right": {
           "height": 960,
           "width": 1280,
-          "x": 2560,
+          "x": 0,
           "y": 960
         },
         "right_pillar": {
           "height": 960,
           "width": 1280,
           "x": 2560,
-          "y": 1920
+          "y": 960
         }
       },
       "expected_cameras": [
@@ -117,7 +117,7 @@
     },
     "sixcam": {
       "canvas": {
-        "height": 2880,
+        "height": 1920,
         "width": 3840
       },
       "cells": {
@@ -125,37 +125,37 @@
           "height": 960,
           "width": 1280,
           "x": 1280,
-          "y": 960
+          "y": 0
         },
         "front": {
           "height": 960,
           "width": 1280,
-          "x": 1280,
+          "x": 0,
           "y": 0
         },
         "left": {
           "height": 960,
           "width": 1280,
-          "x": 0,
-          "y": 960
+          "x": 2560,
+          "y": 0
         },
         "left_pillar": {
           "height": 960,
           "width": 1280,
-          "x": 0,
-          "y": 1920
+          "x": 1280,
+          "y": 960
         },
         "right": {
           "height": 960,
           "width": 1280,
-          "x": 2560,
+          "x": 0,
           "y": 960
         },
         "right_pillar": {
           "height": 960,
           "width": 1280,
           "x": 2560,
-          "y": 1920
+          "y": 960
         }
       },
       "expected_cameras": [

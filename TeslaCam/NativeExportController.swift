@@ -6,7 +6,10 @@ import CoreGraphics
 import CoreText
 import CoreImage
 import ImageIO
+@preconcurrency import Metal
+import Synchronization
 import UniformTypeIdentifiers
+import VideoToolbox
 
 #if canImport(AppKit)
 import AppKit
@@ -195,7 +198,23 @@ struct ExportPreflight {
       warnings.append(ExportIssue(message: "Hidden cameras will export as black tiles: \(hiddenCameras.map(\.displayName).joined(separator: ", ")).", isBlocking: false))
     }
 
-    if plan.preset != .editFriendlyProRes,
+    if plan.preset == .originalTracksMOV {
+      if plan.overlayOptions.telemetryHUD
+          || plan.overlayOptions.routeMap
+          || plan.overlayOptions.privacyMask
+          || plan.overlayOptions.needsSidecars
+          || !plan.cameraTrack.isEmpty {
+        blocking.append(
+          ExportIssue(
+            message: "Original Tracks MOV preserves source video streams and cannot include overlays, reports, privacy masking, or camera cuts. Switch to an HEVC or ProRes preset for rendered output.",
+            isBlocking: true
+          )
+        )
+      }
+    }
+
+    if plan.preset != .originalTracksMOV,
+       plan.preset != .editFriendlyProRes,
        plan.canvasSize.width > Self.hevcEncoderMaxSidePixels || plan.canvasSize.height > Self.hevcEncoderMaxSidePixels {
       blocking.append(
         ExportIssue(
@@ -237,6 +256,8 @@ struct ExportPreflight {
     let seconds = max(1, plan.renderDuration)
     let bytesPerSecond: Double
     switch plan.preset {
+    case .originalTracksMOV:
+      bytesPerSecond = 6 * 1024 * 1024
     case .editFriendlyProRes:
       bytesPerSecond = 32 * 1024 * 1024
     case .maxQualityHEVC:
@@ -524,6 +545,33 @@ final class NativeExportController: ObservableObject {
         }
       }
 
+      if plan.preset == .originalTracksMOV {
+        appendLog("Mode: original camera tracks passthrough\n")
+        do {
+          try PassthroughMovieMuxer.export(
+            plan: plan,
+            shouldCancel: { self.cancelRequested },
+            progress: { progress in
+              self.runOnMain {
+                self.updateSession {
+                  $0.phase = .concatenating
+                  $0.phaseLabel = "Muxing original tracks"
+                  $0.completedDuration = plan.renderDuration * progress
+                  $0.progress = min(0.98, 0.10 + progress * 0.88)
+                }
+              }
+            }
+          )
+        } catch is PassthroughMovieMuxer.Cancelled {
+          throw ExportError.cancelled
+        }
+        try? fm.removeItem(at: tempRoot)
+        runOnMain {
+          self.finishCompleted(request: request, outputURL: plan.outputURL, renderDuration: plan.renderDuration)
+        }
+        return
+      }
+
       let frameProvider = TimelineFrameProvider(
         sets: plan.sets,
         trimStartDate: plan.trimStartDate,
@@ -535,7 +583,13 @@ final class NativeExportController: ObservableObject {
       appendLog("Graph: \(NativeFilterGraphSummary(plan: plan).description)\n")
       debug("layout cameras=\(layout.cameraOrder.map(\.rawValue).joined(separator: ",")) canvas=\(Int(layout.canvasSize.width))x\(Int(layout.canvasSize.height))", category: "export")
 
-      let writer = try NativeMovieWriter(outputURL: plan.outputURL, size: plan.canvasSize, preset: plan.preset)
+      // Match the render clock to the actual source frame rate instead of a
+      // hardcoded 30. Tesla HW3 footage is 24/36 fps depending on firmware; a
+      // 30 fps clock duplicates (24->30) or drops (36->30) ~1 frame in 6 and
+      // wastes encode on the duplicates.
+      let fps = self.sampleSourceFps(for: plan)
+      appendLog("Render fps: \(String(format: "%.3f", fps))\n")
+      let writer = try NativeMovieWriter(outputURL: plan.outputURL, size: plan.canvasSize, preset: plan.preset, frameRate: fps)
       try writer.start()
 
       runOnMain {
@@ -551,14 +605,9 @@ final class NativeExportController: ObservableObject {
         enabledCameras: plan.enabledCameras,
         overlayOptions: plan.overlayOptions
       )
-      // Match the render clock to the actual source frame rate instead of a
-      // hardcoded 30. Tesla HW3 footage is 24/36 fps depending on firmware; a
-      // 30 fps clock duplicates (24->30) or drops (36->30) ~1 frame in 6 and
-      // wastes encode on the duplicates.
-      let fps = self.sampleSourceFps(for: plan)
-      appendLog("Render fps: \(String(format: "%.3f", fps))\n")
       let frameCount = max(1, Int((frameProvider.totalDuration * fps).rounded(.up)))
       var renderedFrames = 0
+      var pendingFrame: PendingFrameBuffer?
 
       for frameIndex in 0..<frameCount {
         if cancelRequested {
@@ -597,18 +646,31 @@ final class NativeExportController: ObservableObject {
         }
 
         do {
-          let buffer = try composer.makeFrameBuffer(
-            at: context.localSeconds,
-            set: context.set,
-            cameraOverride: cameraOverride
-          )
-          try writer.append(buffer: buffer, at: CMTime(seconds: renderSeconds, preferredTimescale: 600))
+          try autoreleasepool {
+            let nextFrame = try composer.makePendingFrameBuffer(
+              at: context.localSeconds,
+              set: context.set,
+              cameraOverride: cameraOverride,
+              presentationTime: CMTime(seconds: renderSeconds, preferredTimescale: 600)
+            )
+            if let pendingFrame {
+              pendingFrame.complete()
+              try writer.append(buffer: pendingFrame.buffer, at: pendingFrame.presentationTime)
+              renderedFrames += 1
+            }
+            pendingFrame = nextFrame
+          }
         } catch {
           // A compose/encode failure mid-render: tear the writer down cleanly
           // and report it as an encoding failure (not "Unknown Failure").
           writer.cancel()
           throw ExportError.encoding(error.localizedDescription)
         }
+      }
+
+      if let pendingFrame {
+        pendingFrame.complete()
+        try writer.append(buffer: pendingFrame.buffer, at: pendingFrame.presentationTime)
         renderedFrames += 1
       }
 
@@ -629,29 +691,33 @@ final class NativeExportController: ObservableObject {
       try? fm.removeItem(at: tempRoot)
 
       runOnMain {
-        self.updateSession {
-          $0.phase = .completed
-          $0.phaseLabel = "Export complete"
-          $0.progress = 1.0
-          $0.finishedAt = Date()
-          $0.completedParts = request.totalParts
-          $0.completedDuration = renderDuration
-          $0.isTerminal = true
-          $0.canRevealOutput = true
-          $0.canRevealWorkingFiles = false
-          $0.tempRootURL = nil
-          $0.canRetry = true
-          $0.isIndeterminate = false
-        }
-        self.appendLog("\nDone: \(request.outputURL.path)\n")
-        self.appendStructuredLogEvent("export_completed", fields: ["output": request.outputURL.path])
-        self.debug("completed \(request.outputURL.lastPathComponent)", category: "export")
-        self.endOutputScope()
-        self.publishCurrentSession()
-        self.isStatusPresented = true
-        self.startNextQueuedExportIfIdle()
+        self.finishCompleted(request: request, outputURL: plan.outputURL, renderDuration: renderDuration)
       }
     }
+  }
+
+  private func finishCompleted(request: ExportRequest, outputURL: URL, renderDuration: Double) {
+    updateSession {
+      $0.phase = .completed
+      $0.phaseLabel = "Export complete"
+      $0.progress = 1.0
+      $0.finishedAt = Date()
+      $0.completedParts = request.totalParts
+      $0.completedDuration = renderDuration
+      $0.isTerminal = true
+      $0.canRevealOutput = true
+      $0.canRevealWorkingFiles = false
+      $0.tempRootURL = nil
+      $0.canRetry = true
+      $0.isIndeterminate = false
+    }
+    appendLog("\nDone: \(outputURL.path)\n")
+    appendStructuredLogEvent("export_completed", fields: ["output": outputURL.path])
+    debug("completed \(outputURL.lastPathComponent)", category: "export")
+    endOutputScope()
+    publishCurrentSession()
+    isStatusPresented = true
+    startNextQueuedExportIfIdle()
   }
 
   private func generateSidecarArtifacts(
@@ -846,6 +912,9 @@ final class NativeExportController: ObservableObject {
   private func sampleSourceFps(for plan: ExportPlan) -> Double {
     for set in plan.sets {
       for camera in plan.cameraOrder {
+        if let indexedFrameRate = set.frameRate(for: camera), indexedFrameRate >= 12, indexedFrameRate <= 60 {
+          return indexedFrameRate
+        }
         guard let url = set.files[camera] else { continue }
         if let fps = Self.probeNominalFrameRate(url: url), fps >= 12, fps <= 60 {
           return fps
@@ -1037,6 +1106,11 @@ private struct NativeFilterGraphSummary {
   let steps: [String]
 
   init(plan: ExportPlan) {
+    if plan.preset == .originalTracksMOV {
+      steps = ["read", "mux"]
+      return
+    }
+
     var steps = [
       "read",
       "scale",
@@ -1303,38 +1377,429 @@ private enum AssetVideoTrackLoader {
   }
 }
 
-private final class ExportImageResultBox: @unchecked Sendable {
-  nonisolated(unsafe) var image: CGImage?
-}
+/// Sequential per-clip frame decoder for export. Decodes BGRA frames in order
+/// with a single AVAssetReader instead of the per-frame random-access GOP
+/// decode the image-generator path did — that redundant decode was the export
+/// throughput ceiling. Synchronous: the export render loop is offline and walks
+/// frames in order, so blocking the worker is fine, and decoding each frame
+/// exactly once is dramatically cheaper than re-seeking a GOP per frame.
+nonisolated private final class SequentialExportDecoder: @unchecked Sendable {
+  let url: URL
+  private var reader: AVAssetReader?
+  private var output: AVAssetReaderTrackOutput?
+  private var pending: CMSampleBuffer?
+  private var lastTime: Double = -1
+  private var lastImage: CGImage?
 
-private actor ExportPreviewImageGeneratorBox {
-  private let generator: AVAssetImageGenerator
+  init(url: URL) { self.url = url }
 
-  init(asset: AVAsset, tolerance: CMTime) {
-    generator = AVAssetImageGenerator(asset: asset)
-    generator.appliesPreferredTrackTransform = true
-    generator.requestedTimeToleranceBefore = tolerance
-    generator.requestedTimeToleranceAfter = tolerance
+  /// The frame at/just-before `target` seconds. Advances the reader forward;
+  /// only a backward jump recreates it (rare in an offline forward render).
+  func image(at target: Double) -> CGImage? {
+    if reader == nil || target < lastTime - 0.001 {
+      recreate(at: target)
+    }
+    guard let output, let reader, reader.status == .reading else { return lastImage }
+    while true {
+      let sample = pending ?? output.copyNextSampleBuffer()
+      pending = nil
+      guard let sample else { break } // EOF: keep the last decoded frame
+      let pts = CMSampleBufferGetPresentationTimeStamp(sample).seconds
+      guard pts.isFinite else { continue }
+      if pts <= target + 1.0 / 120.0 {
+        lastTime = pts
+        if let pixelBuffer = CMSampleBufferGetImageBuffer(sample),
+           let image = Self.makeCGImage(from: pixelBuffer) {
+          lastImage = image
+        }
+      } else {
+        pending = sample // future frame; consume it on the next call
+        break
+      }
+    }
+    return lastImage
   }
 
-  func image(at time: CMTime) async -> CGImage? {
-    try? await generator.image(at: time).image
+  func tearDown() {
+    reader?.cancelReading()
+    reader = nil; output = nil; pending = nil; lastImage = nil
+  }
+
+  private func recreate(at seconds: Double) {
+    reader?.cancelReading()
+    reader = nil; output = nil; pending = nil; lastTime = -1
+    let asset = AVURLAsset(url: url)
+    guard let track = Self.loadFirstVideoTrack(asset),
+          let newReader = try? AVAssetReader(asset: asset) else { return }
+    let settings: [String: Any] = [
+      kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+    ]
+    let newOutput = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+    newOutput.alwaysCopiesSampleData = false
+    guard newReader.canAdd(newOutput) else { return }
+    newReader.add(newOutput)
+    if seconds > 0.05 {
+      newReader.timeRange = CMTimeRange(
+        start: CMTime(seconds: seconds, preferredTimescale: 600),
+        duration: .positiveInfinity
+      )
+    }
+    guard newReader.startReading() else { return }
+    reader = newReader
+    output = newOutput
+  }
+
+  private static func makeCGImage(from pixelBuffer: CVPixelBuffer) -> CGImage? {
+    CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+    let width = CVPixelBufferGetWidth(pixelBuffer)
+    let height = CVPixelBufferGetHeight(pixelBuffer)
+    guard width > 0, height > 0,
+          let base = CVPixelBufferGetBaseAddress(pixelBuffer),
+          let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+          let context = CGContext(
+            data: base, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer), space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+          ) else { return nil }
+    return context.makeImage()
+  }
+
+  private static func loadFirstVideoTrack(_ asset: AVURLAsset) -> AVAssetTrack? {
+    let semaphore = DispatchSemaphore(value: 0)
+    var result: AVAssetTrack?
+    Task.detached(priority: .userInitiated) {
+      result = try? await asset.loadTracks(withMediaType: .video).first
+      semaphore.signal()
+    }
+    semaphore.wait()
+    return result
   }
 }
 
-private struct FrameImageRequest {
+nonisolated private struct FrameImageRequest {
   let camera: Camera
   let url: URL
   let seconds: Double
   let rect: CGRect
 }
 
-private final class TimelineFrameComposer {
+nonisolated private struct PendingFrameBuffer {
+  let buffer: CVPixelBuffer
+  let presentationTime: CMTime
+  let complete: () -> Void
+}
+
+nonisolated private struct DecodedMetalFrame {
+  let texture: MTLTexture
+  let retainedTexture: CVMetalTexture
+}
+
+nonisolated private struct PendingMetalComposite {
+  let commandBuffer: MTLCommandBuffer
+  let retainedTextures: [CVMetalTexture]
+
+  func complete() {
+    _ = retainedTextures
+    commandBuffer.waitUntilCompleted()
+  }
+}
+
+/// Sequential per-clip decoder that yields zero-copy Metal textures for the GPU
+/// export compositor. Same sequential-read strategy as SequentialExportDecoder,
+/// but wraps each decoded BGRA frame as a CVMetalTextureCache texture instead of
+/// copying it into a CGImage — no CPU pixel copy.
+nonisolated private final class SequentialMetalDecoder: @unchecked Sendable {
+  let url: URL
+  private let textureCache: CVMetalTextureCache
+  private var reader: AVAssetReader?
+  private var output: AVAssetReaderTrackOutput?
+  private var pending: CMSampleBuffer?
+  private var lastTime: Double = -1
+  private var current: DecodedMetalFrame?
+
+  init(url: URL, textureCache: CVMetalTextureCache) {
+    self.url = url
+    self.textureCache = textureCache
+  }
+
+  func frame(at target: Double) -> DecodedMetalFrame? {
+    if reader == nil || target < lastTime - 0.001 {
+      recreate(at: target)
+    }
+    guard let output, let reader, reader.status == .reading else { return current }
+    while true {
+      let sample = pending ?? output.copyNextSampleBuffer()
+      pending = nil
+      guard let sample else { break }
+      let pts = CMSampleBufferGetPresentationTimeStamp(sample).seconds
+      guard pts.isFinite else { continue }
+      if pts <= target + 1.0 / 120.0 {
+        lastTime = pts
+        if let pixelBuffer = CMSampleBufferGetImageBuffer(sample),
+           let made = makeTexture(from: pixelBuffer) {
+          current = made
+        }
+      } else {
+        pending = sample
+        break
+      }
+    }
+    return current
+  }
+
+  func tearDown() {
+    reader?.cancelReading()
+    reader = nil; output = nil; pending = nil; current = nil
+  }
+
+  private func recreate(at seconds: Double) {
+    reader?.cancelReading()
+    reader = nil; output = nil; pending = nil; lastTime = -1
+    let asset = AVURLAsset(url: url)
+    guard let track = Self.loadFirstVideoTrack(asset),
+          let newReader = try? AVAssetReader(asset: asset) else { return }
+    let settings: [String: Any] = [
+      kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+      kCVPixelBufferMetalCompatibilityKey as String: true,
+      kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+    ]
+    let newOutput = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+    newOutput.alwaysCopiesSampleData = false
+    guard newReader.canAdd(newOutput) else { return }
+    newReader.add(newOutput)
+    if seconds > 0.05 {
+      newReader.timeRange = CMTimeRange(
+        start: CMTime(seconds: seconds, preferredTimescale: 600),
+        duration: .positiveInfinity
+      )
+    }
+    guard newReader.startReading() else { return }
+    reader = newReader
+    output = newOutput
+  }
+
+  private func makeTexture(from pixelBuffer: CVPixelBuffer) -> DecodedMetalFrame? {
+    let width = CVPixelBufferGetWidth(pixelBuffer)
+    let height = CVPixelBufferGetHeight(pixelBuffer)
+    guard width > 0, height > 0 else { return nil }
+    var cvTexture: CVMetalTexture?
+    let status = CVMetalTextureCacheCreateTextureFromImage(
+      kCFAllocatorDefault, textureCache, pixelBuffer, nil,
+      .bgra8Unorm, width, height, 0, &cvTexture
+    )
+    guard status == kCVReturnSuccess, let cvTexture,
+          let texture = CVMetalTextureGetTexture(cvTexture) else { return nil }
+    return DecodedMetalFrame(texture: texture, retainedTexture: cvTexture)
+  }
+
+  private static func loadFirstVideoTrack(_ asset: AVURLAsset) -> AVAssetTrack? {
+    let semaphore = DispatchSemaphore(value: 0)
+    var result: AVAssetTrack?
+    Task.detached(priority: .userInitiated) {
+      result = try? await asset.loadTracks(withMediaType: .video).first
+      semaphore.signal()
+    }
+    semaphore.wait()
+    return result
+  }
+}
+
+/// GPU export compositor: decodes each camera to a zero-copy Metal texture and
+/// composites the grid into the output pixel buffer with a single Metal render
+/// pass — replacing the CoreGraphics per-frame CPU composite. Decode (hardware
+/// VideoToolbox), composite (GPU), and encode (hardware HEVC) are all off the
+/// CPU; only the small HUD text overlay stays on CoreGraphics.
+nonisolated private final class MetalExportCompositor: @unchecked Sendable {
+  let device: MTLDevice
+  private let commandQueue: MTLCommandQueue
+  private let pipeline: MTLRenderPipelineState
+  private let sampler: MTLSamplerState
+  private let vertexBuffer: MTLBuffer
+  private let textureCache: CVMetalTextureCache
+  private var decoders: [URL: SequentialMetalDecoder] = [:]
+  private var activeDecoderURLs = Set<URL>()
+  private var compositeCount = 0
+
+  init?() {
+    guard let device = MTLCreateSystemDefaultDevice(),
+          let queue = device.makeCommandQueue(),
+          let library = Self.loadLibrary(device: device),
+          let vertexFunc = library.makeFunction(name: "vertex_main"),
+          let fragFunc = library.makeFunction(name: "fragment_main") else { return nil }
+
+    let descriptor = MTLRenderPipelineDescriptor()
+    descriptor.vertexFunction = vertexFunc
+    descriptor.fragmentFunction = fragFunc
+    descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+    guard let pipeline = try? device.makeRenderPipelineState(descriptor: descriptor) else { return nil }
+
+    let samplerDesc = MTLSamplerDescriptor()
+    samplerDesc.minFilter = .linear
+    samplerDesc.magFilter = .linear
+    samplerDesc.sAddressMode = .clampToEdge
+    samplerDesc.tAddressMode = .clampToEdge
+    guard let sampler = device.makeSamplerState(descriptor: samplerDesc) else { return nil }
+
+    // Same fullscreen quad + texcoords as the on-screen renderer, so the
+    // offscreen orientation matches the preview.
+    let quad: [Float] = [
+      -1, -1, 0, 1,
+       1, -1, 1, 1,
+      -1,  1, 0, 0,
+       1, -1, 1, 1,
+       1,  1, 1, 0,
+      -1,  1, 0, 0
+    ]
+    guard let vertexBuffer = device.makeBuffer(bytes: quad, length: quad.count * MemoryLayout<Float>.size, options: []) else { return nil }
+
+    var cache: CVMetalTextureCache?
+    guard CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &cache) == kCVReturnSuccess, let cache else { return nil }
+
+    self.device = device
+    self.commandQueue = queue
+    self.pipeline = pipeline
+    self.sampler = sampler
+    self.vertexBuffer = vertexBuffer
+    self.textureCache = cache
+  }
+
+  /// Composites the requested cameras into `outputBuffer`. Returns nil if the
+  /// buffer can't be wrapped, in which case the caller uses the CPU path.
+  func composite(
+    requests: [FrameImageRequest],
+    canvasSize: CGSize,
+    into outputBuffer: CVPixelBuffer
+  ) -> PendingMetalComposite? {
+    let width = CVPixelBufferGetWidth(outputBuffer)
+    let height = CVPixelBufferGetHeight(outputBuffer)
+    var cvTarget: CVMetalTexture?
+    guard CVMetalTextureCacheCreateTextureFromImage(
+      kCFAllocatorDefault, textureCache, outputBuffer, nil, .bgra8Unorm, width, height, 0, &cvTarget
+    ) == kCVReturnSuccess, let cvTarget, let target = CVMetalTextureGetTexture(cvTarget) else {
+      return nil
+    }
+
+    let active = Set(requests.map(\.url))
+    let decoderSetChanged = active != activeDecoderURLs
+    activeDecoderURLs = active
+    for url in decoders.keys where !active.contains(url) {
+      decoders.removeValue(forKey: url)?.tearDown()
+    }
+
+    let decoderRequests: [(decoder: SequentialMetalDecoder, request: FrameImageRequest)] = requests.map { request in
+      let decoder = decoders[request.url] ?? {
+        let d = SequentialMetalDecoder(url: request.url, textureCache: textureCache)
+        decoders[request.url] = d
+        return d
+      }()
+      return (decoder, request)
+    }
+
+    var draws: [(index: Int, frame: DecodedMetalFrame, viewport: MTLViewport)] = []
+    draws.reserveCapacity(decoderRequests.count)
+    if decoderRequests.count == 1 {
+      let item = decoderRequests[0]
+      if let frame = item.decoder.frame(at: item.request.seconds) {
+        draws.append((
+          index: 0,
+          frame: frame,
+          viewport: aspectFitViewport(
+            cell: item.request.rect,
+            textureWidth: frame.texture.width,
+            textureHeight: frame.texture.height
+          )
+        ))
+      }
+    } else if !decoderRequests.isEmpty {
+      let drawLock = NSLock()
+      DispatchQueue.concurrentPerform(iterations: decoderRequests.count) { index in
+        let item = decoderRequests[index]
+        guard let frame = item.decoder.frame(at: item.request.seconds) else { return }
+        let draw = (
+          index: index,
+          frame: frame,
+          viewport: aspectFitViewport(
+            cell: item.request.rect,
+            textureWidth: frame.texture.width,
+            textureHeight: frame.texture.height
+          )
+        )
+        drawLock.lock()
+        draws.append(draw)
+        drawLock.unlock()
+      }
+      draws.sort { $0.index < $1.index }
+    }
+
+    let pass = MTLRenderPassDescriptor()
+    pass.colorAttachments[0].texture = target
+    pass.colorAttachments[0].loadAction = .clear
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
+    pass.colorAttachments[0].storeAction = .store
+    guard let commandBuffer = commandQueue.makeCommandBuffer(),
+          let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
+      return nil
+    }
+    encoder.setRenderPipelineState(pipeline)
+    encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
+    encoder.setFragmentSamplerState(sampler, index: 0)
+    for draw in draws {
+      encoder.setViewport(draw.viewport)
+      encoder.setFragmentTexture(draw.frame.texture, index: 0)
+      encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+    }
+    encoder.endEncoding()
+    commandBuffer.commit()
+    compositeCount += 1
+    if decoderSetChanged || compositeCount.isMultiple(of: 120) {
+      CVMetalTextureCacheFlush(textureCache, 0)
+    }
+    return PendingMetalComposite(
+      commandBuffer: commandBuffer,
+      retainedTextures: draws.map { $0.frame.retainedTexture }
+    )
+  }
+
+  /// Aspect-fit a source texture into a canvas cell, returning the Metal
+  /// viewport (top-left origin, matching the canvas cell coordinates).
+  private func aspectFitViewport(cell: CGRect, textureWidth: Int, textureHeight: Int) -> MTLViewport {
+    guard textureWidth > 0, textureHeight > 0, cell.width > 0, cell.height > 0 else {
+      return MTLViewport(originX: Double(cell.minX), originY: Double(cell.minY), width: Double(cell.width), height: Double(cell.height), znear: 0, zfar: 1)
+    }
+    let sourceAspect = Double(textureWidth) / Double(textureHeight)
+    let cellAspect = Double(cell.width) / Double(cell.height)
+    if sourceAspect > cellAspect {
+      let fittedHeight = Double(cell.width) / sourceAspect
+      let yInset = (Double(cell.height) - fittedHeight) / 2
+      return MTLViewport(originX: Double(cell.minX), originY: Double(cell.minY) + yInset, width: Double(cell.width), height: fittedHeight, znear: 0, zfar: 1)
+    } else {
+      let fittedWidth = Double(cell.height) * sourceAspect
+      let xInset = (Double(cell.width) - fittedWidth) / 2
+      return MTLViewport(originX: Double(cell.minX) + xInset, originY: Double(cell.minY), width: fittedWidth, height: Double(cell.height), znear: 0, zfar: 1)
+    }
+  }
+
+  private static func loadLibrary(device: MTLDevice) -> MTLLibrary? {
+    let bundle = Bundle.main
+    guard let url = bundle.url(forResource: "MetalShaders", withExtension: "metal"),
+          let source = try? String(contentsOf: url, encoding: .utf8),
+          let library = try? device.makeLibrary(source: source, options: nil) else {
+      return device.makeDefaultLibrary()
+    }
+    return library
+  }
+}
+
+nonisolated private final class TimelineFrameComposer: @unchecked Sendable {
   let layout: TimelineFrameLayout
   let enabledCameras: Set<Camera>
   let overlayOptions: ExportOverlayOptions
-  private var generators: [URL: ExportPreviewImageGeneratorBox] = [:]
+  private var exportDecoders: [URL: SequentialExportDecoder] = [:]
   private var lastImages: [URL: CGImage] = [:]
+  // GPU compositor — composites the camera grid on the GPU. nil when no Metal
+  // device is available, in which case the CoreGraphics CPU path is used.
+  private let metalCompositor: MetalExportCompositor?
   private var telemetryCache: [URL: TelemetryTimeline] = [:]
   private var telemetryFailures = Set<URL>()
   private var routeCache: [URL: [TelemetryRoutePoint]] = [:]
@@ -1344,6 +1809,7 @@ private final class TimelineFrameComposer {
     self.layout = layout
     self.enabledCameras = enabledCameras
     self.overlayOptions = overlayOptions
+    self.metalCompositor = MetalExportCompositor()
     let width = Int(layout.canvasSize.width.rounded(.up))
     let height = Int(layout.canvasSize.height.rounded(.up))
     let poolAttributes: [String: Any] = [
@@ -1354,6 +1820,7 @@ private final class TimelineFrameComposer {
       kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
       kCVPixelBufferMetalCompatibilityKey as String: true,
       kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+      kCVPixelBufferIOSurfacePropertiesKey as String: [:],
       kCVPixelBufferWidthKey as String: width,
       kCVPixelBufferHeightKey as String: height
     ]
@@ -1368,6 +1835,22 @@ private final class TimelineFrameComposer {
   }
 
   func makeFrameBuffer(at localSeconds: Double, set: ClipSet?, cameraOverride: Camera? = nil) throws -> CVPixelBuffer {
+    let pending = try makePendingFrameBuffer(
+      at: localSeconds,
+      set: set,
+      cameraOverride: cameraOverride,
+      presentationTime: .zero
+    )
+    pending.complete()
+    return pending.buffer
+  }
+
+  func makePendingFrameBuffer(
+    at localSeconds: Double,
+    set: ClipSet?,
+    cameraOverride: Camera? = nil,
+    presentationTime: CMTime
+  ) throws -> PendingFrameBuffer {
     let width = Int(layout.canvasSize.width.rounded(.up))
     let height = Int(layout.canvasSize.height.rounded(.up))
     let attributes: [String: Any] = [
@@ -1387,12 +1870,37 @@ private final class TimelineFrameComposer {
       throw NSError(domain: "TeslaCam", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate frame buffer."])
     }
 
+    let (imageRequests, drawFocusCamera, focusRect) = frameImageRequests(
+      set: set, localSeconds: localSeconds, cameraOverride: cameraOverride
+    )
+
+    // GPU path: composite the camera grid with Metal (no CPU pixel work), then
+    // draw only the overlay (small HUD/timestamp text) with CoreGraphics.
+    if let metalCompositor,
+       let composite = metalCompositor.composite(requests: imageRequests, canvasSize: layout.canvasSize, into: buffer) {
+      return PendingFrameBuffer(buffer: buffer, presentationTime: presentationTime) { [weak self] in
+        composite.complete()
+        guard let self else { return }
+        if set != nil, overlayOptions.privacyMask || overlayOptions.needsTelemetry {
+          withCGContext(for: buffer, width: width, height: height) { context in
+            self.drawOverlays(
+              in: context,
+              set: set,
+              localSeconds: localSeconds,
+              drawFocusCamera: drawFocusCamera,
+              focusRect: focusRect
+            )
+          }
+        }
+      }
+    }
+
+    // CPU fallback: CoreGraphics composite + overlay.
     CVPixelBufferLockBaseAddress(buffer, [])
     defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
     guard let baseAddress = CVPixelBufferGetBaseAddress(buffer) else {
       throw NSError(domain: "TeslaCam", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to access frame buffer."])
     }
-
     guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else {
       throw NSError(domain: "TeslaCam", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to create color space."])
     }
@@ -1411,36 +1919,8 @@ private final class TimelineFrameComposer {
     context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
     context.fill(CGRect(origin: .zero, size: layout.canvasSize))
 
-    guard let set else {
-      return buffer
-    }
-
-    let focusRect = CGRect(origin: .zero, size: layout.canvasSize)
-    let drawFocusCamera = cameraOverride.flatMap { camera in
-      enabledCameras.contains(camera) && set.file(for: camera) != nil ? camera : nil
-    }
-
-    let imageRequests: [FrameImageRequest]
-    if let camera = drawFocusCamera, let url = set.file(for: camera) {
-      if let duration = set.duration(for: camera), localSeconds > duration + (1.0 / 30.0) {
-        return buffer
-      }
-      imageRequests = [FrameImageRequest(camera: camera, url: url, seconds: localSeconds, rect: focusRect)]
-    } else {
-      var requests: [FrameImageRequest] = []
-      requests.reserveCapacity(layout.cameraOrder.count)
-      for camera in layout.cameraOrder {
-        guard enabledCameras.contains(camera),
-              let rect = layout.boundsByCamera[camera],
-              let url = set.file(for: camera) else {
-          continue
-        }
-        if let duration = set.duration(for: camera), localSeconds > duration + (1.0 / 30.0) {
-          continue
-        }
-        requests.append(FrameImageRequest(camera: camera, url: url, seconds: localSeconds, rect: rect))
-      }
-      imageRequests = requests
+    guard set != nil else {
+      return PendingFrameBuffer(buffer: buffer, presentationTime: presentationTime) {}
     }
 
     let images = images(for: imageRequests)
@@ -1449,7 +1929,41 @@ private final class TimelineFrameComposer {
       let fitted = AVMakeRect(aspectRatio: CGSize(width: image.width, height: image.height), insideRect: request.rect)
       context.draw(image, in: fitted)
     }
+    drawOverlays(in: context, set: set, localSeconds: localSeconds, drawFocusCamera: drawFocusCamera, focusRect: focusRect)
+    return PendingFrameBuffer(buffer: buffer, presentationTime: presentationTime) {}
+  }
 
+  /// The per-camera frame requests for `set` at `localSeconds`, plus the focus
+  /// camera and full-canvas rect used by the overlay. Cameras whose clip has
+  /// ended by `localSeconds` are dropped (rendered black).
+  private func frameImageRequests(
+    set: ClipSet?, localSeconds: Double, cameraOverride: Camera?
+  ) -> (requests: [FrameImageRequest], focusCamera: Camera?, focusRect: CGRect) {
+    let focusRect = CGRect(origin: .zero, size: layout.canvasSize)
+    guard let set else { return ([], nil, focusRect) }
+    let drawFocusCamera = cameraOverride.flatMap { camera in
+      enabledCameras.contains(camera) && set.file(for: camera) != nil ? camera : nil
+    }
+    if let camera = drawFocusCamera, let url = set.file(for: camera) {
+      if let duration = set.duration(for: camera), localSeconds > duration + (1.0 / 30.0) {
+        return ([], drawFocusCamera, focusRect)
+      }
+      return ([FrameImageRequest(camera: camera, url: url, seconds: localSeconds, rect: focusRect)], drawFocusCamera, focusRect)
+    }
+    var requests: [FrameImageRequest] = []
+    requests.reserveCapacity(layout.cameraOrder.count)
+    for camera in layout.cameraOrder {
+      guard enabledCameras.contains(camera),
+            let rect = layout.boundsByCamera[camera],
+            let url = set.file(for: camera) else { continue }
+      if let duration = set.duration(for: camera), localSeconds > duration + (1.0 / 30.0) { continue }
+      requests.append(FrameImageRequest(camera: camera, url: url, seconds: localSeconds, rect: rect))
+    }
+    return (requests, nil, focusRect)
+  }
+
+  private func drawOverlays(in context: CGContext, set: ClipSet?, localSeconds: Double, drawFocusCamera: Camera?, focusRect: CGRect) {
+    guard let set else { return }
     if overlayOptions.privacyMask {
       ExportOverlayDrawing.drawPrivacyMask(
         context: context,
@@ -1457,7 +1971,6 @@ private final class TimelineFrameComposer {
         tileRects: drawFocusCamera == nil ? layout.boundsByCamera.values.map { $0 } : [focusRect]
       )
     }
-
     if overlayOptions.needsTelemetry {
       let telemetryURL = telemetrySourceURL(for: set)
       let timeline = telemetryURL.flatMap { telemetryTimeline(for: $0) }
@@ -1474,8 +1987,21 @@ private final class TimelineFrameComposer {
         canvasSize: layout.canvasSize
       )
     }
+  }
 
-    return buffer
+  /// Runs `body` with a CoreGraphics context bound to `buffer` (locked for the
+  /// duration), for drawing the overlay on top of the GPU-composited frame.
+  private func withCGContext(for buffer: CVPixelBuffer, width: Int, height: Int, _ body: (CGContext) -> Void) {
+    CVPixelBufferLockBaseAddress(buffer, [])
+    defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+    guard let baseAddress = CVPixelBufferGetBaseAddress(buffer),
+          let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+          let context = CGContext(
+            data: baseAddress, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: CVPixelBufferGetBytesPerRow(buffer), space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+          ) else { return }
+    body(context)
   }
 
   private func telemetrySourceURL(for set: ClipSet) -> URL? {
@@ -1514,83 +2040,56 @@ private final class TimelineFrameComposer {
 
   private func images(for requests: [FrameImageRequest]) -> [Camera: CGImage] {
     guard !requests.isEmpty else { return [:] }
-    struct PreparedRequest {
-      let request: FrameImageRequest
-      let generator: ExportPreviewImageGeneratorBox
-      let attempts: [Double]
-      let fallback: CGImage?
+
+    // Release decoders for clips the render has advanced past.
+    let activeURLs = Set(requests.map(\.url))
+    for url in exportDecoders.keys where !activeURLs.contains(url) {
+      exportDecoders.removeValue(forKey: url)?.tearDown()
     }
-    let prepared = requests.map { request in
-      PreparedRequest(
-        request: request,
-        generator: generator(for: request.url),
-        attempts: [
-          max(0, request.seconds),
-          max(0, request.seconds - 0.10),
-          max(0, request.seconds - 0.25)
-        ],
-        fallback: lastImages[request.url]
-      )
+
+    // Decode each unique clip URL once (cameras in a frame share one time),
+    // creating decoders up front so the worker closures never mutate the map.
+    var secondsByURL: [URL: Double] = [:]
+    var camerasByURL: [URL: [Camera]] = [:]
+    for request in requests {
+      secondsByURL[request.url] = max(0, request.seconds)
+      camerasByURL[request.url, default: []].append(request.camera)
+      if exportDecoders[request.url] == nil {
+        exportDecoders[request.url] = SequentialExportDecoder(url: request.url)
+      }
     }
 
     let group = DispatchGroup()
     let lock = NSLock()
-    var results: [Camera: (url: URL, image: CGImage)] = [:]
-
-    for item in prepared {
+    var imageByURL: [URL: CGImage] = [:]
+    for (url, seconds) in secondsByURL {
+      guard let decoder = exportDecoders[url] else { continue }
       group.enter()
       DispatchQueue.global(qos: .userInitiated).async {
-        let image = self.image(from: item.generator, attempts: item.attempts) ?? item.fallback
-        if let image {
-          lock.lock()
-          results[item.request.camera] = (item.request.url, image)
-          lock.unlock()
+        let decoded = decoder.image(at: seconds)
+        lock.lock()
+        if let decoded {
+          imageByURL[url] = decoded
+          self.lastImages[url] = decoded
+        } else if let fallback = self.lastImages[url] {
+          imageByURL[url] = fallback // keep the last good frame on a decode miss
         }
+        lock.unlock()
         group.leave()
       }
     }
     group.wait()
 
-    for (_, result) in results {
-      lastImages[result.url] = result.image
+    var results: [Camera: CGImage] = [:]
+    for (url, cameras) in camerasByURL {
+      guard let image = imageByURL[url] else { continue }
+      for camera in cameras { results[camera] = image }
     }
-    return results.mapValues(\.image)
-  }
-
-  private func image(from generator: ExportPreviewImageGeneratorBox, attempts: [Double]) -> CGImage? {
-    for candidate in attempts {
-      if let image = waitForImage(from: generator, at: CMTime(seconds: candidate, preferredTimescale: 600)) {
-        return image
-      }
-    }
-    return nil
-  }
-
-  private func generator(for url: URL) -> ExportPreviewImageGeneratorBox {
-    let generator = generators[url] ?? {
-      let asset = AVURLAsset(url: url)
-      // Tesla clips can fail exact-frame decode; allow nearest-frame lookup.
-      let tolerance = CMTime(seconds: 0.15, preferredTimescale: 600)
-      let generator = ExportPreviewImageGeneratorBox(asset: asset, tolerance: tolerance)
-      generators[url] = generator
-      return generator
-    }()
-    return generator
-  }
-
-  private func waitForImage(from generator: ExportPreviewImageGeneratorBox, at time: CMTime) -> CGImage? {
-    let semaphore = DispatchSemaphore(value: 0)
-    let resultBox = ExportImageResultBox()
-    Task.detached(priority: .userInitiated) {
-      resultBox.image = await generator.image(at: time)
-      semaphore.signal()
-    }
-    semaphore.wait()
-    return resultBox.image
+    return results
   }
 }
 
-private enum ExportOverlayDrawing {
+nonisolated private enum ExportOverlayDrawing {
   private static let dateFormatter: DateFormatter = {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -1621,73 +2120,58 @@ private enum ExportOverlayDrawing {
     }
 
     guard options.telemetryHUD else { return }
-    drawTimestampOverlay(date: timestamp, context: context, canvasSize: canvasSize)
 
-    let panelHeight: CGFloat = options.telemetryHUDMode == .minimal ? 92 : 174
-    let panel = CGRect(x: 26, y: 26, width: min(560, canvasSize.width * 0.36), height: panelHeight)
+    let panelHeight: CGFloat = options.telemetryHUDMode == .minimal ? 118 : 208
+    let panel = CGRect(x: 26, y: 26, width: min(680, canvasSize.width * 0.42), height: panelHeight)
     context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.58))
     context.fill(panel)
     context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.16))
     context.stroke(panel, width: 1)
 
-    let lines: [String]
+    let timestampText = "\(ExportOverlayDrawing.dateFormatter.string(from: timestamp))  \(ExportOverlayDrawing.timeFormatter.string(from: timestamp))"
+    let rows: [(symbol: String, text: String, emphasized: Bool)]
     if let telemetry {
       switch options.telemetryHUDMode {
       case .minimal:
-        lines = [
-          "\(telemetry.speedText(unit: options.speedUnit))   Gear \(telemetry.gear)",
-          "AP \(telemetry.autopilot)   Brake \(telemetry.brakeApplied ? "On" : "Off")"
+        rows = [
+          ("calendar", timestampText, true),
+          ("speedometer", "\(telemetry.speedText(unit: options.speedUnit))   Gear \(telemetry.gear)", false),
+          ("pedal.brake", "AP \(telemetry.autopilot)   Brake \(telemetry.brakeApplied ? "On" : "Off")", false)
         ]
       case .detailed:
-        lines = [
-          "Speed  \(telemetry.speedText(unit: options.speedUnit))",
-          "Pedal  \(telemetry.acceleratorText)    Brake  \(telemetry.brakeApplied ? "On" : "Off")",
-          "Steer  \(telemetry.steeringText)    Gear  \(telemetry.gear)",
-          "AP     \(telemetry.autopilot)",
-          "Head   \(telemetry.headingText)"
+        rows = [
+          ("calendar", timestampText, true),
+          ("speedometer", "Speed \(telemetry.speedText(unit: options.speedUnit))    Pedal \(telemetry.acceleratorText)", false),
+          ("pedal.brake", "Brake \(telemetry.brakeApplied ? "On" : "Off")    Gear \(telemetry.gear)    AP \(telemetry.autopilot)", false),
+          ("steeringwheel", "Steer \(telemetry.steeringText)    Heading \(telemetry.headingText)", false),
+          ("location", "GPS \(telemetry.locationText)", false),
+          ("arrow.triangle.turn.up.right.diamond", "Signal \(telemetry.signalText)    G \(telemetry.gForceText)", false)
         ]
       }
     } else {
-      lines = [
-        "No Tesla telemetry",
-        "Speed/AP unavailable for this clip"
+      rows = [
+        ("calendar", timestampText, true),
+        ("speedometer", "No Tesla telemetry", false),
+        ("location.slash", "Speed, pedal, GPS and AP unavailable for this clip", false)
       ]
     }
-    for (index, line) in lines.enumerated() {
+    for (index, row) in rows.enumerated() {
+      let y = panel.minY + 16 + CGFloat(index * 29)
+      drawSymbol(
+        row.symbol,
+        in: CGRect(x: panel.minX + 18, y: y + 2, width: 18, height: 18),
+        context: context,
+        color: CGColor(red: 1, green: 1, blue: 1, alpha: row.emphasized ? 0.95 : 0.70)
+      )
       drawText(
-        line,
-        in: CGRect(x: panel.minX + 18, y: panel.minY + 18 + CGFloat(index * 28), width: panel.width - 36, height: 24),
+        row.text,
+        in: CGRect(x: panel.minX + 44, y: y, width: panel.width - 62, height: 24),
         context: context,
         canvasHeight: canvasSize.height,
-        size: index == 0 ? 23 : 17,
-        color: CGColor(red: 1, green: 1, blue: 1, alpha: index == 0 ? 0.95 : 0.78)
+        size: row.emphasized ? 19 : 16,
+        color: CGColor(red: 1, green: 1, blue: 1, alpha: row.emphasized ? 0.95 : 0.78)
       )
     }
-  }
-
-  private static func drawTimestampOverlay(date: Date, context: CGContext, canvasSize: CGSize) {
-    let panel = CGRect(x: 26, y: max(26, canvasSize.height - 104), width: min(360, canvasSize.width * 0.30), height: 78)
-    context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.58))
-    context.fill(panel)
-    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.16))
-    context.stroke(panel, width: 1)
-
-    drawText(
-      ExportOverlayDrawing.dateFormatter.string(from: date),
-      in: CGRect(x: panel.minX + 16, y: panel.minY + 14, width: panel.width - 32, height: 24),
-      context: context,
-      canvasHeight: canvasSize.height,
-      size: 18,
-      color: CGColor(red: 1, green: 1, blue: 1, alpha: 0.95)
-    )
-    drawText(
-      ExportOverlayDrawing.timeFormatter.string(from: date),
-      in: CGRect(x: panel.minX + 16, y: panel.minY + 42, width: panel.width - 32, height: 24),
-      context: context,
-      canvasHeight: canvasSize.height,
-      size: 19,
-      color: CGColor(red: 1, green: 1, blue: 1, alpha: 0.78)
-    )
   }
 
   static func drawPrivacyMask(context: CGContext, canvasSize: CGSize, tileRects: [CGRect]) {
@@ -1785,6 +2269,22 @@ private enum ExportOverlayDrawing {
     size: CGFloat,
     color: CGColor
   ) {
+    #if canImport(AppKit)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.lineBreakMode = .byTruncatingTail
+    let attributed = NSAttributedString(
+      string: text,
+      attributes: [
+        .font: NSFont.monospacedSystemFont(ofSize: size, weight: .semibold),
+        .foregroundColor: NSColor(cgColor: color) ?? .white,
+        .paragraphStyle: paragraph
+      ]
+    )
+    attributed.draw(in: rect)
+    NSGraphicsContext.restoreGraphicsState()
+    #else
     context.saveGState()
     context.textMatrix = .identity
     context.translateBy(x: 0, y: canvasHeight)
@@ -1802,6 +2302,186 @@ private enum ExportOverlayDrawing {
     let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: attributed.length), path, nil)
     CTFrameDraw(frame, context)
     context.restoreGState()
+    #endif
+  }
+
+  private static func drawSymbol(
+    _ name: String,
+    in rect: CGRect,
+    context: CGContext,
+    color: CGColor
+  ) {
+    #if canImport(AppKit)
+    guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return }
+    image.isTemplate = true
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+    (NSColor(cgColor: color) ?? .white).set()
+    image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.88)
+    NSGraphicsContext.restoreGraphicsState()
+    #endif
+  }
+}
+
+nonisolated private enum PassthroughMovieMuxer {
+  struct Cancelled: Error {}
+
+  private struct SourceTrack {
+    let track: AVAssetTrack
+    let preferredTransform: CGAffineTransform
+  }
+
+  static func export(
+    plan: ExportPlan,
+    shouldCancel: @escaping () -> Bool,
+    progress: @escaping (Double) -> Void
+  ) throws {
+    let completionState = Mutex((didFinish: false, result: Optional<Result<Void, Error>>.none))
+    let exportTask = Task.detached(priority: .userInitiated) {
+      do {
+        try await exportAsync(plan: plan, shouldCancel: shouldCancel, progress: progress)
+        completionState.withLock {
+          $0.result = .success(())
+          $0.didFinish = true
+        }
+      } catch {
+        completionState.withLock {
+          $0.result = .failure(error)
+          $0.didFinish = true
+        }
+      }
+    }
+
+    defer {
+      exportTask.cancel()
+    }
+
+    while true {
+      let finished = completionState.withLock { $0.didFinish }
+      if finished {
+        break
+      }
+      if shouldCancel() {
+        exportTask.cancel()
+        throw Cancelled()
+      }
+      progress(0.65)
+      Thread.sleep(forTimeInterval: 0.05)
+    }
+
+    let result = completionState.withLock { $0.result }
+
+    switch result {
+    case .success:
+      progress(1)
+    case .failure(let error):
+      if (error as NSError).code == NSUserCancelledError || shouldCancel() {
+        throw Cancelled()
+      }
+      throw error
+    case nil:
+      throw NSError(domain: "TeslaCam", code: 16, userInfo: [NSLocalizedDescriptionKey: "Passthrough export did not complete."])
+    }
+  }
+
+  private static func exportAsync(
+    plan: ExportPlan,
+    shouldCancel: @escaping () -> Bool,
+    progress: @escaping (Double) -> Void
+  ) async throws {
+    if FileManager.default.fileExists(atPath: plan.outputURL.path) {
+      try FileManager.default.removeItem(at: plan.outputURL)
+    }
+
+    let composition = AVMutableComposition()
+    var tracksByCamera: [Camera: AVMutableCompositionTrack] = [:]
+    let orderedCameras = Camera.mixedOrder.filter { plan.enabledCameras.contains($0) }
+    var renderCursor = CMTime.zero
+    var insertedSegmentCount = 0
+
+    for (index, set) in plan.sets.enumerated() {
+      if shouldCancel() {
+        throw Cancelled()
+      }
+
+      let segmentStartDate = max(set.date, plan.trimStartDate)
+      let segmentEndDate = min(set.endDate, plan.trimEndDate)
+      let segmentDurationSeconds = segmentEndDate.timeIntervalSince(segmentStartDate)
+      guard segmentDurationSeconds > 0 else { continue }
+
+      let sourceStartSeconds = max(0, segmentStartDate.timeIntervalSince(set.date))
+      for camera in orderedCameras {
+        guard let url = set.file(for: camera) else { continue }
+        let cameraDuration = set.duration(for: camera) ?? set.duration
+        let availableDuration = max(0, cameraDuration - sourceStartSeconds)
+        let durationSeconds = min(segmentDurationSeconds, availableDuration)
+        guard durationSeconds > 0 else { continue }
+
+        let asset = AVURLAsset(url: url)
+        guard let source = await loadFirstVideoTrack(from: asset) else { continue }
+        let compositionTrack: AVMutableCompositionTrack
+        if let existing = tracksByCamera[camera] {
+          compositionTrack = existing
+        } else {
+          guard let created = composition.addMutableTrack(
+            withMediaType: .video,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+          ) else {
+            throw NSError(domain: "TeslaCam", code: 12, userInfo: [NSLocalizedDescriptionKey: "Failed to create passthrough video track."])
+          }
+          created.preferredTransform = source.preferredTransform
+          tracksByCamera[camera] = created
+          compositionTrack = created
+        }
+
+        let timeRange = CMTimeRange(
+          start: CMTime(seconds: sourceStartSeconds, preferredTimescale: 600),
+          duration: CMTime(seconds: durationSeconds, preferredTimescale: 600)
+        )
+        try compositionTrack.insertTimeRange(timeRange, of: source.track, at: renderCursor)
+        insertedSegmentCount += 1
+      }
+
+      renderCursor = renderCursor + CMTime(seconds: segmentDurationSeconds, preferredTimescale: 600)
+      progress(Double(index + 1) / Double(max(1, plan.sets.count)) * 0.35)
+    }
+
+    guard insertedSegmentCount > 0 else {
+      throw NSError(domain: "TeslaCam", code: 13, userInfo: [NSLocalizedDescriptionKey: "No readable source video tracks were available for passthrough export."])
+    }
+
+    guard let exportSession = AVAssetExportSession(
+      asset: composition,
+      presetName: AVAssetExportPresetPassthrough
+    ) else {
+      throw NSError(domain: "TeslaCam", code: 14, userInfo: [NSLocalizedDescriptionKey: "Passthrough export is not available for this composition."])
+    }
+
+    exportSession.shouldOptimizeForNetworkUse = false
+
+    do {
+      try await exportSession.export(to: plan.outputURL, as: .mov)
+    } catch {
+      if (error as NSError).code == NSUserCancelledError || shouldCancel() {
+        throw Cancelled()
+      }
+      throw error
+    }
+    if shouldCancel() {
+      exportSession.cancelExport()
+      throw Cancelled()
+    }
+    progress(1)
+  }
+
+  private static func loadFirstVideoTrack(from asset: AVURLAsset) async -> SourceTrack? {
+    do {
+      guard let track = try await asset.loadTracks(withMediaType: .video).first else { return nil }
+      let transform = try await track.load(.preferredTransform)
+      return SourceTrack(track: track, preferredTransform: transform)
+    } catch {
+      return nil
+    }
   }
 }
 
@@ -1810,7 +2490,7 @@ private final class NativeMovieWriter {
   private let input: AVAssetWriterInput
   private let adaptor: AVAssetWriterInputPixelBufferAdaptor
 
-  init(outputURL: URL, size: CGSize, preset: ExportPreset) throws {
+  init(outputURL: URL, size: CGSize, preset: ExportPreset, frameRate: Double = 30.0) throws {
     if FileManager.default.fileExists(atPath: outputURL.path) {
       try FileManager.default.removeItem(at: outputURL)
     }
@@ -1818,13 +2498,18 @@ private final class NativeMovieWriter {
 
     let codec: AVVideoCodecType
     let compression: [String: Any]
+    let requiresHardwareEncoder: Bool
     switch preset {
+    case .originalTracksMOV:
+      throw NSError(domain: "TeslaCam", code: 17, userInfo: [NSLocalizedDescriptionKey: "Original Tracks MOV uses passthrough export, not the native frame writer."])
     case .editFriendlyProRes:
       codec = .proRes422HQ
-      compression = preset.nativeCompressionProperties(for: size)
+      compression = preset.nativeCompressionProperties(for: size, frameRate: frameRate)
+      requiresHardwareEncoder = false
     case .maxQualityHEVC, .fastHEVC, .socialShareHEVC, .proxyHEVC:
       codec = .hevc
-      compression = preset.nativeCompressionProperties(for: size)
+      compression = preset.nativeCompressionProperties(for: size, frameRate: frameRate)
+      requiresHardwareEncoder = true
     }
 
     var settings: [String: Any] = [
@@ -1843,6 +2528,14 @@ private final class NativeMovieWriter {
     if !compression.isEmpty {
       settings[AVVideoCompressionPropertiesKey] = compression
     }
+    #if os(macOS)
+    if requiresHardwareEncoder {
+      settings[AVVideoEncoderSpecificationKey] = [
+        kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: true,
+        kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String: true
+      ]
+    }
+    #endif
 
     input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
     input.expectsMediaDataInRealTime = false
@@ -1851,6 +2544,8 @@ private final class NativeMovieWriter {
       assetWriterInput: input,
       sourcePixelBufferAttributes: [
         kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+        kCVPixelBufferMetalCompatibilityKey as String: true,
+        kCVPixelBufferIOSurfacePropertiesKey as String: [:],
         kCVPixelBufferWidthKey as String: Int(size.width.rounded(.up)),
         kCVPixelBufferHeightKey as String: Int(size.height.rounded(.up))
       ]
@@ -1871,7 +2566,10 @@ private final class NativeMovieWriter {
 
   func append(buffer: CVPixelBuffer, at time: CMTime) throws {
     while !input.isReadyForMoreMediaData {
-      Thread.sleep(forTimeInterval: 0.005)
+      if writer.status == .failed || writer.status == .cancelled {
+        throw NSError(domain: "TeslaCam", code: 7, userInfo: [NSLocalizedDescriptionKey: writer.error?.localizedDescription ?? "Writer stopped before accepting the next frame."])
+      }
+      Thread.sleep(forTimeInterval: 0.001)
     }
     guard adaptor.append(buffer, withPresentationTime: time) else {
       throw NSError(domain: "TeslaCam", code: 7, userInfo: [NSLocalizedDescriptionKey: writer.error?.localizedDescription ?? "Failed to append frame."])

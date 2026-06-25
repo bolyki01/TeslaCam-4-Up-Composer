@@ -41,7 +41,7 @@ struct TimelineStore {
     }
 
     clipSets = sets
-    coverage = TimelineCoverageMap(sets: sets)
+    coverage = TimelineCoverageMap(sets: sets, scale: .recordedClips)
     totalDuration = coverage.totalDuration
     gapRanges = coverage.gapRanges(minimumDuration: 5)
     self.minDate = minDate ?? coverage.date(forGlobalSeconds: 0)
@@ -299,6 +299,7 @@ final class AppState: ObservableObject {
     static let source = "TESLACAM_DEBUG_SOURCE"
     static let exportDirectory = "TESLACAM_DEBUG_EXPORT_DIR"
     static let uiTestMode = "TESLACAM_UI_TEST_MODE"
+    static let xCTestConfiguration = "XCTestConfigurationFilePath"
   }
 
   let debugLog = DebugLogSink()
@@ -372,10 +373,10 @@ final class AppState: ObservableObject {
   }
   @Published var exportOverlayOptions = ExportOverlayOptions(
     telemetryHUD: true,
-    routeMap: true,
+    routeMap: false,
     privacyMask: false,
-    includeReport: true,
-    includeScreenshot: true
+    includeReport: false,
+    includeScreenshot: false
   )
   @Published var isDuplicateResolverPresented: Bool = false
   @Published var duplicateResolverMessage: String = ""
@@ -508,7 +509,7 @@ final class AppState: ObservableObject {
     indexSources([url])
   }
 
-  func indexSources(_ urls: [URL]) {
+  func indexSources(_ urls: [URL], surfaceErrors: Bool = true) {
     guard !exporter.isExporting else { return }
     let normalizedSources = normalizeSources(urls)
     guard !normalizedSources.isEmpty else { return }
@@ -518,7 +519,7 @@ final class AppState: ObservableObject {
     activateSecurityScopedAccess(for: normalizedSources)
 
     isIndexing = true
-    indexStatus = "Scanning..."
+    indexStatus = "Putting the timeline together"
     scanStage = .scanningNestedFolders
     scanDiscoveredClipCount = 0
     // The current timeline and its derived state are deliberately NOT cleared
@@ -532,7 +533,7 @@ final class AppState: ObservableObject {
           DispatchQueue.main.async {
             self.scanStage = .scanningNestedFolders
             self.scanDiscoveredClipCount = scanned
-            self.indexStatus = "Found \(scanned) clips"
+            self.indexStatus = "Putting the timeline together"
           }
         }
         DispatchQueue.main.async {
@@ -577,7 +578,6 @@ final class AppState: ObservableObject {
           self.scanStage = .preparingTimeline
           self.isIndexing = false
           self.indexStatus = "Ready"
-          self.presentDuplicateResolverIfNeeded(for: index)
           self.debug(
             "index ready: sets=\(index.sets.count) cameras=\(self.camerasDetected.map { $0.rawValue }.joined(separator: ",")) profile=\(index.layoutProfile.rawValue) gaps=\(self.timelineGapRanges.count)",
             category: "index"
@@ -586,6 +586,18 @@ final class AppState: ObservableObject {
       } catch {
         DispatchQueue.main.async {
           self.isIndexing = false
+          if !surfaceErrors && self.clipSets.isEmpty {
+            self.indexStatus = ""
+            self.sourceURLs = previousSources
+            self.rootURL = previousSources.first
+            if !previousSources.isEmpty,
+               previousSources.map(\.path) != normalizedSources.map(\.path) {
+              self.activateSecurityScopedAccess(for: previousSources)
+            }
+            self.showError = false
+            self.debug("silent restore failed: \(error.localizedDescription)", category: "index")
+            return
+          }
           if self.clipSets.isEmpty {
             // No prior timeline to fall back to — surface the empty/onboarding error.
             self.indexStatus = ""
@@ -615,9 +627,8 @@ final class AppState: ObservableObject {
   func chooseDuplicatePolicy(_ policy: DuplicateClipPolicy) {
     isDuplicateResolverPresented = false
     duplicateResolverMessage = ""
-    guard duplicatePolicy != policy else { return }
-    duplicatePolicy = policy
-    reloadSources()
+    guard duplicatePolicy != .mergeByTime else { return }
+    duplicatePolicy = .mergeByTime
   }
 
   func dismissDuplicateResolver() {
@@ -626,13 +637,18 @@ final class AppState: ObservableObject {
   }
 
   func updateDuplicatePolicy(_ policy: DuplicateClipPolicy) {
-    chooseDuplicatePolicy(policy)
+    chooseDuplicatePolicy(.mergeByTime)
   }
 
   func togglePlay() {
     if playback.isPlaying {
       playback.pause()
     } else {
+      if totalDuration > 0,
+         (playback.currentDuration <= 0 || currentSegmentClipIndex == nil) {
+        let start = currentSeconds >= totalDuration ? 0 : currentSeconds
+        seekToGlobalTime(start, exact: true)
+      }
       playback.play()
     }
   }
@@ -724,6 +740,20 @@ final class AppState: ObservableObject {
     applyTimelineStoreSnapshot()
   }
 
+  func setTrimStartAtPlayhead() {
+    guard totalDuration > 0 else { return }
+    let start = max(0, min(currentSeconds, totalDuration))
+    let end = max(trimEndSeconds, start + (1.0 / 30.0))
+    setTrimRange(startSeconds: start, endSeconds: end)
+  }
+
+  func setTrimEndAtPlayhead() {
+    guard totalDuration > 0 else { return }
+    let end = max(0, min(currentSeconds, totalDuration))
+    let start = min(trimStartSeconds, max(0, end - (1.0 / 30.0)))
+    setTrimRange(startSeconds: start, endSeconds: end)
+  }
+
   func setTestExportRange(minutes: Int = 3) {
     timelineStore.setTestExportRange(minutes: minutes, currentSeconds: currentSeconds)
     applyTimelineStoreSnapshot()
@@ -799,6 +829,22 @@ final class AppState: ObservableObject {
     exportRange(previewOnly: false, queued: false)
   }
 
+  func setExportPreset(_ preset: ExportPreset) {
+    exportPreset = preset
+    switch preset {
+    case .originalTracksMOV:
+      exportOverlayOptions.telemetryHUD = false
+      exportOverlayOptions.routeMap = false
+      exportOverlayOptions.includeReport = false
+      exportOverlayOptions.includeScreenshot = false
+    case .maxQualityHEVC:
+      exportOverlayOptions.telemetryHUD = true
+      exportOverlayOptions.telemetryHUDMode = .detailed
+    case .fastHEVC, .socialShareHEVC, .proxyHEVC, .editFriendlyProRes:
+      break
+    }
+  }
+
   private func exportRange(previewOnly: Bool, queued: Bool) {
     guard !clipSets.isEmpty else { return }
     guard queued || !exporter.isExporting else { return }
@@ -816,7 +862,7 @@ final class AppState: ObservableObject {
     #if os(macOS)
     PlatformFileAccess.presentSavePanel(
       nameFieldStringValue: defaultExportFilename(),
-      allowedContentTypes: PlatformFileAccess.contentTypes(for: exportPreset),
+      allowedContentTypes: PlatformFileAccess.contentTypes(for: effectiveExportPreset),
       directoryURL: rootURL?.deletingLastPathComponent() ?? sourceURLs.first?.deletingLastPathComponent()
     ) { [weak self] url in
       self?.exportRange(to: url, previewOnly: previewOnly, queued: queued)
@@ -1049,6 +1095,14 @@ final class AppState: ObservableObject {
     return options
   }
 
+  var effectiveExportPreset: ExportPreset {
+    resolvedExportPreset(
+      requested: exportPreset,
+      overlayOptions: effectiveExportOverlayOptions,
+      cameraTrack: cameraTrack
+    )
+  }
+
   var activePreviewCameras: [Camera] {
     let ordered = camerasForCurrentLayout()
     switch previewLayoutMode {
@@ -1063,6 +1117,10 @@ final class AppState: ObservableObject {
     case .horizontal, .pictureInPicture, .grid:
       return ordered
     }
+  }
+
+  var gridPreviewCameras: [Camera] {
+    camerasForCurrentLayout()
   }
 
   var currentPreviewNaturalSizes: [Camera: CGSize] {
@@ -1321,7 +1379,7 @@ final class AppState: ObservableObject {
   private func restoreLastSourcesIfPossible() -> Bool {
     let restored = sourceStore.restoreBookmarkedURLs()
     guard !restored.isEmpty else { return false }
-    indexSources(restored)
+    indexSources(restored, surfaceErrors: false)
     return true
   }
 
@@ -1336,10 +1394,26 @@ final class AppState: ObservableObject {
   private func defaultExportFilename() -> String {
     exportStore.defaultFilename(
       sets: clipSets,
-      preset: exportPreset,
+      preset: effectiveExportPreset,
       trimStartDate: trimStartDate,
       trimEndDate: trimEndDate
     )
+  }
+
+  private func resolvedExportPreset(
+    requested preset: ExportPreset,
+    overlayOptions: ExportOverlayOptions,
+    cameraTrack: CameraTrack
+  ) -> ExportPreset {
+    guard preset == .originalTracksMOV else { return preset }
+    if overlayOptions.telemetryHUD
+        || overlayOptions.routeMap
+        || overlayOptions.privacyMask
+        || overlayOptions.needsSidecars
+        || !cameraTrack.isEmpty {
+      return .maxQualityHEVC
+    }
+    return preset
   }
 
   private func exportRange(to chosenURL: URL, previewOnly: Bool, queued: Bool) {
@@ -1369,7 +1443,7 @@ final class AppState: ObservableObject {
     exportStore.resolvedOutputURL(
       chosenURL: chosenURL,
       preferredFilename: defaultExportFilename(),
-      preset: exportPreset
+      preset: effectiveExportPreset
     )
   }
 
@@ -1381,7 +1455,7 @@ final class AppState: ObservableObject {
     exportStore.resolvedOutputURL(
       chosenURL: directory,
       preferredFilename: preferredFilename,
-      preset: exportPreset
+      preset: effectiveExportPreset
     )
   }
 
@@ -1389,13 +1463,19 @@ final class AppState: ObservableObject {
     exportStore.resolvedOutputURL(
       chosenURL: preferredURL,
       preferredFilename: preferredURL.lastPathComponent,
-      preset: exportPreset
+      preset: effectiveExportPreset
     )
   }
 
   private func makeExportRequest(for chosenURL: URL, previewOnly: Bool = false) -> ExportRequest? {
     let sets = selectedSetsForExport
     let startDate = trimStartDate
+    let overlayOptions = effectiveExportOverlayOptions
+    let preset = resolvedExportPreset(
+      requested: exportPreset,
+      overlayOptions: overlayOptions,
+      cameraTrack: cameraTrack
+    )
     let endDate: Date
     let endSeconds: Double
     let rangeText: String
@@ -1412,10 +1492,10 @@ final class AppState: ObservableObject {
     return exportStore.makeRequest(
       sets: sets,
       chosenURL: chosenURL,
-      preset: exportPreset,
+      preset: preset,
       enabledCameras: activeExportCameras,
       layoutRequest: layoutRequest,
-      overlayOptions: effectiveExportOverlayOptions,
+      overlayOptions: overlayOptions,
       trimStartSeconds: trimStartSeconds,
       trimEndSeconds: endSeconds,
       trimStartDate: startDate,
@@ -1456,17 +1536,9 @@ final class AppState: ObservableObject {
   }
 
   private func presentDuplicateResolverIfNeeded(summary: DuplicateResolutionSummary) {
-    guard summary.hasConflicts else { return }
-    guard duplicatePolicy == .mergeByTime || showDuplicateResolverForConflicts else { return }
-    var parts: [String] = []
-    if summary.duplicateTimestampCount > 0 {
-      parts.append("\(summary.duplicateTimestampCount) timestamp collision(s)")
-    }
-    if summary.overlapMinuteCount > 0 {
-      parts.append("\(summary.overlapMinuteCount) overlap(s)")
-    }
-    duplicateResolverMessage = parts.joined(separator: " • ")
-    isDuplicateResolverPresented = true
+    duplicatePolicy = .mergeByTime
+    duplicateResolverMessage = ""
+    isDuplicateResolverPresented = false
   }
 
   #if DEBUG
@@ -1478,8 +1550,9 @@ final class AppState: ObservableObject {
   #if DEBUG
   private func applyDebugLaunchModeIfNeeded() -> Bool {
     let environment = ProcessInfo.processInfo.environment
+    let arguments = ProcessInfo.processInfo.arguments
 
-    if let mode = environment[DebugEnvironment.uiTestMode]?.lowercased() {
+    if let mode = debugLaunchMode(environment: environment, arguments: arguments)?.lowercased() {
       switch mode {
       case "blank":
         return true
@@ -1489,6 +1562,10 @@ final class AppState: ObservableObject {
       default:
         break
       }
+    }
+
+    if environment[DebugEnvironment.xCTestConfiguration] != nil {
+      return true
     }
 
     guard let raw = environment[DebugEnvironment.source], !raw.isEmpty else {
@@ -1501,6 +1578,24 @@ final class AppState: ObservableObject {
     guard !urls.isEmpty else { return false }
     indexSources(urls)
     return true
+  }
+
+  private func debugLaunchMode(environment: [String: String], arguments: [String]) -> String? {
+    if let mode = environment[DebugEnvironment.uiTestMode], !mode.isEmpty {
+      return mode
+    }
+
+    if let index = arguments.firstIndex(of: "--teslacam-ui-test-mode"),
+       arguments.indices.contains(arguments.index(after: index)) {
+      return arguments[arguments.index(after: index)]
+    }
+
+    let prefix = "--teslacam-ui-test-mode="
+    if let argument = arguments.first(where: { $0.hasPrefix(prefix) }) {
+      return String(argument.dropFirst(prefix.count))
+    }
+
+    return nil
   }
 
   private func debugOutputURL() -> URL? {

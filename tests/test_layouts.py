@@ -38,7 +38,7 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(complete[Camera.LEFT_PILLAR].width, 1920)
         self.assertEqual(complete[Camera.RIGHT].height, 1080)
 
-    def test_six_up_canvas_uses_centered_three_by_three_grid(self):
+    def test_six_up_canvas_uses_two_by_three_grid(self):
         layout = build_layout(
             LayoutKind.SIX_UP,
             {
@@ -51,11 +51,12 @@ class LayoutTests(unittest.TestCase):
             },
         )
         self.assertEqual(layout.canvas_width, 5760)
-        self.assertEqual(layout.canvas_height, 3240)
-        self.assertEqual(layout.cell_by_camera[Camera.FRONT].x, 1920)
+        self.assertEqual(layout.canvas_height, 2160)
+        self.assertEqual(layout.cell_by_camera[Camera.FRONT].x, 0)
         self.assertEqual(layout.cell_by_camera[Camera.BACK].x, 1920)
-        self.assertEqual(layout.cell_by_camera[Camera.BACK].y, 1080)
-        self.assertEqual(layout.cell_by_camera[Camera.LEFT_PILLAR].y, 2160)
+        self.assertEqual(layout.cell_by_camera[Camera.LEFT].x, 3840)
+        self.assertEqual(layout.cell_by_camera[Camera.RIGHT].y, 1080)
+        self.assertEqual(layout.cell_by_camera[Camera.LEFT_PILLAR].y, 1080)
 
     def test_shared_layout_fixtures_match_python_contract_plan(self):
         checked = 0

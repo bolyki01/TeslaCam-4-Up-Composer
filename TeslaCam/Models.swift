@@ -4,7 +4,7 @@ import Combine
 import OSLog
 import AVFoundation
 
-enum Camera: String, CaseIterable, Hashable, Codable {
+nonisolated enum Camera: String, CaseIterable, Hashable, Codable {
   case front
   case back
   case left_repeater
@@ -69,7 +69,7 @@ enum Camera: String, CaseIterable, Hashable, Codable {
   }
 }
 
-enum CameraLayoutProfile: String, CaseIterable, Identifiable {
+nonisolated enum CameraLayoutProfile: String, CaseIterable, Identifiable {
   case hw3FourCam
   case hw4SixCam
   case mixedUnknown
@@ -99,7 +99,7 @@ enum CameraLayoutProfile: String, CaseIterable, Identifiable {
   }
 }
 
-enum CameraLayoutRequest: String, CaseIterable, Codable {
+nonisolated enum CameraLayoutRequest: String, CaseIterable, Codable {
   case auto
   case legacy4
   case sixcam
@@ -145,7 +145,7 @@ enum PreviewLayoutMode: String, CaseIterable, Identifiable, Codable {
   }
 }
 
-enum CameraLayoutKind: String {
+nonisolated enum CameraLayoutKind: String {
   case fourUp = "4up"
   case sixUp = "6up"
 }
@@ -182,7 +182,7 @@ struct DomainLayoutManifest: Codable, Equatable {
   }
 }
 
-struct CameraLayoutPlan {
+nonisolated struct CameraLayoutPlan {
   let requestedProfile: CameraLayoutRequest
   let kind: CameraLayoutKind
   let expectedCameras: [Camera]
@@ -293,12 +293,12 @@ struct CameraLayoutPlan {
       let tileWidth = sizes.values.map(\.width).max() ?? 1280
       let tileHeight = sizes.values.map(\.height).max() ?? 960
       let grid: [Camera: (row: Int, col: Int)] = [
-        .front: (0, 1),
-        .left: (1, 0),
-        .back: (1, 1),
-        .right: (1, 2),
-        .left_pillar: (2, 0),
-        .right_pillar: (2, 2)
+        .front: (0, 0),
+        .back: (0, 1),
+        .left: (0, 2),
+        .right: (1, 0),
+        .left_pillar: (1, 1),
+        .right_pillar: (1, 2)
       ]
       return grid.mapValues { position in
         CGRect(
@@ -336,7 +336,7 @@ struct CameraLayoutPlan {
   }
 }
 
-private extension Sequence where Element == Camera {
+nonisolated private extension Sequence where Element == Camera {
   func sortedByContractOrder() -> [Camera] {
     let order = Dictionary(uniqueKeysWithValues: Camera.mixedOrder.enumerated().map { ($0.element, $0.offset) })
     return sorted { lhs, rhs in
@@ -349,6 +349,7 @@ private extension Sequence where Element == Camera {
 }
 
 enum ExportPreset: String, CaseIterable, Identifiable {
+  case originalTracksMOV
   case maxQualityHEVC
   case fastHEVC
   case socialShareHEVC
@@ -360,8 +361,15 @@ enum ExportPreset: String, CaseIterable, Identifiable {
 
   var id: String { rawValue }
 
+  static let visibleCases: [ExportPreset] = [
+    .originalTracksMOV,
+    .maxQualityHEVC
+  ]
+
   var displayName: String {
     switch self {
+    case .originalTracksMOV:
+      return "Original"
     case .maxQualityHEVC:
       return "Evidence HEVC"
     case .fastHEVC:
@@ -377,6 +385,8 @@ enum ExportPreset: String, CaseIterable, Identifiable {
 
   var scriptPreset: String {
     switch self {
+    case .originalTracksMOV:
+      return "PASSTHROUGH_MOV"
     case .maxQualityHEVC:
       return "HEVC_CPU_MAX"
     case .fastHEVC:
@@ -392,7 +402,7 @@ enum ExportPreset: String, CaseIterable, Identifiable {
 
   var defaultExtension: String {
     switch self {
-    case .editFriendlyProRes:
+    case .originalTracksMOV, .editFriendlyProRes:
       return "mov"
     case .maxQualityHEVC, .fastHEVC, .socialShareHEVC, .proxyHEVC:
       return "mp4"
@@ -401,6 +411,8 @@ enum ExportPreset: String, CaseIterable, Identifiable {
 
   var outputLabel: String {
     switch self {
+    case .originalTracksMOV:
+      return "original_tracks"
     case .maxQualityHEVC:
       return "evidence_hevc"
     case .fastHEVC:
@@ -414,9 +426,10 @@ enum ExportPreset: String, CaseIterable, Identifiable {
     }
   }
 
-  func nativeCompressionProperties(for canvasSize: CGSize) -> [String: Any] {
+  func nativeCompressionProperties(for canvasSize: CGSize, frameRate: Double = Self.defaultFrameRate) -> [String: Any] {
+    let sourceFrameRate = Int(max(1, min(120, frameRate.rounded())))
     switch self {
-    case .editFriendlyProRes:
+    case .originalTracksMOV, .editFriendlyProRes:
       return [:]
     case .maxQualityHEVC:
       return [
@@ -426,8 +439,8 @@ enum ExportPreset: String, CaseIterable, Identifiable {
           scalingExponent: 0.8,
           maximumBitRate: 240_000_000
         ),
-        AVVideoExpectedSourceFrameRateKey: Int(Self.defaultFrameRate),
-        AVVideoMaxKeyFrameIntervalKey: Int(Self.defaultFrameRate)
+        AVVideoExpectedSourceFrameRateKey: sourceFrameRate,
+        AVVideoMaxKeyFrameIntervalKey: sourceFrameRate
       ]
     case .fastHEVC:
       return [
@@ -437,8 +450,8 @@ enum ExportPreset: String, CaseIterable, Identifiable {
           scalingExponent: 0.78,
           maximumBitRate: 120_000_000
         ),
-        AVVideoExpectedSourceFrameRateKey: Int(Self.defaultFrameRate),
-        AVVideoMaxKeyFrameIntervalKey: Int(Self.defaultFrameRate)
+        AVVideoExpectedSourceFrameRateKey: sourceFrameRate,
+        AVVideoMaxKeyFrameIntervalKey: sourceFrameRate
       ]
     case .socialShareHEVC:
       return [
@@ -448,8 +461,8 @@ enum ExportPreset: String, CaseIterable, Identifiable {
           scalingExponent: 0.72,
           maximumBitRate: 35_000_000
         ),
-        AVVideoExpectedSourceFrameRateKey: Int(Self.defaultFrameRate),
-        AVVideoMaxKeyFrameIntervalKey: Int(Self.defaultFrameRate)
+        AVVideoExpectedSourceFrameRateKey: sourceFrameRate,
+        AVVideoMaxKeyFrameIntervalKey: sourceFrameRate
       ]
     case .proxyHEVC:
       return [
@@ -459,8 +472,8 @@ enum ExportPreset: String, CaseIterable, Identifiable {
           scalingExponent: 0.70,
           maximumBitRate: 18_000_000
         ),
-        AVVideoExpectedSourceFrameRateKey: Int(Self.defaultFrameRate),
-        AVVideoMaxKeyFrameIntervalKey: Int(Self.defaultFrameRate)
+        AVVideoExpectedSourceFrameRateKey: sourceFrameRate,
+        AVVideoMaxKeyFrameIntervalKey: sourceFrameRate
       ]
     }
   }
@@ -618,7 +631,7 @@ struct TimelineTrimSelection: Equatable {
   var isDragging: Bool
 }
 
-enum ExportTelemetryHUDMode: String, Codable, CaseIterable, Identifiable {
+nonisolated enum ExportTelemetryHUDMode: String, Codable, CaseIterable, Identifiable {
   case minimal
   case detailed
 
@@ -634,7 +647,7 @@ enum ExportTelemetryHUDMode: String, Codable, CaseIterable, Identifiable {
   }
 }
 
-enum TelemetrySpeedUnit: String, Codable, CaseIterable, Identifiable {
+nonisolated enum TelemetrySpeedUnit: String, Codable, CaseIterable, Identifiable {
   case kilometersPerHour
   case milesPerHour
 
@@ -659,7 +672,7 @@ enum TelemetrySpeedUnit: String, Codable, CaseIterable, Identifiable {
   }
 }
 
-struct ExportOverlayOptions: Codable, Equatable, Hashable {
+nonisolated struct ExportOverlayOptions: Codable, Equatable, Hashable {
   var telemetryHUD: Bool = false
   var routeMap: Bool = false
   var privacyMask: Bool = false
@@ -874,7 +887,7 @@ enum CustomLayoutPresetCodec {
   }
 }
 
-struct TelemetryCoordinate: Equatable, Hashable {
+nonisolated struct TelemetryCoordinate: Equatable, Hashable {
   let latitude: Double
   let longitude: Double
 
@@ -890,7 +903,7 @@ struct TelemetryCoordinate: Equatable, Hashable {
   }
 }
 
-struct TelemetryRoutePoint: Equatable, Hashable, Identifiable {
+nonisolated struct TelemetryRoutePoint: Equatable, Hashable, Identifiable {
   let id: Int
   let seconds: Double
   let coordinate: TelemetryCoordinate
@@ -913,7 +926,7 @@ struct ClipHealthFact: Codable, Equatable, Hashable, Identifiable {
   }
 }
 
-struct TelemetryDisplayModel: Equatable, Hashable {
+nonisolated struct TelemetryDisplayModel: Equatable, Hashable {
   let speedKmh: Double
   let acceleratorPercent: Double
   let steeringAngleDeg: Double
@@ -1106,12 +1119,10 @@ final class DebugLogSink: ObservableObject {
     // surface still receives the full string via the in-memory `events`
     // array below — that's the canonical user-facing diagnostic.
     logger.log("[\(category, privacy: .public)] \(message, privacy: .private)")
-#if DEBUG
     events.append(DebugEvent(timestamp: Date(), category: category, message: message))
     if events.count > maxEventCount {
       events.removeFirst(events.count - maxEventCount)
     }
-#endif
   }
 }
 
@@ -1133,6 +1144,11 @@ struct TimelinePlaybackSegment: Equatable {
 }
 
 struct TimelineCoverageMap {
+  enum Scale: Equatable {
+    case wallClock
+    case recordedClips
+  }
+
   let anchorDate: Date?
   let totalDuration: Double
 
@@ -1142,8 +1158,11 @@ struct TimelineCoverageMap {
   private let endOffsets: [Double]
   private let prefixMaxEndOffsets: [Double]
   private let sortedEndOffsets: [Double]
+  private let sourceStartDates: [Date]
+  private let sourceEndDates: [Date]
+  private let scale: Scale
 
-  init(sets: [ClipSet]) {
+  init(sets: [ClipSet], scale: Scale = .wallClock) {
     guard !sets.isEmpty else {
       anchorDate = nil
       totalDuration = 0
@@ -1153,6 +1172,9 @@ struct TimelineCoverageMap {
       endOffsets = []
       prefixMaxEndOffsets = []
       sortedEndOffsets = []
+      sourceStartDates = []
+      sourceEndDates = []
+      self.scale = scale
       return
     }
 
@@ -1174,22 +1196,37 @@ struct TimelineCoverageMap {
     var startOffsets: [Double] = []
     var endOffsets: [Double] = []
     var sortedEndOffsets: [Double] = []
+    var sourceStartDates: [Date] = []
+    var sourceEndDates: [Date] = []
+    var recordedOffset = 0.0
     sortedOriginalIndices.reserveCapacity(ordered.count)
     startOffsets.reserveCapacity(ordered.count)
     endOffsets.reserveCapacity(ordered.count)
     sortedEndOffsets.reserveCapacity(ordered.count)
+    sourceStartDates.reserveCapacity(ordered.count)
+    sourceEndDates.reserveCapacity(ordered.count)
 
     for (sortedIndex, item) in ordered.enumerated() {
       let originalIndex = item.offset
       let set = item.element
-      let start = max(0, set.date.timeIntervalSince(anchor))
-      let end = start + max(1.0 / 30.0, set.duration)
+      let duration = max(1.0 / 30.0, set.duration)
+      let start: Double
+      switch scale {
+      case .wallClock:
+        start = max(0, set.date.timeIntervalSince(anchor))
+      case .recordedClips:
+        start = recordedOffset
+        recordedOffset += duration
+      }
+      let end = start + duration
 
       sortedOriginalIndices.append(originalIndex)
       originalToSortedIndices[originalIndex] = sortedIndex
       startOffsets.append(start)
       endOffsets.append(end)
       sortedEndOffsets.append(end)
+      sourceStartDates.append(set.date)
+      sourceEndDates.append(set.date.addingTimeInterval(duration))
     }
 
     var prefixMaxEndOffsets: [Double] = []
@@ -1206,17 +1243,46 @@ struct TimelineCoverageMap {
     self.endOffsets = endOffsets
     self.prefixMaxEndOffsets = prefixMaxEndOffsets
     self.sortedEndOffsets = sortedEndOffsets.sorted()
+    self.sourceStartDates = sourceStartDates
+    self.sourceEndDates = sourceEndDates
+    self.scale = scale
     self.totalDuration = max(1.0 / 30.0, endOffsets.max() ?? 0)
   }
 
   func date(forGlobalSeconds seconds: Double) -> Date? {
     guard let anchorDate else { return nil }
     let clamped = max(0, min(seconds, totalDuration))
+    if scale == .recordedClips {
+      guard !startOffsets.isEmpty else { return anchorDate }
+      if clamped >= totalDuration, let last = sourceEndDates.last {
+        return last
+      }
+      let index = max(0, min(startOffsets.count - 1, upperBound(in: startOffsets, for: clamped) - 1))
+      let local = max(0, min(clamped - startOffsets[index], endOffsets[index] - startOffsets[index]))
+      return sourceStartDates[index].addingTimeInterval(local)
+    }
     return anchorDate.addingTimeInterval(clamped)
   }
 
   func globalSeconds(for date: Date) -> Double {
     guard let anchorDate else { return 0 }
+    if scale == .recordedClips {
+      guard !sourceStartDates.isEmpty else { return 0 }
+      if date <= sourceStartDates[0] {
+        return 0
+      }
+      for index in sourceStartDates.indices {
+        if date >= sourceStartDates[index], date <= sourceEndDates[index] {
+          return max(0, min(totalDuration, startOffsets[index] + date.timeIntervalSince(sourceStartDates[index])))
+        }
+        if index + 1 < sourceStartDates.count,
+           date > sourceEndDates[index],
+           date < sourceStartDates[index + 1] {
+          return startOffsets[index + 1]
+        }
+      }
+      return totalDuration
+    }
     let seconds = date.timeIntervalSince(anchorDate)
     return max(0, min(seconds, totalDuration))
   }
@@ -1299,6 +1365,7 @@ struct TimelineCoverageMap {
   }
 
   func gapRanges(minimumDuration: Double = 1) -> [TimelineGapRange] {
+    guard scale == .wallClock else { return [] }
     guard !startOffsets.isEmpty else { return [] }
 
     var gaps: [TimelineGapRange] = []
@@ -1491,7 +1558,7 @@ enum ScanStage: Int, CaseIterable, Identifiable {
   }
 }
 
-struct ClipSet: Identifiable, Hashable {
+nonisolated struct ClipSet: Identifiable, Hashable {
   let id: String
   let timestamp: String
   let date: Date
@@ -1499,6 +1566,7 @@ struct ClipSet: Identifiable, Hashable {
   var files: [Camera: URL]
   var cameraDurations: [Camera: Double]
   var naturalSizes: [Camera: CGSize]
+  var cameraFrameRates: [Camera: Double]
   /// Cameras in this set whose clip failed to probe (corrupt/truncated media).
   /// Empty for a healthy set. The clip still occupies its grid cell (rendered
   /// black) so the timeline is unbroken, but the UI can flag it.
@@ -1512,6 +1580,7 @@ struct ClipSet: Identifiable, Hashable {
     files: [Camera: URL],
     cameraDurations: [Camera: Double] = [:],
     naturalSizes: [Camera: CGSize] = [:],
+    cameraFrameRates: [Camera: Double] = [:],
     unreadableCameras: Set<Camera> = []
   ) {
     self.id = id ?? timestamp
@@ -1521,6 +1590,7 @@ struct ClipSet: Identifiable, Hashable {
     self.files = files
     self.cameraDurations = cameraDurations
     self.naturalSizes = naturalSizes
+    self.cameraFrameRates = cameraFrameRates
     self.unreadableCameras = unreadableCameras
   }
 
@@ -1531,6 +1601,7 @@ struct ClipSet: Identifiable, Hashable {
     files: [Camera: URL],
     cameraDurations: [Camera: Double] = [:],
     naturalSizes: [Camera: CGSize] = [:],
+    cameraFrameRates: [Camera: Double] = [:],
     unreadableCameras: Set<Camera> = []
   ) {
     self.init(
@@ -1541,6 +1612,7 @@ struct ClipSet: Identifiable, Hashable {
       files: files,
       cameraDurations: cameraDurations,
       naturalSizes: naturalSizes,
+      cameraFrameRates: cameraFrameRates,
       unreadableCameras: unreadableCameras
     )
   }
@@ -1560,12 +1632,16 @@ struct ClipSet: Identifiable, Hashable {
     naturalSizes[camera]
   }
 
+  func frameRate(for camera: Camera) -> Double? {
+    cameraFrameRates[camera]
+  }
+
   var endDate: Date {
     date.addingTimeInterval(duration)
   }
 }
 
-struct DuplicateResolutionSummary: Hashable {
+nonisolated struct DuplicateResolutionSummary: Hashable {
   let duplicateFileCount: Int
   let duplicateTimestampCount: Int
   let overlapMinuteCount: Int
@@ -1575,7 +1651,7 @@ struct DuplicateResolutionSummary: Hashable {
   }
 }
 
-struct ClipIndex {
+nonisolated struct ClipIndex {
   let sets: [ClipSet]
   let minDate: Date
   let maxDate: Date

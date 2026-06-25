@@ -5,6 +5,7 @@ import QuartzCore
 
 final class MultiCamPlaybackController: ObservableObject {
   @Published var isPlaying: Bool = false
+  @Published private(set) var redrawTick: Int = 0
 
   var onTimeUpdate: ((Double) -> Void)?
   var onFinished: (() -> Void)?
@@ -48,11 +49,13 @@ final class MultiCamPlaybackController: ObservableObject {
     currentSecondsValue = min(max(0, startSeconds), currentDuration)
     lastTickHostTime = timeProvider()
     onTimeUpdate?(currentSecondsValue)
+    publishRedrawTick()
   }
 
   func play() {
     guard currentDuration > 0, !isPlaying else { return }
     isPlaying = true
+    publishRedrawTick()
     lastTickHostTime = timeProvider()
     let timer = Timer(timeInterval: uiUpdateInterval, repeats: true) { [weak self] _ in
       self?.advancePlayback()
@@ -84,6 +87,7 @@ final class MultiCamPlaybackController: ObservableObject {
     currentSecondsValue = min(max(0, seconds), currentDuration)
     lastTickHostTime = timeProvider()
     onTimeUpdate?(currentSecondsValue)
+    publishRedrawTick()
   }
 
   private func projectedCurrentSeconds() -> Double {
@@ -99,10 +103,15 @@ final class MultiCamPlaybackController: ObservableObject {
     lastTickHostTime = now
     currentSecondsValue = min(currentDuration, currentSecondsValue + (delta * max(0.1, playbackRate)))
     onTimeUpdate?(currentSecondsValue)
+    publishRedrawTick()
 
     if currentSecondsValue >= currentDuration {
       pause()
       onFinished?()
     }
+  }
+
+  private func publishRedrawTick() {
+    redrawTick = redrawTick == Int.max ? 0 : redrawTick + 1
   }
 }

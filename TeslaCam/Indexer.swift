@@ -7,26 +7,26 @@ enum ClipIndexError: Error {
 }
 
 final class ClipIndexer {
-  private static let regex: NSRegularExpression = {
+  nonisolated private static let regex: NSRegularExpression = {
     // Accept broad camera tokens and normalize them in code to avoid dropping clips
     // from slightly different Tesla naming variants.
     let pattern = "^(\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2})-([A-Za-z0-9_-]+)\\.(mp4|mov)$"
     return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
   }()
 
-  private static let dateFormatter: DateFormatter = {
+  private static nonisolated func makeDateFormatter() -> DateFormatter {
     let df = DateFormatter()
     df.locale = Locale(identifier: "en_US_POSIX")
     df.timeZone = TimeZone.current
     df.dateFormat = "yyyy-MM-dd_HH-mm-ss"
     return df
-  }()
+  }
 
-  static func index(rootURL: URL, progress: @escaping (Int) -> Void) throws -> ClipIndex {
+  static nonisolated func index(rootURL: URL, progress: @escaping (Int) -> Void) throws -> ClipIndex {
     try index(inputURLs: [rootURL], duplicatePolicy: .mergeByTime, progress: progress)
   }
 
-  static func index(
+  static nonisolated func index(
     inputURLs: [URL],
     duplicatePolicy: DuplicateClipPolicy = .mergeByTime,
     progress: @escaping (Int) -> Void
@@ -182,7 +182,7 @@ final class ClipIndexer {
     }
   }
 
-  private static func measure<T>(_ name: String, _ work: () throws -> T) rethrows -> T {
+  private static nonisolated func measure<T>(_ name: String, _ work: () throws -> T) rethrows -> T {
     let start = ContinuousClock.now
     defer {
       let elapsed = start.duration(to: .now)
@@ -191,7 +191,7 @@ final class ClipIndexer {
     return try work()
   }
 
-  private static func normalizeInputs(_ inputs: [URL]) -> [URL] {
+  private static nonisolated func normalizeInputs(_ inputs: [URL]) -> [URL] {
     var seen = Set<String>()
     var out: [URL] = []
     out.reserveCapacity(inputs.count)
@@ -205,7 +205,7 @@ final class ClipIndexer {
     return out
   }
 
-  private static func hasHiddenPathComponent(_ url: URL, relativeTo root: URL) -> Bool {
+  private static nonisolated func hasHiddenPathComponent(_ url: URL, relativeTo root: URL) -> Bool {
     let rootPath = root.standardizedFileURL.path
     let filePath = url.standardizedFileURL.path
     let relativePath: String
@@ -217,7 +217,7 @@ final class ClipIndexer {
     return relativePath.split(separator: "/").contains { $0.hasPrefix(".") }
   }
 
-  private static func parseClipFile(
+  private static nonisolated func parseClipFile(
     _ fileURL: URL,
     duplicatePolicy: DuplicateClipPolicy,
     into map: inout [String: IndexedClipSetBuilder],
@@ -238,7 +238,7 @@ final class ClipIndexer {
     let name = fileURL.lastPathComponent
     guard let match = firstMatch(in: name) else { return }
     let timestamp = match.timestamp
-    guard let date = dateFormatter.date(from: timestamp) else { return }
+    guard let date = makeDateFormatter().date(from: timestamp) else { return }
     let camera = match.camera
     let metadata = probeMetadata(for: fileURL, cache: &metadataCache)
 
@@ -251,6 +251,12 @@ final class ClipIndexer {
           durations[camera] = metadata.duration
           var naturalSizes = keepAllSets[primaryIndex].naturalSizes
           naturalSizes[camera] = metadata.naturalSize
+          var frameRates = keepAllSets[primaryIndex].cameraFrameRates
+          if let frameRate = metadata.frameRate {
+            frameRates[camera] = frameRate
+          } else {
+            frameRates.removeValue(forKey: camera)
+          }
           var unreadable = keepAllSets[primaryIndex].unreadableCameras
           if metadata.isReadable { unreadable.remove(camera) } else { unreadable.insert(camera) }
           keepAllSets[primaryIndex] = ClipSet(
@@ -261,6 +267,7 @@ final class ClipIndexer {
             files: files,
             cameraDurations: durations,
             naturalSizes: naturalSizes,
+            cameraFrameRates: frameRates,
             unreadableCameras: unreadable
           )
         } else {
@@ -279,6 +286,7 @@ final class ClipIndexer {
               files: [camera: fileURL],
               cameraDurations: [camera: metadata.duration],
               naturalSizes: [camera: metadata.naturalSize],
+              cameraFrameRates: metadata.frameRate.map { [camera: $0] } ?? [:],
               unreadableCameras: metadata.isReadable ? [] : [camera]
             )
           )
@@ -294,6 +302,7 @@ final class ClipIndexer {
             files: [camera: fileURL],
             cameraDurations: [camera: metadata.duration],
             naturalSizes: [camera: metadata.naturalSize],
+            cameraFrameRates: metadata.frameRate.map { [camera: $0] } ?? [:],
             unreadableCameras: metadata.isReadable ? [] : [camera]
           )
         )
@@ -332,7 +341,7 @@ final class ClipIndexer {
     if scanned % 100 == 0 { progress(scanned) }
   }
 
-  private static func firstMatch(in filename: String) -> (timestamp: String, camera: Camera)? {
+  private static nonisolated func firstMatch(in filename: String) -> (timestamp: String, camera: Camera)? {
     let range = NSRange(filename.startIndex..<filename.endIndex, in: filename)
     guard let m = regex.firstMatch(in: filename, options: [], range: range) else { return nil }
     guard let tsRange = Range(m.range(at: 1), in: filename) else { return nil }
@@ -343,7 +352,7 @@ final class ClipIndexer {
     return (timestamp, camera)
   }
 
-  private static func normalizeCamera(_ raw: String) -> Camera? {
+  private static nonisolated func normalizeCamera(_ raw: String) -> Camera? {
     var token = raw.lowercased().replacingOccurrences(of: "-", with: "_")
     token = token.replacingOccurrences(of: "_+", with: "_", options: .regularExpression)
     token = token.replacingOccurrences(of: "_?\\d+$", with: "", options: .regularExpression)
@@ -376,18 +385,18 @@ final class ClipIndexer {
     return Camera(rawValue: token)
   }
 
-  private static func probeMetadata(for fileURL: URL, cache: inout [String: ClipAssetProbe]) -> ClipAssetProbe {
+  private static nonisolated func probeMetadata(for fileURL: URL, cache: inout [String: ClipAssetProbe]) -> ClipAssetProbe {
     if let cached = cache[fileURL.path] {
       return cached
     }
-    let probe = computeMetadata(for: fileURL)
+    let probe = computeMetadataAwayFromMainThread(for: fileURL)
     cache[fileURL.path] = probe
     return probe
   }
 
   /// Loads one clip's duration + natural size. Marks the clip unreadable when
   /// the asset has no valid duration or no video track (corrupt/truncated).
-  private static func computeMetadata(for fileURL: URL) -> ClipAssetProbe {
+  private static nonisolated func computeMetadata(for fileURL: URL) -> ClipAssetProbe {
     let asset = AVURLAsset(
       url: fileURL,
       options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
@@ -400,6 +409,7 @@ final class ClipIndexer {
     return ClipAssetProbe(
       duration: durationSeconds,
       naturalSize: loaded.naturalSize ?? CGSize(width: 1280, height: 960),
+      frameRate: loaded.frameRate,
       isReadable: isReadable
     )
   }
@@ -412,7 +422,7 @@ final class ClipIndexer {
   /// each `computeMetadata` bridges its own async load via a private
   /// semaphore on a worker thread, distinct from the Swift cooperative pool
   /// that runs the loads — so there is no thread-pool deadlock.
-  private static func prewarmMetadata(_ urls: [URL], cache: inout [String: ClipAssetProbe]) {
+  private static nonisolated func prewarmMetadata(_ urls: [URL], cache: inout [String: ClipAssetProbe]) {
     var toProbe: [URL] = []
     var seen = Set<String>()
     toProbe.reserveCapacity(urls.count)
@@ -423,9 +433,13 @@ final class ClipIndexer {
         toProbe.append(url)
       }
     }
+    guard !toProbe.isEmpty else {
+      return
+    }
+
     guard toProbe.count > 1 else {
       for url in toProbe {
-        cache[url.path] = computeMetadata(for: url)
+        cache[url.path] = computeMetadataAwayFromMainThread(for: url)
       }
       return
     }
@@ -435,7 +449,7 @@ final class ClipIndexer {
     probed.reserveCapacity(toProbe.count)
     DispatchQueue.concurrentPerform(iterations: toProbe.count) { index in
       let url = toProbe[index]
-      let probe = computeMetadata(for: url)
+      let probe = computeMetadataAwayFromMainThread(for: url)
       lock.lock()
       probed[url.path] = probe
       lock.unlock()
@@ -445,16 +459,26 @@ final class ClipIndexer {
     }
   }
 
-  private static func normalizedDuration(_ time: CMTime) -> Double {
+  private static nonisolated func computeMetadataAwayFromMainThread(for fileURL: URL) -> ClipAssetProbe {
+    if Thread.isMainThread {
+      return DispatchQueue.global(qos: .userInitiated).sync {
+        computeMetadata(for: fileURL)
+      }
+    }
+    return computeMetadata(for: fileURL)
+  }
+
+  private static nonisolated func normalizedDuration(_ time: CMTime) -> Double {
     let seconds = CMTimeGetSeconds(time)
     guard seconds.isFinite, seconds > 0 else { return 60.0 }
     return seconds
   }
 
-  private static nonisolated func loadAssetMetadata(for asset: AVURLAsset) -> (duration: CMTime, naturalSize: CGSize?) {
+  private static nonisolated func loadAssetMetadata(for asset: AVURLAsset) -> (duration: CMTime, naturalSize: CGSize?, frameRate: Double?) {
     let semaphore = DispatchSemaphore(value: 0)
     var loadedDuration = CMTime.invalid
     var loadedNaturalSize: CGSize?
+    var loadedFrameRate: Double?
 
     Task.detached(priority: .userInitiated) {
       defer { semaphore.signal() }
@@ -465,26 +489,31 @@ final class ClipIndexer {
         if let track = try await tracks.first {
           async let naturalSize = track.load(.naturalSize)
           async let preferredTransform = track.load(.preferredTransform)
+          async let nominalFrameRate = track.load(.nominalFrameRate)
           let transformed = try await naturalSize.applying(preferredTransform)
           loadedNaturalSize = CGSize(width: abs(transformed.width), height: abs(transformed.height))
+          let frameRate = try await nominalFrameRate
+          loadedFrameRate = frameRate > 0 ? Double(frameRate) : nil
         } else {
           loadedNaturalSize = nil
+          loadedFrameRate = nil
         }
       } catch {
         loadedDuration = .invalid
         loadedNaturalSize = nil
+        loadedFrameRate = nil
       }
     }
 
     semaphore.wait()
-    return (loadedDuration, loadedNaturalSize)
+    return (loadedDuration, loadedNaturalSize, loadedFrameRate)
   }
 
-  private static func detectLayoutProfile(camerasFound: Set<Camera>) -> CameraLayoutProfile {
+  private static nonisolated func detectLayoutProfile(camerasFound: Set<Camera>) -> CameraLayoutProfile {
     CameraLayoutPlan.detectedProfile(for: camerasFound)
   }
 
-  private static func overlapCount(in sets: [ClipSet]) -> Int {
+  private static nonisolated func overlapCount(in sets: [ClipSet]) -> Int {
     guard sets.count > 1 else { return 0 }
     var overlaps = 0
     for index in 0..<(sets.count - 1) {
@@ -496,9 +525,10 @@ final class ClipIndexer {
   }
 }
 
-private struct ClipAssetProbe {
+nonisolated private struct ClipAssetProbe {
   let duration: Double
   let naturalSize: CGSize
+  let frameRate: Double?
   /// `false` when the asset failed to load a valid duration / video track —
   /// i.e. a corrupt or truncated clip. Such clips still get a fallback
   /// duration so the timeline stays intact, but they are flagged rather than
@@ -506,18 +536,24 @@ private struct ClipAssetProbe {
   var isReadable: Bool = true
 }
 
-private struct IndexedClipSetBuilder {
+nonisolated private struct IndexedClipSetBuilder {
   let timestamp: String
   let date: Date
   var files: [Camera: URL] = [:]
   var durations: [Camera: Double] = [:]
   var naturalSizes: [Camera: CGSize] = [:]
+  var frameRates: [Camera: Double] = [:]
   var unreadableCameras: Set<Camera> = []
 
   mutating func insert(camera: Camera, url: URL, metadata: ClipAssetProbe) {
     files[camera] = url
     durations[camera] = metadata.duration
     naturalSizes[camera] = metadata.naturalSize
+    if let frameRate = metadata.frameRate {
+      frameRates[camera] = frameRate
+    } else {
+      frameRates.removeValue(forKey: camera)
+    }
     if metadata.isReadable {
       unreadableCameras.remove(camera)
     } else {
@@ -537,6 +573,7 @@ private struct IndexedClipSetBuilder {
       files: files,
       cameraDurations: durations,
       naturalSizes: naturalSizes,
+      cameraFrameRates: frameRates,
       unreadableCameras: unreadableCameras
     )
   }

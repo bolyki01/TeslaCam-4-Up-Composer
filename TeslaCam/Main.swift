@@ -1,12 +1,21 @@
 #if os(macOS)
 import AppKit
 import SwiftUI
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
   private var window: NSWindow?
-  private var settingsWindow: NSWindow?
+  private var mainContentController: NSViewController?
+  private var logWindow: NSWindow?
   private let state = AppState()
+  private var didLaunch = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    launchIfNeeded()
+  }
+
+  fileprivate func launchIfNeeded() {
+    guard !didLaunch else { return }
+    didLaunch = true
     installMainMenu()
 
     let content = ContentView().environmentObject(state)
@@ -18,13 +27,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     )
     window.center()
     window.title = "TeslaCam"
-    window.contentView = NSHostingView(rootView: content)
-    window.makeKeyAndOrderFront(nil)
+    window.identifier = NSUserInterfaceItemIdentifier("TeslaCam.MainWindow")
+    window.isRestorable = false
+    window.isReleasedWhenClosed = false
+    let hostingController = NSHostingController(rootView: content)
+    window.contentViewController = hostingController
 
     NSApp.setActivationPolicy(.regular)
-    NSApp.activate(ignoringOtherApps: true)
 
     self.window = window
+    self.mainContentController = hostingController
+    showMainWindow()
+    DispatchQueue.main.async { [weak self] in
+      self?.showMainWindow()
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+      self?.showMainWindow()
+    }
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -58,6 +77,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     return true
   }
 
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    if !flag {
+      showMainWindow()
+    }
+    return true
+  }
+
+  private func showMainWindow() {
+    guard let window else { return }
+    NSApp.setActivationPolicy(.regular)
+    NSApp.activate(ignoringOtherApps: true)
+    window.makeKeyAndOrderFront(nil)
+    window.orderFrontRegardless()
+  }
+
   private func installMainMenu() {
     let appName = ProcessInfo.processInfo.processName
     let mainMenu = NSMenu()
@@ -65,9 +99,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     mainMenu.addItem(appMenuItem)
 
     let appMenu = NSMenu(title: appName)
-    let settingsItem = appMenu.addItem(withTitle: "Settings…", action: #selector(showSettingsWindow), keyEquivalent: ",")
-    settingsItem.target = self
-    appMenu.addItem(NSMenuItem.separator())
     appMenu.addItem(withTitle: "Quit \(appName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     appMenuItem.submenu = appMenu
 
@@ -86,6 +117,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let revealItem = fileMenu.addItem(withTitle: "Reveal Last Export", action: #selector(revealLastExport), keyEquivalent: "R")
     revealItem.target = self
     fileMenuItem.submenu = fileMenu
+
+    let viewMenuItem = NSMenuItem()
+    mainMenu.addItem(viewMenuItem)
+    let viewMenu = NSMenu(title: "View")
+    let logItem = viewMenu.addItem(withTitle: "Application Logs", action: #selector(showLogWindow), keyEquivalent: "l")
+    logItem.target = self
+    viewMenuItem.submenu = viewMenu
 
     // Playback menu — the macOS app previously had no keyboard transport at all.
     let playbackMenuItem = NSMenuItem()
@@ -162,28 +200,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     state.restart()
   }
 
-  @objc private func showSettingsWindow() {
-    if settingsWindow == nil {
-      let settingsView = SettingsView().environmentObject(state)
+  @objc private func showLogWindow() {
+    if logWindow == nil {
+      let logView = ApplicationLogView(logSink: state.debugLog, exporter: state.exporter)
       let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 460, height: 460),
-        styleMask: [.titled, .closable],
+        contentRect: NSRect(x: 0, y: 0, width: 820, height: 620),
+        styleMask: [.titled, .closable, .resizable, .miniaturizable],
         backing: .buffered,
         defer: false
       )
-      window.title = "Settings"
+      window.title = "Application Logs"
       window.isReleasedWhenClosed = false
-      window.contentView = NSHostingView(rootView: settingsView)
-      settingsWindow = window
+      window.contentView = NSHostingView(rootView: logView)
+      logWindow = window
     }
 
-    settingsWindow?.center()
-    settingsWindow?.makeKeyAndOrderFront(nil)
+    logWindow?.center()
+    logWindow?.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
   }
 
   func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-    switch menuItem.action {
+    canPerform(action: menuItem.action)
+  }
+
+  private func canPerform(action: Selector?) -> Bool {
+    switch action {
     case #selector(openFolder):
       return !state.exporter.isExporting
     case #selector(reloadSources):
@@ -206,128 +248,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
 @main
 struct MainApp {
-  static func main() {    let app = NSApplication.shared
+  private static var delegate: AppDelegate?
+
+  static func main() {
+    let app = NSApplication.shared
     let delegate = AppDelegate()
+    Self.delegate = delegate
     app.setActivationPolicy(.regular)
     app.delegate = delegate
-    app.activate(ignoringOtherApps: true)
-    app.run()
+    withExtendedLifetime(delegate) {
+      app.run()
+    }
   }
 }
 
-private struct SettingsView: View {
-  @EnvironmentObject var state: AppState
+private struct ApplicationLogView: View {
+  @ObservedObject var logSink: DebugLogSink
+  @ObservedObject var exporter: NativeExportController
 
   var body: some View {
     ZStack {
       TeslaCamSceneBackground()
 
       VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.cardGap) {
-        VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.xs) {
-          Text("TeslaCam Settings")
-            .font(TeslaCamTheme.Typography.panelTitle)
-            .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
-          Text("Keep defaults here. Keep playback simple.")
-            .font(TeslaCamTheme.Typography.sectionTitle.weight(.regular))
+        Text("Application Logs")
+          .font(TeslaCamTheme.Typography.panelTitle)
+          .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
+
+        ScrollView {
+          Text(logText)
+            .font(TeslaCamTheme.Typography.monoSmall)
             .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(TeslaCamTheme.Metrics.cardPaddingCompact)
         }
+        .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
 
-        settingsCard {
-          VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.rowGap) {
-            Text("Default Export Preset")
-              .font(TeslaCamTheme.Typography.sectionTitle)
-              .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
-
-            Picker("", selection: $state.exportPreset) {
-              ForEach(ExportPreset.allCases) { preset in
-                Text(preset.displayName).tag(preset)
-              }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
+        HStack {
+          Button("Reveal Export Log") {
+            exporter.revealLog()
           }
+          .buttonStyle(.bordered)
+
+          Spacer()
         }
-
-        settingsCard {
-          VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.rowGap) {
-            Text("Duplicate Handling")
-              .font(TeslaCamTheme.Typography.sectionTitle)
-              .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
-
-            Picker(
-              "",
-              selection: Binding(
-                get: { state.duplicatePolicy },
-                set: { state.updateDuplicatePolicy($0) }
-              )
-            ) {
-              ForEach(DuplicateClipPolicy.allCases) { policy in
-                Text(policy.displayName).tag(policy)
-              }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-
-            Toggle("Show duplicate resolver when conflicts exist", isOn: $state.showDuplicateResolverForConflicts)
-              .toggleStyle(.switch)
-              .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-          }
-        }
-
-#if DEBUG
-        if TeslaCamBuildFlags.showsDebugTools {
-          DebugEventsCard(logSink: state.debugLog)
-        }
-#endif
-
-        Spacer()
       }
       .padding(TeslaCamTheme.Spacing.screen)
     }
-    .frame(minWidth: 480, minHeight: 480)
+    .frame(minWidth: 720, minHeight: 520)
   }
 
-  private func settingsCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-    content()
-      .padding(TeslaCamTheme.Metrics.cardPadding)
-      .teslaCamCard()
-  }
-}
-
-private struct DebugEventsCard: View {
-  @ObservedObject var logSink: DebugLogSink
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.rowGap) {
-      Text("Recent Debug Events")
-        .font(TeslaCamTheme.Typography.sectionTitle)
-        .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
-
-      if logSink.events.isEmpty {
-        Text("No events yet.")
-          .font(TeslaCamTheme.Typography.bodySmall)
-          .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-      } else {
-        ScrollView {
-          VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
-            ForEach(Array(logSink.events.suffix(8).reversed())) { event in
-              VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.xs) {
-                Text("[\(event.category)] \(event.message)")
-                  .font(TeslaCamTheme.Typography.monoSmall)
-                  .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-                Text(TeslaCamFormatters.fullDateTime.string(from: event.timestamp))
-                  .font(.system(size: 10, weight: .regular, design: .monospaced))
-                  .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-              }
-              .frame(maxWidth: .infinity, alignment: .leading)
-            }
-          }
-        }
-        .frame(height: 120)
-      }
+  private var logText: String {
+    var sections: [String] = []
+    let appEvents = logSink.events.map { event in
+      "\(TeslaCamFormatters.fullDateTime.string(from: event.timestamp)) [\(event.category)] \(event.message)"
     }
-    .padding(TeslaCamTheme.Metrics.cardPadding)
-    .teslaCamCard()
+    sections.append(appEvents.isEmpty ? "Application log\nNo events yet." : "Application log\n" + appEvents.joined(separator: "\n"))
+    sections.append(exporter.log.isEmpty ? "Export log\nNo export log yet." : "Export log\n" + exporter.log)
+    return sections.joined(separator: "\n\n")
   }
 }
 #endif

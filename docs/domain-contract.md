@@ -44,7 +44,7 @@ Layouts use the canonical camera order from **Camera vocabulary**. The three pro
 
 `legacy4` / forced 4-camera uses `front, back, left_repeater, right_repeater` in a two-by-two layout.
 
-`sixcam` / forced 6-camera uses `front, back, left, right, left_pillar, right_pillar` in a centered three-by-three layout with empty top-left, top-right, bottom-centre cells.
+`sixcam` / forced 6-camera uses `front, back, left, right, left_pillar, right_pillar` in a two-by-three layout.
 
 `auto` chooses the 6-camera layout when any of `left`, `right`, `left_pillar`, or `right_pillar` are present. Otherwise it chooses the 4-camera layout.
 

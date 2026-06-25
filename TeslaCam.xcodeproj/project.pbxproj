@@ -37,6 +37,8 @@
 		7651D245D03D9627B0901116 /* NativeExportController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C6855C2F3526330073314B /* NativeExportController.swift */; };
 		8878B92A5590887F535BD892 /* IPadMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53FEA6CD4150968355138666 /* IPadMain.swift */; };
 		9D396087622135F7A72945A3 /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685462F3526330073314B /* PlaybackController.swift */; };
+		A7D7A1002F52000100000002 /* MacWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D7A1002F52000100000001 /* MacWorkspaceView.swift */; };
+		A7D7A1002F52000100000003 /* MacWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D7A1002F52000100000001 /* MacWorkspaceView.swift */; };
 		B3749F963B09DDA60FA98763 /* SourceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFC3905691B5A214C7F12DC6 /* SourceStore.swift */; };
 		B4FFA09213F66C171AF20512 /* TelemetryProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B832DA43FCA85C989EFF678 /* TelemetryProcessor.swift */; };
 		B582B85BBFA5AFDD00630B73 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C6853E2F3526330073314B /* ContentView.swift */; };
@@ -89,6 +91,7 @@
 		5B832DA43FCA85C989EFF678 /* TelemetryProcessor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TelemetryProcessor.swift; sourceTree = "<group>"; };
 		8CE32C56909B9153D7E4AD3E /* DomainContract.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DomainContract.swift; sourceTree = "<group>"; };
 		9B9A79DBE9E309C323846661 /* PlatformFileAccess.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlatformFileAccess.swift; sourceTree = "<group>"; };
+		A7D7A1002F52000100000001 /* MacWorkspaceView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MacWorkspaceView.swift; sourceTree = "<group>"; };
 		BFC3905691B5A214C7F12DC6 /* SourceStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SourceStore.swift; sourceTree = "<group>"; };
 		E7761E775BC37CD7C35A556C /* MetalPlayerView_iPad.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MetalPlayerView_iPad.swift; sourceTree = "<group>"; };
 		F6752ADD69F7C76B881977D4 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
@@ -189,6 +192,7 @@
 				50C6853C2F3526330073314B /* Resources */,
 				50C6853D2F3526330073314B /* AppState.swift */,
 				50C6853E2F3526330073314B /* ContentView.swift */,
+				A7D7A1002F52000100000001 /* MacWorkspaceView.swift */,
 				50C685402F3526330073314B /* Indexer.swift */,
 				50C6855C2F3526330073314B /* NativeExportController.swift */,
 				50C685412F3526330073314B /* Main.swift */,
@@ -385,6 +389,7 @@
 			files = (
 				50F4EAD1A7AC5FC49F71BF31 /* AppState.swift in Sources */,
 				B582B85BBFA5AFDD00630B73 /* ContentView.swift in Sources */,
+				A7D7A1002F52000100000003 /* MacWorkspaceView.swift in Sources */,
 				195FACF22EF24C7709F0D524 /* Indexer.swift in Sources */,
 				0D99B7AF17EAC3FC2DE17FE4 /* MetalRenderer.swift in Sources */,
 				DF1527E9A5192CB26430404E /* MetalShaders.metal in Sources */,
@@ -409,6 +414,7 @@
 			files = (
 				50C6854A2F3526330073314B /* MetalRenderer.swift in Sources */,
 				50C6854B2F3526330073314B /* ContentView.swift in Sources */,
+				A7D7A1002F52000100000002 /* MacWorkspaceView.swift in Sources */,
 				50C6854C2F3526330073314B /* TelemetryParser.swift in Sources */,
 				50C6854D2F3526330073314B /* Main.swift in Sources */,
 				50C6854E2F3526330073314B /* MetalPlayerView.swift in Sources */,
@@ -473,7 +479,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -785,7 +791,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

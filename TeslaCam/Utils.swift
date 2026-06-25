@@ -60,7 +60,7 @@ func ceilToMinute(_ date: Date) -> Date {
   return floored.addingTimeInterval(60)
 }
 
-extension Array {
+nonisolated extension Array {
   subscript(safe index: Int) -> Element? {
     guard index >= 0 && index < count else { return nil }
     return self[index]
@@ -105,33 +105,36 @@ enum TeslaCamTheme {
     static let textTertiary = Color.white.opacity(0.48)
     static let gapFill = Color(red: 0.17, green: 0.12, blue: 0.12)
     static let gapAccent = Color(red: 0.93, green: 0.38, blue: 0.28)
-    static let overlayScrim = Color.black.opacity(0.5)
+    static let overlayScrim = Color.black.opacity(0.78)
     static let overlaySurface = Color.white.opacity(0.08)
-    static let overlaySurfaceStrong = Color.black.opacity(0.36)
+    static let overlaySurfaceStrong = Color(red: 0.035, green: 0.036, blue: 0.042)
     static let controlKnob = Color.white.opacity(0.88)
     static let controlKnobStroke = Color.white.opacity(0.2)
     #endif
   }
 
   enum Metrics {
-    /// Primary action button height. Honors Apple HIG 44pt minimum tap target.
+    #if os(iOS)
     static let controlHeight: CGFloat = 44
-    /// Compact / icon button height. 44 on iOS, slightly tighter is acceptable on macOS but we keep 44 for parity.
     static let compactControlHeight: CGFloat = 44
+    #else
+    static let controlHeight: CGFloat = 32
+    static let compactControlHeight: CGFloat = 32
+    #endif
     /// Standard chrome strip height (toolbars, status bars).
     static let toolbarHeight: CGFloat = 52
 
-    static let cardCorner: CGFloat = 10
-    static let controlCorner: CGFloat = 10
-    static let compactCorner: CGFloat = 10
+    static let cardCorner: CGFloat = 8
+    static let controlCorner: CGFloat = 7
+    static let compactCorner: CGFloat = 7
 
     /// Padding inside a primary content card (e.g. TimelineExportCard, PreviewPanelCard).
     static let cardPadding: CGFloat = 20
     /// Padding inside a secondary / compact card (e.g. StatCard, RangeControlCard, TelemetryMetric).
     static let cardPaddingCompact: CGFloat = 14
     /// Padding inside a small inline chip (chips, info banners).
-    static let chipPaddingHorizontal: CGFloat = 12
-    static let chipPaddingVertical: CGFloat = 8
+    static let chipPaddingHorizontal: CGFloat = 10
+    static let chipPaddingVertical: CGFloat = 6
 
     /// Outer screen-edge padding for top-level content.
     static let contentPadding: CGFloat = 24
@@ -246,22 +249,22 @@ enum CompactControlSize: CaseIterable {
   var visualWidth: CGFloat {
     switch self {
     case .icon:
-      return 36
+      return TeslaCamTheme.Metrics.compactControlHeight
     case .chip:
-      return 72
+      return 64
     case .command:
-      return 120
+      return 152
     }
   }
 
   var visualHeight: CGFloat {
     switch self {
     case .icon:
-      return 34
+      return TeslaCamTheme.Metrics.compactControlHeight
     case .chip:
-      return 34
+      return TeslaCamTheme.Metrics.compactControlHeight
     case .command:
-      return 36
+      return TeslaCamTheme.Metrics.compactControlHeight
     }
   }
 
@@ -271,11 +274,11 @@ enum CompactControlSize: CaseIterable {
   var maxWidth: CGFloat {
     switch self {
     case .icon:
-      return 44
+      return TeslaCamTheme.Metrics.compactControlHeight
     case .chip:
-      return 120
+      return 96
     case .command:
-      return 160
+      return 152
     }
   }
 }
@@ -490,8 +493,9 @@ struct CompactButtonStyle: ButtonStyle {
         .foregroundStyle(TeslaCamTheme.Colors.textPrimary.opacity(configuration.isPressed ? 0.72 : 0.96))
         .lineLimit(1)
         .minimumScaleFactor(0.78)
-        .padding(.horizontal, size == .icon ? 0 : TeslaCamTheme.Spacing.m)
-        .frame(minWidth: size == .icon ? size.visualWidth : nil)
+        .padding(.horizontal, size == .icon ? 0 : TeslaCamTheme.Spacing.s)
+        .frame(width: size == .icon ? size.visualWidth : nil)
+        .frame(minWidth: size == .icon ? nil : size.visualWidth)
         .frame(maxWidth: size.maxWidth)
         .frame(height: size.visualHeight)
         .glassSurface(

@@ -1,6 +1,6 @@
 import Foundation
 
-struct SeiMetadata: Hashable {
+nonisolated struct SeiMetadata: Hashable {
   enum Gear: Int {
     case park = 0
     case drive = 1
@@ -33,12 +33,12 @@ struct SeiMetadata: Hashable {
   var linearAccelZ: Double = 0
 }
 
-struct TelemetryFrame: Hashable {
+nonisolated struct TelemetryFrame: Hashable {
   let timestampMs: Double
   let sei: SeiMetadata
 }
 
-struct TelemetryTimeline {
+nonisolated struct TelemetryTimeline {
   let frames: [TelemetryFrame]
 
   func closest(to timeMs: Double) -> TelemetryFrame? {
@@ -60,7 +60,7 @@ struct TelemetryTimeline {
   }
 }
 
-final class TelemetryParser {
+nonisolated final class TelemetryParser {
   static func parseTimeline(url: URL) throws -> TelemetryTimeline {
     let data = try Data(contentsOf: url, options: [.mappedIfSafe])
     let mp4 = DashcamMP4(data: data)
@@ -69,13 +69,13 @@ final class TelemetryParser {
   }
 }
 
-enum SafeBinaryReaderError: Error, Equatable {
+nonisolated enum SafeBinaryReaderError: Error, Equatable {
   case outOfBounds(offset: Int, requested: Int, count: Int)
   case invalidLength(Int)
   case nonAdvancingBox(offset: Int)
 }
 
-struct SafeBinaryReader {
+nonisolated struct SafeBinaryReader {
   private let data: Data
   private(set) var offset: Int
   let end: Int
@@ -147,14 +147,14 @@ struct SafeBinaryReader {
   }
 }
 
-struct SafeMP4BoxHeader: Equatable {
+nonisolated struct SafeMP4BoxHeader: Equatable {
   let type: String
   let contentStart: Int
   let contentEnd: Int
   let boxEnd: Int
 }
 
-extension SafeBinaryReader {
+nonisolated extension SafeBinaryReader {
   mutating func readMP4BoxHeader(parentEnd: Int) throws -> SafeMP4BoxHeader? {
     guard offset + 8 <= parentEnd else { return nil }
     let boxStart = offset
@@ -194,7 +194,7 @@ extension SafeBinaryReader {
 
 // MARK: - MP4 parsing and SEI extraction
 
-private final class DashcamMP4 {
+nonisolated private final class DashcamMP4 {
   private static let maxDurationSamples = 1_000_000
   private let data: Data
 
@@ -381,13 +381,13 @@ private final class DashcamMP4 {
 
 }
 
-private struct MP4Config {
+nonisolated private struct MP4Config {
   let durations: [Double]
 }
 
 // MARK: - Minimal protobuf decoder for SeiMetadata
 
-private enum ProtoSeiDecoder {
+nonisolated private enum ProtoSeiDecoder {
   static func decode(_ data: Data) -> SeiMetadata? {
     var reader = ProtoReader(data: data)
     var msg = SeiMetadata()
@@ -439,7 +439,7 @@ private enum ProtoSeiDecoder {
   }
 }
 
-private struct ProtoReader {
+nonisolated private struct ProtoReader {
   private let data: Data
   private var offset: Int = 0
 

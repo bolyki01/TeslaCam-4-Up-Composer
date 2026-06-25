@@ -18,12 +18,12 @@ _LAYOUT_GRIDS: Dict[LayoutKind, Dict[Camera, Tuple[int, int]]] = {
         Camera.RIGHT_REPEATER: (1, 1),
     },
     LayoutKind.SIX_UP: {
-        Camera.FRONT: (0, 1),
-        Camera.LEFT: (1, 0),
-        Camera.BACK: (1, 1),
-        Camera.RIGHT: (1, 2),
-        Camera.LEFT_PILLAR: (2, 0),
-        Camera.RIGHT_PILLAR: (2, 2),
+        Camera.FRONT: (0, 0),
+        Camera.BACK: (0, 1),
+        Camera.LEFT: (0, 2),
+        Camera.RIGHT: (1, 0),
+        Camera.LEFT_PILLAR: (1, 1),
+        Camera.RIGHT_PILLAR: (1, 2),
     },
 }
 

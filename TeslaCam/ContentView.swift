@@ -38,9 +38,6 @@ struct ContentView: View {
     } message: {
       Text(state.errorMessage)
     }
-    .sheet(isPresented: $state.isDuplicateResolverPresented) {
-      DuplicateResolverSheet(state: state)
-    }
     .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTarget, perform: handleFileDrop(providers:))
     #if os(iOS)
     .fileImporter(
@@ -63,38 +60,15 @@ struct ContentView: View {
     IPadLoadedScreen(state: state, playbackUI: state.playbackUI)
 #else
     GeometryReader { proxy in
-      HStack(spacing: 0) {
-        if !state.eventSummaries.isEmpty {
-          MacEventSidebar(state: state)
-            .frame(width: 300)
-            .padding(TeslaCamTheme.Metrics.contentPadding)
-        }
-
-        VStack(spacing: 0) {
-          LoadedStatusBar(state: state)
-
-          ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.cardGap) {
-              PreviewPanelCard(
-                state: state,
-                playbackUI: state.playbackUI,
-                maxAvailableHeight: loadedPreviewMaxHeight(for: proxy.size.height)
-              )
-
-              TimelineExportCard(
-                state: state,
-                playback: state.playback,
-                playbackUI: state.playbackUI,
-                timelineMarkers: timelineMarkers,
-                isSingleDayTimeline: isSingleDayTimeline
-              )
-            }
-            .frame(maxWidth: loadedContentMaxWidth, alignment: .top)
-            .padding(TeslaCamTheme.Metrics.contentPadding)
-            .frame(maxWidth: .infinity, alignment: .top)
-          }
-        }
-      }
+      MacLoadedWorkspace(
+        state: state,
+        playback: state.playback,
+        playbackUI: state.playbackUI,
+        timelineMarkers: timelineMarkers,
+        isSingleDayTimeline: isSingleDayTimeline,
+        loadedContentMaxWidth: loadedContentMaxWidth,
+        maxPreviewHeight: loadedPreviewMaxHeight(for: proxy.size.height)
+      )
     }
     .accessibilityIdentifier("loaded-screen")
 #endif
@@ -157,7 +131,7 @@ struct ContentView: View {
 
   private func loadedPreviewMaxHeight(for totalHeight: CGFloat) -> CGFloat {
     // Keep the controls reachable without scrolling.
-    let reserved: CGFloat = state.camerasDetected.count <= 4 ? 420 : 460
+    let reserved: CGFloat = 236
     return max(240, totalHeight - reserved)
   }
 }
@@ -537,7 +511,7 @@ private struct DemoVideoWallPlaceholder: View {
     GeometryReader { proxy in
       let size = proxy.size
       let gap = TeslaCamTheme.Spacing.xs
-      let columns = displayCameras.count > 4 ? 2 : 2
+      let columns = displayCameras.count > 4 ? 3 : 2
       let rows = max(1, Int(ceil(Double(max(displayCameras.count, 1)) / Double(columns))))
       let cellWidth = (size.width - CGFloat(columns - 1) * gap) / CGFloat(columns)
       let cellHeight = (size.height - CGFloat(rows - 1) * gap) / CGFloat(rows)
@@ -679,6 +653,8 @@ private struct IPadTimelineDock: View {
         selectedStartSeconds: $state.trimStartSeconds,
         selectedEndSeconds: $state.trimEndSeconds,
         gapRanges: state.timelineGapRanges,
+        eventMarkers: state.telemetryEventMarkers,
+        eventMarkerOffsetSeconds: state.timelineStartOffsetForCurrentClip,
         totalDuration: max(state.totalDuration, 1),
         onSeekStart: { state.beginSeek() },
         onSeekChange: { state.liveSeek(to: $0) },
@@ -690,19 +666,39 @@ private struct IPadTimelineDock: View {
       .frame(height: 56)
 
       HStack(spacing: TeslaCamTheme.Spacing.s) {
-        Button("All") { state.setFullRange() }
+        Button {
+          state.setFullRange()
+        } label: {
+          Label("All", systemImage: "arrow.left.and.right")
+        }
           .compactButtonStyle(role: .control, size: .chip)
           .accessibilityIdentifier("range-whole-timeline")
-        Button("1m") { state.setCurrentMinuteRange() }
+        Button {
+          state.setCurrentMinuteRange()
+        } label: {
+          Label("1m", systemImage: "clock")
+        }
           .compactButtonStyle(role: .control, size: .chip)
           .accessibilityIdentifier("range-current-minute")
-        Button("5m") { state.setRecentRange(minutes: 5) }
+        Button {
+          state.setRecentRange(minutes: 5)
+        } label: {
+          Label("5m", systemImage: "clock.arrow.circlepath")
+        }
           .compactButtonStyle(role: .control, size: .chip)
           .accessibilityIdentifier("range-last-5m")
-        Button("15m") { state.setRecentRange(minutes: 15) }
+        Button {
+          state.setRecentRange(minutes: 15)
+        } label: {
+          Label("15m", systemImage: "clock.badge")
+        }
           .compactButtonStyle(role: .control, size: .chip)
           .accessibilityIdentifier("range-last-15m")
-        Button("30m") { state.setRecentRange(minutes: 30) }
+        Button {
+          state.setRecentRange(minutes: 30)
+        } label: {
+          Label("30m", systemImage: "clock.badge.checkmark")
+        }
           .compactButtonStyle(role: .control, size: .chip)
           .accessibilityIdentifier("range-last-30m")
         Spacer(minLength: 0)
@@ -721,7 +717,7 @@ private struct IPadRangeOptionsPanel: View {
     let minDate = state.minDate ?? Date()
     let maxDate = state.maxDate ?? Date()
 
-    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
+    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.xs) {
       PanelHeader(
         title: "Range",
         systemImage: "timeline.selection"
@@ -756,8 +752,8 @@ private struct IPadRangeOptionsPanel: View {
       }
 
       RangeControlCard(title: "Preset") {
-        Picker("", selection: $state.exportPreset) {
-          ForEach(ExportPreset.allCases) { preset in
+        Picker("", selection: exportPresetBinding) {
+          ForEach(ExportPreset.visibleCases) { preset in
             Text(preset.displayName).tag(preset)
           }
         }
@@ -765,32 +761,17 @@ private struct IPadRangeOptionsPanel: View {
         .pickerStyle(.menu)
       }
 
-      HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
-        Text("Dupes")
-          .font(TeslaCamTheme.Typography.label)
-          .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-        Picker(
-          "",
-          selection: Binding(
-            get: { state.duplicatePolicy },
-            set: { state.updateDuplicatePolicy($0) }
-          )
-        ) {
-          ForEach(DuplicateClipPolicy.allCases) { policy in
-            Text(policy.displayName).tag(policy)
-          }
-        }
-        .labelsHidden()
-        .pickerStyle(.menu)
-      }
-      .padding(TeslaCamTheme.Spacing.s)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .glassSurface(role: .control, radius: TeslaCamTheme.Metrics.compactCorner)
-
       CameraToggleRow(state: state)
     }
     .padding(TeslaCamTheme.Spacing.s)
     .glassSurface(role: .panel, radius: TeslaCamTheme.Metrics.cardCorner)
+  }
+
+  private var exportPresetBinding: Binding<ExportPreset> {
+    Binding(
+      get: { state.exportPreset },
+      set: { state.setExportPreset($0) }
+    )
   }
 }
 
@@ -1388,7 +1369,7 @@ private struct ClipHealthPanel: View {
   let facts: [ClipHealthFact]
 
   var body: some View {
-    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
+    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.xs) {
       PanelHeader(title: "Health", systemImage: "cross.case")
 
       LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: TeslaCamTheme.Spacing.s) {
@@ -1669,6 +1650,8 @@ private struct IPadExportStatusPanel: View {
 
   private var presetShortName: String {
     switch state.exportPreset {
+    case .originalTracksMOV:
+      return "Tracks"
     case .maxQualityHEVC:
       return "Evidence"
     case .fastHEVC:
@@ -1854,7 +1837,7 @@ private struct InspectorChipLabel: View {
     .foregroundStyle(TeslaCamTheme.Colors.textPrimary.opacity(disabled ? 0.35 : 0.94))
     .padding(.horizontal, TeslaCamTheme.Spacing.s)
     .frame(maxWidth: .infinity)
-    .frame(height: 28)
+    .frame(height: TeslaCamTheme.Metrics.compactControlHeight)
     .glassSurface(role: disabled ? .control : role, radius: TeslaCamTheme.Metrics.compactCorner, interactive: !disabled)
     .contentShape(Rectangle())
     .opacity(disabled ? 0.55 : 1)
@@ -1863,146 +1846,41 @@ private struct InspectorChipLabel: View {
 #endif
 
 #if os(macOS)
-/// macOS event-triage sidebar: the dashcam-event browser the shipping Mac app
-/// previously lacked (it was iOS-only). Reuses the cross-platform AppState
-/// event data — search, sort, reason filter, and jump-to-event all flow through
-/// the same model the iPad dashboard uses.
-struct MacEventSidebar: View {
+struct MacTimelineWorkspace: View {
   @ObservedObject var state: AppState
+  @ObservedObject var playback: MultiCamPlaybackController
+  @ObservedObject var playbackUI: PlaybackUIState
+  let timelineMarkers: [Date]
+  let isSingleDayTimeline: Bool
+  let loadedContentMaxWidth: CGFloat
+  let maxPreviewHeight: CGFloat
 
   var body: some View {
-    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
-      HStack(spacing: TeslaCamTheme.Spacing.xs) {
-        Image(systemName: "list.bullet.rectangle")
-          .font(TeslaCamTheme.Typography.label)
-          .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-        Text("Events")
-          .font(TeslaCamTheme.Typography.sectionTitle)
-          .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
-        Spacer(minLength: 0)
-        Text("\(state.filteredEventSummaries.count)")
-          .font(TeslaCamTheme.Typography.monoSmall)
-          .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+    GeometryReader { proxy in
+      let outerPadding = TeslaCamTheme.Spacing.m * 2
+      let controlDockHeight: CGFloat = 236
+      let availablePreviewHeight = max(
+        320,
+        proxy.size.height - outerPadding - controlDockHeight - TeslaCamTheme.Spacing.s
+      )
+      VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
+        PreviewPanelCard(
+          state: state,
+          playbackUI: playbackUI,
+          maxAvailableHeight: min(maxPreviewHeight, availablePreviewHeight)
+        )
+
+        TimelineExportCard(
+          state: state,
+          playback: playback,
+          playbackUI: playbackUI,
+          timelineMarkers: timelineMarkers,
+          isSingleDayTimeline: isSingleDayTimeline
+        )
       }
-
-      HStack(spacing: TeslaCamTheme.Spacing.s) {
-        Image(systemName: "magnifyingglass")
-          .font(TeslaCamTheme.Typography.label)
-          .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-        TextField("Search", text: $state.eventSearchText)
-          .textFieldStyle(.plain)
-          .font(TeslaCamTheme.Typography.bodySmall)
-      }
-      .padding(.horizontal, TeslaCamTheme.Spacing.m)
-      .frame(height: 32)
-      .glassSurface(role: .control, radius: TeslaCamTheme.Metrics.compactCorner, interactive: true)
-      .accessibilityIdentifier("event-search")
-
-      HStack(spacing: TeslaCamTheme.Spacing.s) {
-        Picker("Sort", selection: $state.eventSortMode) {
-          ForEach(TeslaCamEventSortMode.allCases) { mode in
-            Text(mode.displayName).tag(mode)
-          }
-        }
-        .pickerStyle(.menu)
-        .frame(maxWidth: .infinity)
-
-        Picker("Type", selection: Binding(
-          get: { state.eventReasonFilter == "all" ? "All" : state.eventReasonFilter },
-          set: { state.eventReasonFilter = $0 == "All" ? "all" : $0 }
-        )) {
-          ForEach(state.eventReasonOptions, id: \.self) { reason in
-            Text(reason).tag(reason)
-          }
-        }
-        .pickerStyle(.menu)
-        .frame(maxWidth: .infinity)
-      }
-      .controlSize(.small)
-      .labelsHidden()
-
-      if state.filteredEventSummaries.isEmpty {
-        VStack(spacing: TeslaCamTheme.Spacing.xs) {
-          Text("No matching events")
-            .font(TeslaCamTheme.Typography.bodySmall)
-            .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else {
-        ScrollView(.vertical, showsIndicators: false) {
-          LazyVStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
-            ForEach(state.filteredEventSummaries) { event in
-              MacEventRow(
-                event: event,
-                active: state.currentEvent?.id == event.id
-              ) {
-                state.jumpToEvent(event)
-              }
-            }
-          }
-        }
-      }
-    }
-    .padding(TeslaCamTheme.Metrics.cardPaddingCompact)
-    .frame(maxHeight: .infinity, alignment: .top)
-    .glassSurface(role: .panel, radius: TeslaCamTheme.Metrics.cardCorner)
-    .accessibilityIdentifier("event-browser")
-  }
-}
-
-private struct MacEventRow: View {
-  let event: TeslaCamEventSummary
-  let active: Bool
-  let action: () -> Void
-
-  var body: some View {
-    Button(action: action) {
-      HStack(spacing: TeslaCamTheme.Spacing.s) {
-        MacEventThumbnail(url: event.thumbnailURL)
-          .frame(width: 56, height: 42)
-          .clipShape(RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.compactCorner, style: .continuous))
-
-        VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.xs) {
-          Text(TeslaCamFormatters.timelineSameDay.string(from: event.timestamp))
-            .font(TeslaCamTheme.Typography.monoSmall)
-            .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
-          Text(event.locationTitle)
-            .font(TeslaCamTheme.Typography.label)
-            .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-            .lineLimit(1)
-          Text(event.reasonTitle)
-            .font(.system(size: 11))
-            .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-            .lineLimit(1)
-        }
-        Spacer(minLength: 0)
-      }
-      .padding(TeslaCamTheme.Spacing.s)
-      .glassSurface(role: active ? .selected : .control, radius: TeslaCamTheme.Metrics.compactCorner, interactive: true)
-    }
-    .buttonStyle(.plain)
-    .accessibilityIdentifier("event-row")
-  }
-}
-
-private struct MacEventThumbnail: View {
-  let url: URL?
-
-  var body: some View {
-    Group {
-      if let url, let image = NSImage(contentsOfFile: url.path) {
-        Image(nsImage: image)
-          .resizable()
-          .scaledToFill()
-      } else {
-        Rectangle()
-          .fill(TeslaCamTheme.Colors.surfaceElevated)
-          .overlay(
-            Image(systemName: "video")
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-          )
-      }
+      .frame(maxWidth: loadedContentMaxWidth, alignment: .top)
+      .padding(TeslaCamTheme.Spacing.m)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
   }
 }
@@ -2123,44 +2001,28 @@ private struct IndexingScreen: View {
       Spacer()
 
       GridPanel(role: .overlay, padding: TeslaCamTheme.Spacing.xxl, radius: TeslaCamTheme.Metrics.cardCorner) {
-        VStack(spacing: TeslaCamTheme.Spacing.l) {
+        VStack(spacing: TeslaCamTheme.Spacing.m) {
           PanelHeader(
-            title: "Building Timeline",
+            title: "Putting the timeline together",
             systemImage: "timeline.selection"
           )
 
-          ProgressView()
+          ProgressView(value: progress)
             .progressViewStyle(.linear)
             .tint(TeslaCamTheme.Colors.accent)
 
-          VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
-            ForEach(ScanStage.allCases) { stage in
-              StageRow(
-                title: stage.title,
-                completed: stage.rawValue < state.scanStage.rawValue,
-                active: stage == state.scanStage
-              )
-            }
+          HStack {
+            Text(indexingSubtitle)
+              .font(TeslaCamTheme.Typography.bodySmall)
+              .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+            Spacer()
+            Text(progressText)
+              .font(TeslaCamTheme.Typography.numericBody)
+              .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
           }
-
-          LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: TeslaCamTheme.Spacing.s) {
-            MetricTile(title: "Sources", value: "\(max(1, state.sourceURLs.count))")
-            MetricTile(title: "Clips", value: "\(state.scanDiscoveredClipCount)")
-            MetricTile(title: "Range", value: state.scanDateRangeSummary)
-            MetricTile(
-              title: "Duration",
-              value: state.totalDuration > 0 ? state.scanDurationSummary : "Scanning"
-            )
-          }
-
-          RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.compactCorner, style: .continuous)
-            .fill(TeslaCamTheme.Colors.surface)
-            .frame(height: 48)
-            .overlay(TimelinePreviewBars(active: true).padding(.horizontal, TeslaCamTheme.Spacing.l))
-            .glassSurface(role: .control, radius: TeslaCamTheme.Metrics.compactCorner)
         }
       }
-      .frame(maxWidth: 560)
+      .frame(maxWidth: 460)
 
       Spacer()
     }
@@ -2170,55 +2032,29 @@ private struct IndexingScreen: View {
     VStack {
       Spacer()
 
-      VStack(spacing: TeslaCamTheme.Spacing.section) {
-        VStack(spacing: TeslaCamTheme.Spacing.m) {
-          Text("Building Your Timeline")
-            .font(TeslaCamTheme.Typography.panelTitle)
-            .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
-          Text("Organizing clips automatically")
-            .font(TeslaCamTheme.Typography.body)
-            .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-        }
+      VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.m) {
+        Text("Putting the timeline together")
+          .font(TeslaCamTheme.Typography.panelTitle)
+          .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
 
-        ProgressView()
+        ProgressView(value: progress)
           .progressViewStyle(.linear)
           .tint(TeslaCamTheme.Colors.accent)
-          .frame(width: TeslaCamTheme.Layout.narrowPanelWidth)
 
-        VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.rowGap) {
-          ForEach(ScanStage.allCases) { stage in
-            StageRow(
-              title: stage.title,
-              completed: stage.rawValue < state.scanStage.rawValue,
-              active: stage == state.scanStage
-            )
-          }
+        HStack {
+          Text(indexingSubtitle)
+            .font(TeslaCamTheme.Typography.body)
+            .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+            .lineLimit(1)
+          Spacer()
+          Text(progressText)
+            .font(TeslaCamTheme.Typography.numericBody)
+            .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
         }
-        .frame(width: TeslaCamTheme.Layout.narrowPanelWidth, alignment: .leading)
-
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: TeslaCamTheme.Spacing.cardGap) {
-          StatCard(title: "Sources", value: "\(max(1, state.sourceURLs.count))")
-          StatCard(title: "Clips", value: "\(state.scanDiscoveredClipCount)")
-          StatCard(title: "Date Range", value: state.scanDateRangeSummary)
-          StatCard(
-            title: "Duration",
-            value: state.totalDuration > 0 ? state.scanDurationSummary : (state.indexStatus.isEmpty ? "Scanning" : state.indexStatus)
-          )
-        }
-        .frame(width: TeslaCamTheme.Layout.narrowPanelWidth)
-
-        VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.rowGap) {
-          Text("Timeline Preview".uppercased())
-            .font(TeslaCamTheme.Typography.label)
-            .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-
-          RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.compactCorner, style: .continuous)
-            .fill(TeslaCamTheme.Colors.surface)
-            .frame(height: 48)
-            .overlay(TimelinePreviewBars(active: true).padding(.horizontal, TeslaCamTheme.Spacing.l))
-        }
-        .frame(width: TeslaCamTheme.Layout.narrowPanelWidth)
       }
+      .padding(TeslaCamTheme.Spacing.xxl)
+      .frame(width: min(TeslaCamTheme.Layout.narrowPanelWidth, 520), alignment: .leading)
+      .teslaCamCard(fill: TeslaCamTheme.Colors.overlaySurfaceStrong, radius: TeslaCamTheme.Metrics.cardCorner)
 
       Spacer()
     }
@@ -2226,40 +2062,23 @@ private struct IndexingScreen: View {
     .accessibilityIdentifier("indexing-screen")
     #endif
   }
-}
 
-private struct LoadedStatusBar: View {
-  @ObservedObject var state: AppState
+  private var progress: Double {
+    let stageCount = max(1, ScanStage.allCases.count)
+    let stageBase = Double(state.scanStage.rawValue) / Double(stageCount)
+    let stageSpan = 1.0 / Double(stageCount)
+    let clipBoost = min(0.7, Double(state.scanDiscoveredClipCount) / 6_000.0)
+    return min(0.97, max(0.06, stageBase + stageSpan * clipBoost))
+  }
 
-  var body: some View {
-    ZStack {
-      HStack {
-        Button("Choose Folder") {
-          state.chooseFolder()
-        }
-        .buttonStyle(QuickActionButtonStyle())
-        .accessibilityIdentifier("choose-folder-loaded")
+  private var progressText: String {
+    "\(Int((progress * 100).rounded()))%"
+  }
 
-        Spacer()
-      }
-
-      Text("TeslaCam")
-        .font(TeslaCamTheme.Typography.sectionTitle)
-        .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-    }
-    .padding(.horizontal, TeslaCamTheme.Spacing.screen)
-    .frame(height: TeslaCamTheme.Layout.toolbarHeight)
-    .background(TeslaCamTheme.Colors.chromeBar)
-    .overlay(alignment: .bottom) {
-      Rectangle()
-        .fill(TeslaCamTheme.Colors.stroke)
-        .frame(height: 1)
-    }
-    .overlay(alignment: .top) {
-      Rectangle()
-        .fill(Color.white.opacity(0.03))
-        .frame(height: 1)
-    }
+  private var indexingSubtitle: String {
+    state.scanDiscoveredClipCount > 0
+      ? "\(state.scanDiscoveredClipCount) clips found"
+      : "Scanning clips"
   }
 }
 
@@ -2278,10 +2097,10 @@ private struct PreviewPanelCard: View {
           .overlay(
             MetalPlayerView(
               playback: state.playback,
-              cameraOrder: state.activePreviewCameras,
+              cameraOrder: state.gridPreviewCameras,
               layoutRequest: state.layoutRequest,
-              previewLayoutMode: state.previewLayoutMode,
-              focusedCamera: state.focusedCamera,
+              previewLayoutMode: .grid,
+              focusedCamera: nil,
               naturalSizes: state.currentPreviewNaturalSizes
             )
               .clipShape(RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.cardCorner, style: .continuous))
@@ -2299,28 +2118,6 @@ private struct PreviewPanelCard: View {
         .padding(.vertical, TeslaCamTheme.Metrics.chipPaddingVertical)
         .teslaCamCard(fill: TeslaCamTheme.Colors.overlaySurfaceStrong, radius: TeslaCamTheme.Metrics.compactCorner)
         .padding(TeslaCamTheme.Spacing.l)
-
-        HStack(spacing: TeslaCamTheme.Spacing.s) {
-          ForEach(state.camerasDetected, id: \.self) { camera in
-            Text(camera.shortName)
-              .font(TeslaCamTheme.Typography.label)
-              .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-          }
-        }
-        .padding(TeslaCamTheme.Spacing.l)
-        .frame(maxWidth: .infinity, alignment: .topTrailing)
-
-        if !state.privacyMode, !playbackUI.telemetryText.isEmpty {
-          Text(playbackUI.telemetryText)
-            .font(TeslaCamTheme.Typography.monoSmall)
-            .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-            .lineLimit(3)
-            .padding(.horizontal, TeslaCamTheme.Metrics.chipPaddingHorizontal)
-            .padding(.vertical, TeslaCamTheme.Metrics.chipPaddingVertical)
-            .teslaCamCard(fill: TeslaCamTheme.Colors.overlaySurfaceStrong, radius: TeslaCamTheme.Metrics.compactCorner)
-            .padding(TeslaCamTheme.Spacing.l)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-        }
 
         if state.currentGapRange != nil {
           Text("No recording in this span")
@@ -2386,52 +2183,32 @@ private struct TimelineExportCard: View {
     let minDate = state.minDate ?? Date()
     let maxDate = state.maxDate ?? Date()
 
-    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.rowGap) {
+    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
+      timelineDock
 
-      // ── Row 1: Playback bar ──────────────────────────────
-      HStack(spacing: TeslaCamTheme.Spacing.m) {
-        Button {
-          state.togglePlay()
-        } label: {
-          Label(
-            playback.isPlaying ? "Pause" : "Play",
-            systemImage: playback.isPlaying ? "pause.fill" : "play.fill"
-          )
-          .labelStyle(.iconOnly)
-        }
-        #if os(iOS)
-        .compactButtonStyle(role: .selected, size: .icon)
-        #else
-        .buttonStyle(IconButtonStyle(prominent: true))
-        #endif
-        .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
-        .accessibilityValue(playback.isPlaying ? "playing" : "paused")
-        .accessibilityIdentifier("toggle-playback")
+      #if os(iOS)
+      iPadControlStack(minDate: minDate, maxDate: maxDate)
+      #else
+      macControlStack(minDate: minDate, maxDate: maxDate)
+      #endif
+    }
+    .padding(TeslaCamTheme.Metrics.cardPaddingCompact)
+    #if os(iOS)
+    .glassSurface(role: .panel, radius: TeslaCamTheme.Metrics.cardCorner)
+    #else
+    .teslaCamCard()
+    #endif
+  }
 
-        Text(playbackSummaryText)
-          .font(TeslaCamTheme.Typography.monoDetail)
-          .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-
-        Spacer()
-
-        Text(formatHMS(state.selectedTrimDuration))
-          .font(TeslaCamTheme.Typography.monoDetail)
-          .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-
-        Text("·")
-          .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-
-        Text("\(state.selectedSetsForExport.count) spans")
-          .font(TeslaCamTheme.Typography.monoDetail)
-          .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-      }
-
-      // ── Row 2: Timeline track ────────────────────────────
+  private var timelineDock: some View {
+    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
       TimelineSelectionTrack(
         currentSeconds: playbackSecondsBinding,
         selectedStartSeconds: $state.trimStartSeconds,
         selectedEndSeconds: $state.trimEndSeconds,
         gapRanges: state.timelineGapRanges,
+        eventMarkers: state.telemetryEventMarkers,
+        eventMarkerOffsetSeconds: state.timelineStartOffsetForCurrentClip,
         totalDuration: max(state.totalDuration, 1),
         onSeekStart: { state.beginSeek() },
         onSeekChange: { state.liveSeek(to: $0) },
@@ -2440,21 +2217,337 @@ private struct TimelineExportCard: View {
         onDragChange: { start, end in state.updateTrimRange(startSeconds: start, endSeconds: end) },
         onDragEnd: { start, end in state.endTrimDrag(startSeconds: start, endSeconds: end) }
       )
-      .frame(height: 72)
+      .frame(height: 36)
 
-      HStack(spacing: TeslaCamTheme.Spacing.l) {
-        Text(tickLabel(for: state.minDate))
-        ForEach(timelineMarkers, id: \.self) { marker in
-          Text(tickLabel(for: marker))
+      HStack(spacing: 0) {
+        Text(formatHMS(0))
+          .frame(width: 72, alignment: .leading)
+        ForEach(recordedTickFractions, id: \.self) { fraction in
+          Text(formatHMS(state.totalDuration * fraction))
             .frame(maxWidth: .infinity)
         }
-        Text(tickLabel(for: state.maxDate))
+        Text(formatHMS(state.totalDuration))
+          .frame(width: 72, alignment: .trailing)
       }
-      .font(TeslaCamTheme.Typography.monoDetail)
+      .font(TeslaCamTheme.Typography.monoSmall)
       .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+      .padding(.horizontal, 20)
+      .padding(.top, 2)
+      .padding(.bottom, TeslaCamTheme.Spacing.xs)
+    }
+  }
 
-      // ── Row 3: Controls grid — From / Preset / To ────────
+  private var transportButtonCluster: some View {
+    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+      Button {
+        state.stepPlayback(by: -5)
+      } label: {
+        Label("Back 5 seconds", systemImage: "gobackward.5")
+          .labelStyle(.iconOnly)
+      }
       #if os(iOS)
+      .compactButtonStyle(role: .control, size: .icon)
+      #else
+      .buttonStyle(IconButtonStyle())
+      #endif
+      .disabled(state.clipSets.isEmpty)
+      .accessibilityLabel("Back 5 seconds")
+      .accessibilityIdentifier("step-back-5")
+
+      Button {
+        state.togglePlay()
+      } label: {
+        Label(
+          playback.isPlaying ? "Pause" : "Play",
+          systemImage: playback.isPlaying ? "pause.fill" : "play.fill"
+        )
+        .labelStyle(.iconOnly)
+      }
+      #if os(iOS)
+      .compactButtonStyle(role: .selected, size: .icon)
+      #else
+      .buttonStyle(IconButtonStyle(prominent: true))
+      #endif
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
+      .accessibilityValue(playback.isPlaying ? "playing" : "paused")
+      .accessibilityIdentifier("toggle-playback")
+
+      Button {
+        state.stepPlayback(by: 5)
+      } label: {
+        Label("Forward 5 seconds", systemImage: "goforward.5")
+          .labelStyle(.iconOnly)
+      }
+      #if os(iOS)
+      .compactButtonStyle(role: .control, size: .icon)
+      #else
+      .buttonStyle(IconButtonStyle())
+      #endif
+      .disabled(state.clipSets.isEmpty)
+      .accessibilityLabel("Forward 5 seconds")
+      .accessibilityIdentifier("step-forward-5")
+    }
+  }
+
+  private var inOutCluster: some View {
+    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+      Button("In") { state.setTrimStartAtPlayhead() }
+        #if os(iOS)
+        .compactButtonStyle(role: .control, size: .chip)
+        #else
+        .buttonStyle(QuickActionButtonStyle())
+        #endif
+        .disabled(state.clipSets.isEmpty)
+        .accessibilityLabel("Set export start to playhead")
+        .accessibilityIdentifier("set-trim-start-at-playhead")
+
+      Button("Out") { state.setTrimEndAtPlayhead() }
+        #if os(iOS)
+        .compactButtonStyle(role: .control, size: .chip)
+        #else
+        .buttonStyle(QuickActionButtonStyle())
+        #endif
+        .disabled(state.clipSets.isEmpty)
+        .accessibilityLabel("Set export end to playhead")
+        .accessibilityIdentifier("set-trim-end-at-playhead")
+    }
+  }
+
+  private var quickRangeCluster: some View {
+    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+      Button {
+        state.setFullRange()
+      } label: {
+        Label("All", systemImage: "arrow.left.and.right")
+      }
+        #if os(iOS)
+        .compactButtonStyle(role: .control, size: .chip)
+        #else
+        .buttonStyle(QuickActionButtonStyle())
+        #endif
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Whole Timeline")
+        .accessibilityIdentifier("range-whole-timeline")
+
+      Button {
+        state.setCurrentMinuteRange()
+      } label: {
+        Label("1m", systemImage: "clock")
+      }
+        #if os(iOS)
+        .compactButtonStyle(role: .control, size: .chip)
+        #else
+        .buttonStyle(QuickActionButtonStyle())
+        #endif
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Current Minute")
+        .accessibilityIdentifier("range-current-minute")
+
+      Button {
+        state.setRecentRange(minutes: 5)
+      } label: {
+        Label("5m", systemImage: "clock.arrow.circlepath")
+      }
+        #if os(iOS)
+        .compactButtonStyle(role: .control, size: .chip)
+        #else
+        .buttonStyle(QuickActionButtonStyle())
+        #endif
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Last 5m")
+        .accessibilityIdentifier("range-last-5m")
+
+      Button {
+        state.setRecentRange(minutes: 15)
+      } label: {
+        Label("15m", systemImage: "clock.badge")
+      }
+        #if os(iOS)
+        .compactButtonStyle(role: .control, size: .chip)
+        #else
+        .buttonStyle(QuickActionButtonStyle())
+        #endif
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Last 15m")
+        .accessibilityIdentifier("range-last-15m")
+    }
+  }
+
+  private var selectedSpanSummary: String {
+    "\(formatHMS(state.selectedTrimDuration)) • \(state.selectedSetsForExport.count) spans"
+  }
+
+  #if os(macOS)
+  private func macControlStack(minDate _: Date, maxDate _: Date) -> some View {
+    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
+      HStack(spacing: TeslaCamTheme.Spacing.s) {
+        macTimeField(formatHMS(playbackUI.currentSeconds), alignment: .leading)
+
+        transportButtonCluster
+
+        macTimeField(formatHMS(state.totalDuration), alignment: .trailing)
+
+        inOutCluster
+
+        Spacer(minLength: 0)
+
+        macPresetField
+          .frame(width: 210)
+
+        Button {
+          state.exportRange()
+        } label: {
+          Label(exportButtonTitle, systemImage: "square.and.arrow.up")
+        }
+          .buttonStyle(PrimaryButtonStyle(fixedWidth: 176))
+          .disabled(state.clipSets.isEmpty || state.exporter.isExporting)
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel(exportButtonTitle)
+          .accessibilityIdentifier("export-video")
+      }
+      .frame(height: TeslaCamTheme.Metrics.compactControlHeight)
+
+      HStack(alignment: .top, spacing: TeslaCamTheme.Spacing.s) {
+        MacCameraToggleGrid(state: state)
+          .frame(width: state.camerasDetected.count > 4 ? 242 : 156, alignment: .topLeading)
+
+        MacRangeGrid(state: state)
+          .frame(width: 124, alignment: .topLeading)
+
+        ClipInformationPanel(
+          state: state,
+          playbackUI: playbackUI,
+          statusText: selectedSpanSummary
+        )
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+      }
+    }
+  }
+
+  private func macTimeField(_ value: String, alignment: Alignment) -> some View {
+    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+      Image(systemName: "timer")
+        .font(TeslaCamTheme.Typography.label)
+      Text(value)
+        .font(TeslaCamTheme.Typography.monoDetail)
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+    }
+    .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+    .padding(.horizontal, TeslaCamTheme.Spacing.s)
+    .frame(width: 118, height: TeslaCamTheme.Metrics.compactControlHeight, alignment: alignment)
+    .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
+  }
+
+  private func macDateField(_ title: String, selection: Binding<Date>, range: ClosedRange<Date>) -> some View {
+    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+      Text(title.uppercased())
+        .font(TeslaCamTheme.Typography.label)
+        .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+
+      DatePicker("", selection: selection, in: range, displayedComponents: [.date, .hourAndMinute])
+        .labelsHidden()
+        .datePickerStyle(.field)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .padding(.horizontal, TeslaCamTheme.Spacing.s)
+    .frame(width: 190, height: TeslaCamTheme.Metrics.compactControlHeight)
+    .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
+  }
+
+  private var macPresetField: some View {
+    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+      Image(systemName: "slider.horizontal.3")
+        .font(TeslaCamTheme.Typography.label)
+        .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+
+      Text("Preset".uppercased())
+        .font(TeslaCamTheme.Typography.label)
+        .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+
+      Picker("", selection: exportPresetBinding) {
+        ForEach(ExportPreset.visibleCases) { preset in
+          Text(preset.displayName).tag(preset)
+        }
+      }
+      .labelsHidden()
+      .pickerStyle(.menu)
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .padding(.horizontal, TeslaCamTheme.Spacing.s)
+    .frame(height: TeslaCamTheme.Metrics.compactControlHeight)
+    .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
+  }
+
+  private var exportPresetBinding: Binding<ExportPreset> {
+    Binding(
+      get: { state.exportPreset },
+      set: { state.setExportPreset($0) }
+    )
+  }
+
+  private var compactRangeCluster: some View {
+    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+      Button {
+        state.setFullRange()
+      } label: {
+        Label("All", systemImage: "arrow.left.and.right")
+      }
+        .buttonStyle(CompactRangeButtonStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Whole Timeline")
+        .accessibilityIdentifier("range-whole-timeline")
+
+      Button {
+        state.setCurrentMinuteRange()
+      } label: {
+        Label("1m", systemImage: "clock")
+      }
+        .buttonStyle(CompactRangeButtonStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Current Minute")
+        .accessibilityIdentifier("range-current-minute")
+
+      Button {
+        state.setRecentRange(minutes: 5)
+      } label: {
+        Label("5m", systemImage: "clock.arrow.circlepath")
+      }
+        .buttonStyle(CompactRangeButtonStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Last 5m")
+        .accessibilityIdentifier("range-last-5m")
+
+      Button {
+        state.setRecentRange(minutes: 15)
+      } label: {
+        Label("15m", systemImage: "clock.badge")
+      }
+        .buttonStyle(CompactRangeButtonStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Last 15m")
+        .accessibilityIdentifier("range-last-15m")
+    }
+  }
+  #endif
+
+  #if os(iOS)
+  private func iPadControlStack(minDate: Date, maxDate: Date) -> some View {
+    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
+      HStack(spacing: TeslaCamTheme.Spacing.s) {
+        transportButtonCluster
+
+        Text(playbackSummaryText)
+          .font(TeslaCamTheme.Typography.monoDetail)
+          .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+          .lineLimit(1)
+
+        Spacer(minLength: 0)
+
+        inOutCluster
+      }
+
       LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: TeslaCamTheme.Spacing.s) {
         RangeControlCard(title: "From") {
           DatePicker(
@@ -2485,8 +2578,8 @@ private struct TimelineExportCard: View {
         }
 
         RangeControlCard(title: "Preset") {
-          Picker("", selection: $state.exportPreset) {
-            ForEach(ExportPreset.allCases) { preset in
+          Picker("", selection: exportPresetBinding) {
+            ForEach(ExportPreset.visibleCases) { preset in
               Text(preset.displayName).tag(preset)
             }
           }
@@ -2494,59 +2587,7 @@ private struct TimelineExportCard: View {
           .pickerStyle(.menu)
         }
       }
-      .frame(minHeight: TeslaCamTheme.Metrics.controlHeight)
-      #else
-      HStack(alignment: .top, spacing: TeslaCamTheme.Spacing.m) {
-        RangeControlCard(title: "From") {
-          DatePicker(
-            "",
-            selection: Binding(
-              get: { state.selectedStart },
-              set: { state.updateTrimStart(from: $0) }
-            ),
-            in: minDate...maxDate,
-            displayedComponents: [.date, .hourAndMinute]
-          )
-          .labelsHidden()
-          #if os(macOS)
-          .datePickerStyle(.field)
-          #else
-          .datePickerStyle(.compact)
-          #endif
-        }
 
-        RangeControlCard(title: "Preset") {
-          Picker("", selection: $state.exportPreset) {
-            ForEach(ExportPreset.allCases) { preset in
-              Text(preset.displayName).tag(preset)
-            }
-          }
-          .labelsHidden()
-          .pickerStyle(.menu)
-        }
-
-        RangeControlCard(title: "To") {
-          DatePicker(
-            "",
-            selection: Binding(
-              get: { state.selectedEnd },
-              set: { state.updateTrimEnd(from: $0) }
-            ),
-            in: minDate...maxDate,
-            displayedComponents: [.date, .hourAndMinute]
-          )
-          .labelsHidden()
-          #if os(macOS)
-          .datePickerStyle(.field)
-          #else
-          .datePickerStyle(.compact)
-          #endif
-        }
-      }
-      .frame(minHeight: TeslaCamTheme.Metrics.controlHeight)
-      #endif
-
-      // ── Row 4: Camera toggles ────────────────────────────
       CameraToggleRow(state: state)
 
       ExportConfidenceStrip(
@@ -2556,149 +2597,24 @@ private struct TimelineExportCard: View {
         gapCount: state.timelineGapRanges.count
       )
 
-      // ── Row 5: Quick range + Duplicate + Export ───────────
-      #if os(iOS)
-      HStack(alignment: .top, spacing: TeslaCamTheme.Spacing.s) {
-        HStack(spacing: TeslaCamTheme.Spacing.s) {
-          Button("All") { state.setFullRange() }
-            .compactButtonStyle(role: .control, size: .chip)
-            .accessibilityLabel("Whole Timeline")
-            .accessibilityIdentifier("range-whole-timeline")
-          Button("1m") { state.setCurrentMinuteRange() }
-            .compactButtonStyle(role: .control, size: .chip)
-            .accessibilityLabel("Current Minute")
-            .accessibilityIdentifier("range-current-minute")
-          Button("5m") { state.setRecentRange(minutes: 5) }
-            .compactButtonStyle(role: .control, size: .chip)
-            .accessibilityLabel("Last 5m")
-            .accessibilityIdentifier("range-last-5m")
-          Button("15m") { state.setRecentRange(minutes: 15) }
-            .compactButtonStyle(role: .control, size: .chip)
-            .accessibilityLabel("Last 15m")
-            .accessibilityIdentifier("range-last-15m")
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-
-        HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
-          Text("Dupes")
-            .font(TeslaCamTheme.Typography.label)
-            .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-          Picker(
-            "",
-            selection: Binding(
-              get: { state.duplicatePolicy },
-              set: { state.updateDuplicatePolicy($0) }
-            )
-          ) {
-            ForEach(DuplicateClipPolicy.allCases) { policy in
-              Text(policy.displayName).tag(policy)
-            }
-          }
-          .labelsHidden()
-          .pickerStyle(.menu)
-          .fixedSize()
-          .accessibilityHint("Changes how clips with the same timestamp and camera are resolved.")
-        }
+      HStack(spacing: TeslaCamTheme.Spacing.s) {
+        quickRangeCluster
+          .frame(maxWidth: .infinity, alignment: .leading)
 
         Button {
           state.exportRange()
         } label: {
-          Label("Export", systemImage: "square.and.arrow.up")
+          Label(exportButtonTitle, systemImage: "square.and.arrow.up")
         }
         .compactButtonStyle(role: .selected, size: .command)
         .disabled(state.clipSets.isEmpty || state.exporter.isExporting)
-        .accessibilityLabel("Export Video")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(exportButtonTitle)
         .accessibilityIdentifier("export-video")
       }
-      .frame(minHeight: TeslaCamTheme.Metrics.controlHeight)
-      #else
-      HStack(alignment: .top, spacing: TeslaCamTheme.Spacing.m) {
-        // Quick range row
-        HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
-          Button("All") { state.setFullRange() }
-            .buttonStyle(QuickActionButtonStyle())
-            .accessibilityLabel("Whole Timeline")
-            .accessibilityIdentifier("range-whole-timeline")
-          Button("1m") { state.setCurrentMinuteRange() }
-            .buttonStyle(QuickActionButtonStyle())
-            .accessibilityLabel("Current Minute")
-            .accessibilityIdentifier("range-current-minute")
-          Button("5m") { state.setRecentRange(minutes: 5) }
-            .buttonStyle(QuickActionButtonStyle())
-            .accessibilityLabel("Last 5m")
-            .accessibilityIdentifier("range-last-5m")
-          Button("15m") { state.setRecentRange(minutes: 15) }
-            .buttonStyle(QuickActionButtonStyle())
-            .accessibilityLabel("Last 15m")
-            .accessibilityIdentifier("range-last-15m")
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-
-        // Duplicate handling
-        HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
-          Text("Dupes")
-            .font(TeslaCamTheme.Typography.label)
-            .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-          Picker(
-            "",
-            selection: Binding(
-              get: { state.duplicatePolicy },
-              set: { state.updateDuplicatePolicy($0) }
-            )
-          ) {
-            ForEach(DuplicateClipPolicy.allCases) { policy in
-              Text(policy.displayName).tag(policy)
-            }
-          }
-          .labelsHidden()
-          .pickerStyle(.menu)
-          .fixedSize()
-          .accessibilityHint("Changes how clips with the same timestamp and camera are resolved.")
-        }
-
-        // Export button
-        Button("Export Video") { state.exportRange() }
-          .buttonStyle(PrimaryButtonStyle())
-          .disabled(state.clipSets.isEmpty || state.exporter.isExporting)
-          .accessibilityLabel("Export Video")
-          .accessibilityIdentifier("export-video")
-          .frame(maxWidth: 200)
-      }
-      .frame(minHeight: TeslaCamTheme.Metrics.controlHeight)
-      #endif
-
-      // ── Info banners (only if relevant) ──────────────────
-      if !state.duplicateSummaryText.isEmpty {
-        ExportInfoBanner(
-          title: "Duplicates",
-          message: state.duplicateSummaryText,
-          systemImage: "square.on.square"
-        )
-      }
-
-      if let healthSummary = state.healthSummary {
-        ExportInfoBanner(
-          title: "Coverage",
-          message: coverageSummary(for: healthSummary),
-          systemImage: "waveform.path.ecg"
-        )
-      }
-
-      ForEach(state.exportWarningsPreview, id: \.self) { warning in
-        ExportInfoBanner(
-          title: "Export warning",
-          message: warning,
-          systemImage: "exclamationmark.triangle.fill"
-        )
-      }
     }
-    .padding(TeslaCamTheme.Metrics.cardPadding)
-    #if os(iOS)
-    .glassSurface(role: .panel, radius: TeslaCamTheme.Metrics.cardCorner)
-    #else
-    .teslaCamCard()
-    #endif
   }
+  #endif
 
   private var playbackSecondsBinding: Binding<Double> {
     Binding(
@@ -2709,6 +2625,14 @@ private struct TimelineExportCard: View {
 
   private var playbackSummaryText: String {
     "\(formatHMS(playbackUI.currentSeconds)) / \(formatHMS(state.totalDuration))"
+  }
+
+  private var recordedTickFractions: [Double] {
+    [0.2, 0.4, 0.6, 0.8]
+  }
+
+  private var exportButtonTitle: String {
+    "Export"
   }
 
   private var trimRangeSummary: String {
@@ -2750,6 +2674,241 @@ private struct TimelineExportCard: View {
   }
 }
 
+#if os(macOS)
+private struct ClipInformationPanel: View {
+  @ObservedObject var state: AppState
+  @ObservedObject var playbackUI: PlaybackUIState
+  let statusText: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.xs) {
+      HStack(spacing: TeslaCamTheme.Spacing.s) {
+        Image(systemName: "info.circle")
+          .font(TeslaCamTheme.Typography.monoSmall)
+          .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+        Text("Clip information".uppercased())
+          .font(TeslaCamTheme.Typography.monoSmall.weight(.semibold))
+          .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
+        Spacer(minLength: 0)
+      }
+
+      LazyVGrid(columns: infoColumns, alignment: .leading, spacing: TeslaCamTheme.Spacing.xs) {
+        ClipInfoTile(title: "Time", value: clipTime)
+        ClipInfoTile(title: "Speed", value: speedText)
+        ClipInfoTile(title: "GPS", value: gpsText)
+        ClipInfoTile(title: "Heading", value: headingText)
+        ClipInfoTile(title: "Gear", value: gearText, warning: telemetryModel?.brakeApplied == true)
+        ClipInfoTile(title: "Signal", value: signalText)
+        ClipInfoTile(title: "Selection", value: statusText)
+        ClipInfoTile(title: "Coverage", value: coverageText)
+      }
+    }
+    .padding(.horizontal, TeslaCamTheme.Spacing.s)
+    .padding(.vertical, TeslaCamTheme.Spacing.s)
+    .frame(maxWidth: .infinity, minHeight: 74, alignment: .topLeading)
+    .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
+  }
+
+  private var infoColumns: [GridItem] {
+    Array(repeating: GridItem(.flexible(), spacing: TeslaCamTheme.Spacing.tightGap), count: 4)
+  }
+
+  private var telemetryModel: TelemetryDisplayModel? {
+    state.privacyMode ? nil : state.telemetryModel
+  }
+
+  private var clipTime: String {
+    playbackUI.overlayText.isEmpty ? "--" : playbackUI.overlayText
+  }
+
+  private var speedText: String {
+    if state.privacyMode {
+      return "Hidden"
+    }
+    return telemetryModel?.speedText(unit: state.exportOverlayOptions.speedUnit) ?? "No data"
+  }
+
+  private var gpsText: String {
+    if state.privacyMode {
+      return "Hidden"
+    }
+    return telemetryModel?.locationText ?? "No GPS"
+  }
+
+  private var headingText: String {
+    telemetryModel?.headingText ?? "--"
+  }
+
+  private var gearText: String {
+    guard let model = telemetryModel else { return "--" }
+    return model.brakeApplied ? "\(model.gear) / Brake" : model.gear
+  }
+
+  private var signalText: String {
+    telemetryModel?.signalText ?? "--"
+  }
+
+  private var exportHUDText: String {
+    state.effectiveExportOverlayOptions.telemetryHUD ? "Engraved" : "Preview only"
+  }
+
+  private var coverageText: String {
+    var parts = [
+      "G\(state.timelineGapRanges.count)",
+      "P\(state.partialSelectedSetCount)",
+      "H\(state.hiddenExportCameraNames.count)"
+    ]
+    if state.duplicateSummary.duplicateFileCount > 0 {
+      parts.append("D\(state.duplicateSummary.duplicateFileCount)")
+    }
+    if state.duplicateSummary.duplicateTimestampCount > 0 {
+      parts.append("C\(state.duplicateSummary.duplicateTimestampCount)")
+    }
+    if state.duplicateSummary.overlapMinuteCount > 0 {
+      parts.append("O\(state.duplicateSummary.overlapMinuteCount)")
+    }
+    parts.append(exportHUDText)
+    return parts.joined(separator: " ")
+  }
+}
+
+private struct ClipInfoTile: View {
+  let title: String
+  let value: String
+  var warning: Bool = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 1) {
+      Text(title.uppercased())
+        .font(.system(size: 9, weight: .semibold))
+        .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+        .lineLimit(1)
+      Text(value)
+        .font(TeslaCamTheme.Typography.monoSmall)
+        .foregroundStyle(warning ? TeslaCamTheme.Colors.gapAccent : TeslaCamTheme.Colors.textSecondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.62)
+    }
+    .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
+  }
+}
+
+private struct MacCameraToggleGrid: View {
+  @ObservedObject var state: AppState
+
+  var body: some View {
+    LazyVGrid(columns: columns, spacing: TeslaCamTheme.Spacing.tightGap) {
+      ForEach(orderedCameras, id: \.self) { camera in
+        Button {
+          let isEnabled = state.activeExportCameras.contains(camera)
+          state.toggleExportCamera(camera, isEnabled: !isEnabled)
+        } label: {
+          HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+            Image(systemName: state.activeExportCameras.contains(camera) ? "checkmark.square.fill" : "square")
+              .font(TeslaCamTheme.Typography.label)
+            Text(camera.shortName)
+              .font(TeslaCamTheme.Typography.label)
+              .lineLimit(1)
+              .minimumScaleFactor(0.72)
+          }
+          .foregroundStyle(state.activeExportCameras.contains(camera) ? TeslaCamTheme.Colors.textPrimary : TeslaCamTheme.Colors.textSecondary)
+          .frame(maxWidth: .infinity)
+          .frame(height: TeslaCamTheme.Metrics.compactControlHeight)
+          .glassSurface(
+            role: state.activeExportCameras.contains(camera) ? .selected : .control,
+            radius: TeslaCamTheme.Metrics.compactCorner,
+            interactive: true
+          )
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(camera.displayName)
+        .accessibilityValue(state.activeExportCameras.contains(camera) ? "Included" : "Excluded")
+        .accessibilityHint("Toggles whether this camera appears in the export.")
+        .accessibilityIdentifier("camera-\(camera.rawValue)")
+      }
+    }
+  }
+
+  private var columns: [GridItem] {
+    let count = state.camerasDetected.count > 4 ? 3 : 2
+    return Array(repeating: GridItem(.flexible(), spacing: TeslaCamTheme.Spacing.tightGap), count: count)
+  }
+
+  private var orderedCameras: [Camera] {
+    let detected = Set(state.camerasDetected)
+    let preferred: [Camera] = [
+      .front,
+      .left_repeater,
+      .left,
+      .left_pillar,
+      .back,
+      .right_repeater,
+      .right,
+      .right_pillar
+    ]
+    let ordered = preferred.filter { detected.contains($0) }
+    let remaining = state.camerasDetected.filter { !ordered.contains($0) }
+    return ordered + remaining
+  }
+}
+
+private struct MacRangeGrid: View {
+  @ObservedObject var state: AppState
+
+  var body: some View {
+    LazyVGrid(columns: columns, spacing: TeslaCamTheme.Spacing.tightGap) {
+      Button {
+        state.setFullRange()
+      } label: {
+        Label("All", systemImage: "arrow.left.and.right")
+      }
+        .buttonStyle(CompactRangeButtonStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Whole Timeline")
+        .accessibilityIdentifier("range-whole-timeline")
+
+      Button {
+        state.setCurrentMinuteRange()
+      } label: {
+        Label("1m", systemImage: "clock")
+      }
+        .buttonStyle(CompactRangeButtonStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Current Minute")
+        .accessibilityIdentifier("range-current-minute")
+
+      Button {
+        state.setRecentRange(minutes: 5)
+      } label: {
+        Label("5m", systemImage: "clock.arrow.circlepath")
+      }
+        .buttonStyle(CompactRangeButtonStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Last 5m")
+        .accessibilityIdentifier("range-last-5m")
+
+      Button {
+        state.setRecentRange(minutes: 15)
+      } label: {
+        Label("15m", systemImage: "clock.badge")
+      }
+        .buttonStyle(CompactRangeButtonStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Last 15m")
+        .accessibilityIdentifier("range-last-15m")
+    }
+  }
+
+  private var columns: [GridItem] {
+    [
+      GridItem(.flexible(), spacing: TeslaCamTheme.Spacing.tightGap),
+      GridItem(.flexible(), spacing: TeslaCamTheme.Spacing.tightGap)
+    ]
+  }
+}
+#endif
+
 private struct CameraToggleRow: View {
   @ObservedObject var state: AppState
 
@@ -2771,7 +2930,7 @@ private struct CameraToggleRow: View {
             .foregroundStyle(state.activeExportCameras.contains(camera) ? TeslaCamTheme.Colors.textPrimary : TeslaCamTheme.Colors.textSecondary)
             .padding(.horizontal, TeslaCamTheme.Metrics.chipPaddingHorizontal)
             .padding(.vertical, TeslaCamTheme.Metrics.chipPaddingVertical)
-            .frame(minWidth: 52, maxWidth: 96, minHeight: 34)
+            .frame(minWidth: 62, maxWidth: 92, minHeight: TeslaCamTheme.Metrics.compactControlHeight)
             .glassSurface(
               role: state.activeExportCameras.contains(camera) ? .selected : .control,
               radius: TeslaCamTheme.Metrics.compactCorner,
@@ -2779,7 +2938,8 @@ private struct CameraToggleRow: View {
             )
           }
           .buttonStyle(.plain)
-          .frame(minWidth: 44, minHeight: 44)
+          .frame(minWidth: TeslaCamTheme.Metrics.compactControlHeight, minHeight: TeslaCamTheme.Metrics.compactControlHeight)
+          .accessibilityElement(children: .ignore)
           .accessibilityLabel(camera.displayName)
           .accessibilityValue(state.activeExportCameras.contains(camera) ? "Included" : "Excluded")
           .accessibilityHint("Toggles whether this camera appears in the export.")
@@ -2799,36 +2959,43 @@ private struct ExportConfidenceStrip: View {
 
   var body: some View {
     HStack(spacing: TeslaCamTheme.Spacing.s) {
-      ExportConfidenceChip(
-        title: "Gaps",
-        value: "\(gapCount)",
-        systemImage: gapCount == 0 ? "checkmark.square" : "waveform.path.ecg"
-      )
+      Image(systemName: statusImageName)
+        .font(TeslaCamTheme.Typography.label)
+        .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
 
-      ExportConfidenceChip(
-        title: "Partial",
-        value: "\(partialSelectedSetCount)",
-        systemImage: partialSelectedSetCount == 0 ? "checkmark.square" : "rectangle.split.2x1"
-      )
-
-      ExportConfidenceChip(
-        title: "Hidden",
-        value: hiddenCameraNames.isEmpty ? "0" : "\(hiddenCameraNames.count)",
-        systemImage: hiddenCameraNames.isEmpty ? "eye" : "eye.slash"
-      )
-
-      if !duplicateSummaryText.isEmpty {
-        ExportConfidenceChip(
-          title: "Dupes",
-          value: duplicateSummaryText,
-          systemImage: "square.on.square"
-        )
-      }
+      Text(statusLine)
+        .font(TeslaCamTheme.Typography.monoSmall)
+        .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
+    .padding(.horizontal, TeslaCamTheme.Spacing.s)
+    .frame(maxWidth: .infinity, minHeight: TeslaCamTheme.Metrics.compactControlHeight, alignment: .leading)
+    .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
     .accessibilityElement(children: .combine)
     .accessibilityLabel(accessibilitySummary)
     .animation(.easeInOut(duration: 0.18), value: partialSelectedSetCount)
     .animation(.easeInOut(duration: 0.18), value: hiddenCameraNames)
+  }
+
+  private var statusLine: String {
+    var parts = [
+      "Gaps \(gapCount)",
+      "Partial \(partialSelectedSetCount)",
+      "Hidden \(hiddenCameraNames.count)"
+    ]
+    if !duplicateSummaryText.isEmpty {
+      parts.append("Dupes \(duplicateSummaryText)")
+    }
+    return parts.joined(separator: " • ")
+  }
+
+  private var statusImageName: String {
+    if gapCount == 0, partialSelectedSetCount == 0, hiddenCameraNames.isEmpty {
+      return "checkmark.square"
+    }
+    return "exclamationmark.triangle"
   }
 
   private var accessibilitySummary: String {
@@ -2884,16 +3051,24 @@ private struct ExportActionCard: View {
         .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
         .lineLimit(2)
 
-      Button("Export Video") { state.exportRange() }
+      Button {
+        state.exportRange()
+      } label: {
+        Label(exportButtonTitle, systemImage: "square.and.arrow.up")
+      }
         .buttonStyle(PrimaryButtonStyle())
         .disabled(state.clipSets.isEmpty || state.exporter.isExporting)
-        .accessibilityLabel("Export Video")
+        .accessibilityLabel(exportButtonTitle)
         .accessibilityIdentifier("export-video")
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(TeslaCamTheme.Metrics.cardPaddingCompact)
     .frame(minHeight: TeslaCamTheme.Metrics.controlHeight, alignment: .topLeading)
     .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
+  }
+
+  private var exportButtonTitle: String {
+    "Export"
   }
 }
 
@@ -2948,11 +3123,13 @@ private struct ExportInfoBanner: View {
         Text(message)
           .font(TeslaCamTheme.Typography.bodySmall)
           .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+          .lineLimit(2)
       }
 
       Spacer(minLength: 0)
     }
     .padding(TeslaCamTheme.Metrics.cardPaddingCompact)
+    .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
     .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
   }
 }
@@ -3145,105 +3322,6 @@ private struct ExportOverlayCard: View {
   }
 }
 
-private struct DuplicateResolverSheet: View {
-  @ObservedObject var state: AppState
-
-  var body: some View {
-    #if os(iOS)
-    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.l) {
-      PanelHeader(
-        title: "Resolve Duplicates",
-        systemImage: "square.on.square"
-      )
-
-      VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
-        duplicateChoiceButton("Merge by Time", subtitle: "One ordered timeline.") {
-          state.chooseDuplicatePolicy(.mergeByTime)
-        }
-        duplicateChoiceButton("Keep All", subtitle: "Preserve every duplicate.") {
-          state.chooseDuplicatePolicy(.keepAll)
-        }
-        duplicateChoiceButton("Prefer Newest", subtitle: "Use newest file on collision.") {
-          state.chooseDuplicatePolicy(.preferNewest)
-        }
-      }
-
-      HStack {
-        Spacer()
-        CommandChip(title: "Keep", systemImage: "checkmark") {
-          state.dismissDuplicateResolver()
-        }
-        .accessibilityLabel("Keep Current")
-        .accessibilityIdentifier("duplicate-keep-current")
-      }
-    }
-    .padding(TeslaCamTheme.Spacing.xxl)
-    .frame(maxWidth: 460)
-    .glassSurface(role: .overlay, radius: TeslaCamTheme.Metrics.cardCorner)
-    .padding(TeslaCamTheme.Spacing.xxl)
-    .background(TeslaCamSceneBackground())
-    #else
-    VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.l) {
-      Text("Resolve Duplicates")
-        .font(TeslaCamTheme.Typography.panelTitle)
-        .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
-
-      Text(state.duplicateResolverMessage.isEmpty ? "Multiple clips share the same timeline position." : state.duplicateResolverMessage)
-        .font(TeslaCamTheme.Typography.body)
-        .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-
-      VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
-        duplicateChoiceButton("Merge by Time", subtitle: "Keep one ordered timeline and merge matching timestamps.") {
-          state.chooseDuplicatePolicy(.mergeByTime)
-        }
-        duplicateChoiceButton("Keep All", subtitle: "Preserve every duplicate as separate timeline entries.") {
-          state.chooseDuplicatePolicy(.keepAll)
-        }
-        duplicateChoiceButton("Prefer Newest", subtitle: "Use the newest file when timestamps collide.") {
-          state.chooseDuplicatePolicy(.preferNewest)
-        }
-      }
-
-      HStack {
-        Spacer()
-        Button("Keep Current") {
-          state.dismissDuplicateResolver()
-        }
-        .buttonStyle(QuickActionButtonStyle())
-        .accessibilityLabel("Keep Current")
-        .accessibilityIdentifier("duplicate-keep-current")
-      }
-    }
-    .padding(TeslaCamTheme.Spacing.xxl)
-    .frame(width: TeslaCamTheme.Layout.duplicateSheetWidth)
-    .background(TeslaCamSceneBackground())
-    #endif
-  }
-
-  private func duplicateChoiceButton(_ title: String, subtitle: String, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-      VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.xs) {
-        Text(title)
-          .font(TeslaCamTheme.Typography.body.weight(.semibold))
-          .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
-        Text(subtitle)
-          .font(TeslaCamTheme.Typography.bodySmall)
-          .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(TeslaCamTheme.Metrics.cardPaddingCompact)
-      #if os(iOS)
-      .glassSurface(role: .control, radius: TeslaCamTheme.Metrics.compactCorner, interactive: true)
-      #else
-      .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
-      #endif
-    }
-    .buttonStyle(.plain)
-    .accessibilityLabel(title)
-    .accessibilityIdentifier("duplicate-choice-\(title.lowercased().replacingOccurrences(of: " ", with: "-"))")
-  }
-}
-
 private struct StatCard: View {
   let title: String
   let value: String
@@ -3314,6 +3392,8 @@ private struct TimelineSelectionTrack: View {
   @Binding var selectedStartSeconds: Double
   @Binding var selectedEndSeconds: Double
   let gapRanges: [TimelineGapRange]
+  let eventMarkers: [TelemetryEventMarker]
+  let eventMarkerOffsetSeconds: Double
   let totalDuration: Double
   let onSeekStart: () -> Void
   let onSeekChange: (Double) -> Void
@@ -3329,9 +3409,9 @@ private struct TimelineSelectionTrack: View {
     GeometryReader { proxy in
       let fullWidth = proxy.size.width
       let safeDuration = max(totalDuration, 1)
-      let laneHeight: CGFloat = 44
-      let laneY: CGFloat = 12
-      let trackInset: CGFloat = 16
+      let laneHeight: CGFloat = 36
+      let laneY: CGFloat = 0
+      let trackInset: CGFloat = 20
       let trackWidth = max(fullWidth - (trackInset * 2), 1)
       let startX = trackInset + trackWidth * CGFloat(max(0, min(1, selectedStartSeconds / safeDuration)))
       let endX = trackInset + trackWidth * CGFloat(max(0, min(1, selectedEndSeconds / safeDuration)))
@@ -3356,7 +3436,20 @@ private struct TimelineSelectionTrack: View {
             .offset(x: gapStartX, y: laneY)
             .allowsHitTesting(false)
         }
-      let isFullRange = selectedStartSeconds <= 0.01 && selectedEndSeconds >= totalDuration - 0.01
+
+        ForEach(Array(eventMarkers.prefix(120).enumerated()), id: \.offset) { _, marker in
+          let seconds = eventMarkerOffsetSeconds + marker.seconds
+          if seconds >= 0, seconds <= safeDuration {
+            let x = trackInset + trackWidth * CGFloat(max(0, min(1, seconds / safeDuration)))
+            Capsule()
+              .fill(markerColor(for: marker.kind).opacity(0.72 + 0.22 * marker.intensity))
+              .frame(width: 4, height: laneHeight - 12)
+              .offset(x: x - 2, y: laneY + 6)
+              .allowsHitTesting(false)
+          }
+        }
+
+        let isFullRange = selectedStartSeconds <= 0.01 && selectedEndSeconds >= totalDuration - 0.01
 
         RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.compactCorner, style: .continuous)
           .fill(TeslaCamTheme.Colors.accentSoft)
@@ -3367,21 +3460,22 @@ private struct TimelineSelectionTrack: View {
           )
           .offset(x: startX, y: laneY)
           .contentShape(Rectangle())
-          .gesture(selectionDrag(width: trackWidth))
+          .gesture(selectionTapGesture(originX: trackInset, width: trackWidth))
+          .simultaneousGesture(selectionDrag(width: trackWidth))
           .allowsHitTesting(!isFullRange)
 
-        handle
-          .offset(x: clampedHandleX(centerX: startX, trackInset: trackInset, trackWidth: trackWidth), y: laneY - 1)
+        handle(kind: .start)
+          .offset(x: clampedHandleX(centerX: startX, trackInset: trackInset, trackWidth: trackWidth), y: laneY)
           .contentShape(Rectangle())
           .gesture(handleDrag(kind: .start, originX: trackInset, width: trackWidth))
 
-        handle
-          .offset(x: clampedHandleX(centerX: endX, trackInset: trackInset, trackWidth: trackWidth), y: laneY - 1)
+        handle(kind: .end)
+          .offset(x: clampedHandleX(centerX: endX, trackInset: trackInset, trackWidth: trackWidth), y: laneY)
           .contentShape(Rectangle())
           .gesture(handleDrag(kind: .end, originX: trackInset, width: trackWidth))
 
         playhead
-          .offset(x: clampedPlayheadX(centerX: playheadX, trackInset: trackInset, trackWidth: trackWidth), y: laneY - 1)
+          .offset(x: clampedPlayheadX(centerX: playheadX, trackInset: trackInset, trackWidth: trackWidth), y: laneY)
           .contentShape(Rectangle())
           .gesture(playheadSeekGesture(originX: trackInset, width: trackWidth))
       }
@@ -3389,35 +3483,47 @@ private struct TimelineSelectionTrack: View {
     .accessibilityIdentifier("merged-timeline-track")
   }
 
-  private var handle: some View {
+  private func handle(kind: HandleKind) -> some View {
     ZStack {
-      Color.clear.frame(width: 20, height: 44)
-      Rectangle()
-        .fill(TeslaCamTheme.Colors.controlKnob)
-        .frame(width: 6, height: 26)
+      Color.clear.frame(width: 24, height: 36)
+      RoundedRectangle(cornerRadius: 4, style: .continuous)
+        .fill(TeslaCamTheme.Colors.accent.opacity(0.95))
+        .frame(width: 4, height: 26)
         .overlay(
-          Rectangle()
-            .stroke(TeslaCamTheme.Colors.controlKnobStroke, lineWidth: 0.5)
+          RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .stroke(TeslaCamTheme.Colors.accent.opacity(0.45), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.12), radius: 1, x: 0, y: 1)
+        .shadow(color: .black.opacity(0.16), radius: 2, x: 0, y: 1)
     }
+    #if os(macOS)
+    .help(kind == .start ? "Drag export start" : "Drag export end")
+    #endif
   }
 
   private var playhead: some View {
     ZStack(alignment: .center) {
-      Color.clear.frame(width: 16, height: 44)
-      Rectangle()
-        .fill(TeslaCamTheme.Colors.accent)
-        .frame(width: 2, height: 34)
+      Color.clear.frame(width: 24, height: 36)
+      VStack(spacing: 0) {
+        Capsule(style: .continuous)
+          .fill(TeslaCamTheme.Colors.accent)
+          .frame(width: 10, height: 4)
+        RoundedRectangle(cornerRadius: 1, style: .continuous)
+          .fill(TeslaCamTheme.Colors.accent)
+          .frame(width: 2, height: 30)
+      }
+      .shadow(color: .black.opacity(0.16), radius: 1, x: 0, y: 1)
+      #if os(macOS)
+      .help("Drag playhead")
+      #endif
     }
   }
 
   private func clampedHandleX(centerX: CGFloat, trackInset: CGFloat, trackWidth: CGFloat) -> CGFloat {
-    max(trackInset, min(trackInset + trackWidth - 20, centerX - 10))
+    max(trackInset, min(trackInset + trackWidth - 24, centerX - 12))
   }
 
   private func clampedPlayheadX(centerX: CGFloat, trackInset: CGFloat, trackWidth: CGFloat) -> CGFloat {
-    max(trackInset, min(trackInset + trackWidth - 16, centerX - 8))
+    max(trackInset, min(trackInset + trackWidth - 24, centerX - 12))
   }
 
   private func seconds(forX x: CGFloat, originX: CGFloat, width: CGFloat) -> Double {
@@ -3430,6 +3536,23 @@ private struct TimelineSelectionTrack: View {
     let seconds = seconds(forX: x, originX: originX, width: width)
     currentSeconds = seconds
     onSeekChange(seconds)
+  }
+
+  private func markerColor(for kind: TelemetryEventKind) -> Color {
+    switch kind {
+    case .brake:
+      return .red
+    case .accelerator:
+      return .orange
+    case .leftBlinker, .rightBlinker:
+      return .yellow
+    case .steering:
+      return .blue
+    case .autopilot:
+      return .green
+    case .gForce:
+      return .purple
+    }
   }
 
   private func backgroundSeekGesture(originX: CGFloat, width: CGFloat) -> some Gesture {
@@ -3466,6 +3589,16 @@ private struct TimelineSelectionTrack: View {
       }
   }
 
+  private func selectionTapGesture(originX: CGFloat, width: CGFloat) -> some Gesture {
+    SpatialTapGesture()
+      .onEnded { value in
+        guard dragAnchor == nil else { return }
+        onSeekStart()
+        updateSeek(from: value.location.x, originX: originX, width: width)
+        onSeekEnd()
+      }
+  }
+
   private func handleDrag(kind: HandleKind, originX: CGFloat, width: CGFloat) -> some Gesture {
     DragGesture(minimumDistance: 0)
       .onChanged { value in
@@ -3494,7 +3627,7 @@ private struct TimelineSelectionTrack: View {
   }
 
   private func selectionDrag(width: CGFloat) -> some Gesture {
-    DragGesture(minimumDistance: 0)
+    DragGesture(minimumDistance: 8)
       .onChanged { value in
         guard !isSeeking else { return }
         if dragAnchor == nil {
@@ -3575,13 +3708,15 @@ private struct PrimaryButtonStyle: ButtonStyle {
   var fixedWidth: CGFloat? = nil
 
   func makeBody(configuration: Configuration) -> some View {
+    let width = fixedWidth ?? CompactControlSize.command.visualWidth
+
     configuration.label
-      .font(.system(size: 15, weight: .semibold))
+      .font(TeslaCamTheme.Typography.label)
       .foregroundStyle(.white)
-      .padding(.horizontal, TeslaCamTheme.Spacing.l)
-      .frame(maxWidth: fixedWidth == nil ? .infinity : nil)
-      .frame(width: fixedWidth)
-      .frame(minHeight: TeslaCamTheme.Metrics.controlHeight)
+      .lineLimit(1)
+      .minimumScaleFactor(0.72)
+      .padding(.horizontal, TeslaCamTheme.Spacing.s)
+      .frame(width: width, height: TeslaCamTheme.Metrics.controlHeight)
       .background(
         RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.controlCorner, style: .continuous)
           .fill(TeslaCamTheme.Colors.accent.opacity(configuration.isPressed ? 0.82 : 1))
@@ -3595,12 +3730,12 @@ private struct IconButtonStyle: ButtonStyle {
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(.system(size: 16, weight: .semibold))
+      .font(.system(size: 14, weight: .semibold))
       .foregroundStyle(prominent ? .white : TeslaCamTheme.Colors.textPrimary)
-      .frame(width: 44, height: 44)
+      .frame(width: TeslaCamTheme.Metrics.compactControlHeight, height: TeslaCamTheme.Metrics.compactControlHeight)
       .background(
         RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.compactCorner, style: .continuous)
-          .fill(prominent ? TeslaCamTheme.Colors.surfaceElevated : TeslaCamTheme.Colors.surface)
+          .fill(prominent ? TeslaCamTheme.Colors.accentSoft : TeslaCamTheme.Colors.surfaceElevated)
       )
       .overlay(
         RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.compactCorner, style: .continuous)
@@ -3616,9 +3751,12 @@ private struct QuickActionButtonStyle: ButtonStyle {
     configuration.label
       .font(TeslaCamTheme.Typography.label)
       .foregroundStyle(TeslaCamTheme.Colors.textPrimary.opacity(configuration.isPressed ? 0.78 : 0.95))
-      .padding(.vertical, TeslaCamTheme.Spacing.s)
-      .padding(.horizontal, TeslaCamTheme.Spacing.m)
-      .frame(minHeight: 32)
+      .lineLimit(1)
+      .minimumScaleFactor(0.72)
+      .padding(.horizontal, TeslaCamTheme.Spacing.s)
+      .frame(minWidth: CompactControlSize.chip.visualWidth)
+      .frame(maxWidth: CompactControlSize.chip.maxWidth)
+      .frame(height: TeslaCamTheme.Metrics.compactControlHeight)
       .background(
         RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.compactCorner, style: .continuous)
           .fill(TeslaCamTheme.Colors.surfaceElevated.opacity(configuration.isPressed ? 1 : 0.86))
@@ -3630,3 +3768,25 @@ private struct QuickActionButtonStyle: ButtonStyle {
       .contentShape(RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.compactCorner, style: .continuous))
   }
 }
+
+#if os(macOS)
+private struct CompactRangeButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .font(TeslaCamTheme.Typography.label)
+      .foregroundStyle(TeslaCamTheme.Colors.textPrimary.opacity(configuration.isPressed ? 0.78 : 0.95))
+      .lineLimit(1)
+      .minimumScaleFactor(0.72)
+      .frame(width: 56, height: TeslaCamTheme.Metrics.compactControlHeight)
+      .background(
+        RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.compactCorner, style: .continuous)
+          .fill(TeslaCamTheme.Colors.surfaceElevated.opacity(configuration.isPressed ? 1 : 0.86))
+      )
+      .overlay(
+        RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.compactCorner, style: .continuous)
+          .stroke(TeslaCamTheme.Colors.stroke, lineWidth: 1)
+      )
+      .contentShape(RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.compactCorner, style: .continuous))
+  }
+}
+#endif

@@ -9,27 +9,92 @@ import Foundation
 import AVFoundation
 import CoreVideo
 import Testing
+#if os(macOS)
+import AppKit
+import SwiftUI
+#endif
 @testable import TeslaCam
 
 @MainActor
 struct TeslaCamTests {
 
   @Test func exportPresetMappingsRemainStable() async throws {
+    #expect(ExportPreset.originalTracksMOV.scriptPreset == "PASSTHROUGH_MOV")
     #expect(ExportPreset.maxQualityHEVC.scriptPreset == "HEVC_CPU_MAX")
     #expect(ExportPreset.fastHEVC.scriptPreset == "HEVC_MAX")
     #expect(ExportPreset.editFriendlyProRes.scriptPreset == "PRORES_HQ")
+    #expect(ExportPreset.originalTracksMOV.defaultExtension == "mov")
     #expect(ExportPreset.maxQualityHEVC.defaultExtension == "mp4")
     #expect(ExportPreset.editFriendlyProRes.defaultExtension == "mov")
   }
 
-  @Test func exportPresetsIncludeReviewSocialAndProxyChoices() async throws {
-    let names = ExportPreset.allCases.map(\.displayName)
+  @Test func appDefaultsToEvidenceExportWithTelemetryHUD() async throws {
+    let state = AppState()
+    #expect(state.exportPreset == .maxQualityHEVC)
+    #expect(state.exportOverlayOptions.telemetryHUD)
+    #expect(!state.exportOverlayOptions.routeMap)
+    #expect(!state.exportOverlayOptions.privacyMask)
+    #expect(!state.exportOverlayOptions.needsSidecars)
+  }
 
-    #expect(names.contains("Evidence HEVC"))
-    #expect(names.contains("Fast Review HEVC"))
-    #expect(names.contains("Social 25 MB HEVC"))
-    #expect(names.contains("Proxy HEVC"))
-    #expect(names.contains("Master ProRes"))
+  @Test func fastestMuxingExportPreflightAcceptsDefaultOptions() async throws {
+    let request = exportRequestForPlan(preset: .originalTracksMOV)
+    let plan = try ExportPlan(request: request)
+    let preflight = ExportPreflight(fileAccess: StubExportPreflightFileAccess(canWrite: true, availableCapacity: Int64.max))
+
+    let summary = preflight.summary(for: plan)
+
+    #expect(summary.canExport)
+  }
+
+  @Test func advancedExportOptionsResolveToRenderedPreset() async throws {
+    let state = AppState()
+    state.exportPreset = .originalTracksMOV
+    state.exportOverlayOptions.telemetryHUD = false
+
+    #expect(state.effectiveExportPreset == .originalTracksMOV)
+
+    state.exportOverlayOptions.telemetryHUD = true
+    #expect(state.effectiveExportPreset == .maxQualityHEVC)
+
+    state.exportOverlayOptions.telemetryHUD = false
+    state.exportOverlayOptions.routeMap = true
+    #expect(state.effectiveExportPreset == .maxQualityHEVC)
+
+    state.exportOverlayOptions.routeMap = false
+    state.exportOverlayOptions.privacyMask = true
+    #expect(state.effectiveExportPreset == .maxQualityHEVC)
+
+    state.exportOverlayOptions.privacyMask = false
+    state.exportOverlayOptions.includeReport = true
+    #expect(state.effectiveExportPreset == .maxQualityHEVC)
+
+    state.exportOverlayOptions.includeReport = false
+    state.exportOverlayOptions.includeScreenshot = true
+    #expect(state.effectiveExportPreset == .maxQualityHEVC)
+
+    state.exportOverlayOptions.includeScreenshot = false
+    state.cameraTrack = CameraTrack(keyframes: [CameraTrackKeyframe(seconds: 4, camera: .front)])
+    #expect(state.effectiveExportPreset == .maxQualityHEVC)
+  }
+
+  @Test func renderedPresetResolutionUpdatesOutputExtension() async throws {
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+
+    let state = AppState()
+    state.exportPreset = .originalTracksMOV
+    state.exportOverlayOptions.routeMap = true
+
+    let resolved = state.resolvedExportURL(forTesting: root.url.appendingPathComponent("manual-export.mov"))
+
+    #expect(resolved.lastPathComponent == "manual-export.mp4")
+  }
+
+  @Test func exportPresetsExposeOnlySimpleChoices() async throws {
+    let names = ExportPreset.visibleCases.map(\.displayName)
+
+    #expect(names == ["Original", "Evidence HEVC"])
     #expect(ExportPreset.socialShareHEVC.defaultExtension == "mp4")
     #expect(ExportPreset.proxyHEVC.defaultExtension == "mp4")
   }
@@ -187,13 +252,13 @@ struct TeslaCamTests {
   }
 
   @Test func compactControlsStayVisuallySmallButKeepTouchTargets() async throws {
-    #expect(TeslaCamTheme.Metrics.cardCorner == 10)
-    #expect(TeslaCamTheme.Metrics.controlCorner == 10)
-    #expect(TeslaCamTheme.Metrics.compactCorner == 10)
-    #expect(CompactControlSize.command.visualHeight <= 36)
-    #expect(CompactControlSize.command.maxWidth == 160)
-    #expect(CompactControlSize.chip.visualHeight <= 34)
-    #expect(CompactControlSize.icon.visualWidth <= 36)
+    #expect(TeslaCamTheme.Metrics.cardCorner == 8)
+    #expect(TeslaCamTheme.Metrics.controlCorner == 7)
+    #expect(TeslaCamTheme.Metrics.compactCorner == 7)
+    #expect(CompactControlSize.command.visualHeight == TeslaCamTheme.Metrics.compactControlHeight)
+    #expect(CompactControlSize.command.maxWidth == 152)
+    #expect(CompactControlSize.chip.visualHeight == TeslaCamTheme.Metrics.compactControlHeight)
+    #expect(CompactControlSize.icon.visualWidth == TeslaCamTheme.Metrics.compactControlHeight)
 
     for size in CompactControlSize.allCases {
       #expect(size.hitTargetHeight >= 44)
@@ -215,9 +280,32 @@ struct TeslaCamTests {
     #expect(state.telemetryRoute.count == state.clipSets.count)
   }
 
+  #if os(macOS)
+  @Test @MainActor func rootViewRendersOnboardingOffscreenAtDesktopSize() async throws {
+    let state = AppState()
+
+    let snapshot = try renderContentViewSnapshot(state: state, size: CGSize(width: 1100, height: 760))
+
+    #expect(snapshot.pixelsWide >= 1100)
+    #expect(snapshot.pixelsHigh >= 760)
+    #expect(snapshotHasVisibleContent(snapshot))
+  }
+
+  @Test @MainActor func rootViewRendersLoadedDemoWorkspaceOffscreenAtDesktopSize() async throws {
+    let state = AppState()
+    state.loadDemoTimeline()
+
+    let snapshot = try renderContentViewSnapshot(state: state, size: CGSize(width: 1400, height: 900))
+
+    #expect(snapshot.pixelsWide >= 1400)
+    #expect(snapshot.pixelsHigh >= 900)
+    #expect(snapshotHasVisibleContent(snapshot))
+  }
+  #endif
+
   @Test func nativeHEVCBitrateScalesWithCanvasSize() async throws {
     let hd = CGSize(width: 1920, height: 1080)
-    let hw4 = CGSize(width: 5760, height: 3240)
+    let hw4 = CGSize(width: 5760, height: 2160)
 
     let hdMax = ExportPreset.maxQualityHEVC.nativeCompressionProperties(for: hd)[AVVideoAverageBitRateKey] as? Int
     let hw4Max = ExportPreset.maxQualityHEVC.nativeCompressionProperties(for: hw4)[AVVideoAverageBitRateKey] as? Int
@@ -446,7 +534,7 @@ struct TeslaCamTests {
 
     let plan = try ExportPlan(request: request)
 
-    #expect(plan.canvasSize == CGSize(width: 5760, height: 3240))
+    #expect(plan.canvasSize == CGSize(width: 5760, height: 2160))
     #expect(plan.tileSize == size)
     #expect(plan.cameraOrder == Camera.hw4SixCamOrder)
     #expect(plan.totalDuration == request.totalDuration)
@@ -686,12 +774,16 @@ struct TeslaCamTests {
 
     controller.load(set: set, startSeconds: 3.5)
     #expect(abs(controller.currentItemTime().seconds - 3.5) < 0.001)
+    let tickAfterLoad = controller.redrawTick
 
     controller.seek(to: 20)
     #expect(abs(controller.currentItemTime().seconds - 12) < 0.001)
+    #expect(controller.redrawTick > tickAfterLoad)
+    let tickAfterSeek = controller.redrawTick
 
     controller.seek(to: 1.25)
     #expect(abs(controller.currentItemTime().seconds - 1.25) < 0.001)
+    #expect(controller.redrawTick > tickAfterSeek)
   }
 
   @Test func playbackControllerProjectsPreviewTimeBetweenUITicks() async throws {
@@ -733,7 +825,7 @@ struct TeslaCamTests {
     try FileManager.default.setAttributes([.modificationDate: olderDate], ofItemAtPath: frontOlder.path)
     try FileManager.default.setAttributes([.modificationDate: newerDate], ofItemAtPath: frontNewer.path)
 
-    let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: .preferNewest) { _ in }
+    let index = try await indexClipsOffMain(inputURLs: [root.url], duplicatePolicy: .preferNewest)
 
     #expect(index.duplicateFileCount == 1)
     #expect(index.sets.count == 1)
@@ -756,7 +848,7 @@ struct TeslaCamTests {
     try "newer".write(to: frontNewer, atomically: true, encoding: .utf8)
     try "back".write(to: back, atomically: true, encoding: .utf8)
 
-    let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: .keepAll) { _ in }
+    let index = try await indexClipsOffMain(inputURLs: [root.url], duplicatePolicy: .keepAll)
 
     #expect(index.duplicateFileCount == 1)
     #expect(index.sets.count == 2)
@@ -780,7 +872,7 @@ struct TeslaCamTests {
     let linkRear = root.url.appendingPathComponent("2026-01-01_00-00-00-rear.mp4")
     try FileManager.default.createSymbolicLink(at: linkRear, withDestinationURL: externalRear)
 
-    let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: .mergeByTime) { _ in }
+    let index = try await indexClipsOffMain(inputURLs: [root.url], duplicatePolicy: .mergeByTime)
     #expect(index.sets.count == 1)
     #expect(index.sets[0].files[.front] != nil)
     #expect(index.sets[0].files[.back] == nil)
@@ -1091,11 +1183,11 @@ struct TeslaCamTests {
     // fallback ~/Downloads/Teslacam resolves to a directory; CI
     // never has either.
     //
-    // When fired, locks the contract for an HW3 source folder:
+    // When fired, locks the real-footage indexing contract:
     //   - ClipIndexer.index does not throw
     //   - at least one clip set is found
-    //   - cameras detected are the four HW3 classics
-    //   - layoutProfile is hw3FourCam (auto layout)
+    //   - at least one camera is detected
+    //   - layoutProfile resolves to a concrete known camera layout
     //   - totalDuration is positive
     let env = ProcessInfo.processInfo.environment
     let candidates: [URL] = {
@@ -1121,21 +1213,17 @@ struct TeslaCamTests {
       return
     }
 
-    let index = try ClipIndexer.index(inputURLs: [source], duplicatePolicy: .mergeByTime) { _ in }
+    let index = try await indexClipsOffMain(inputURLs: [source], duplicatePolicy: .mergeByTime)
 
     #expect(index.sets.count >= 1, "real-footage source must produce at least one clip set")
     #expect(index.totalDuration > 0, "totalDuration must be positive on real footage")
+    let cachedFrameRates = index.sets.flatMap { $0.cameraFrameRates.values }
+    #expect(!cachedFrameRates.isEmpty, "real-footage scan must cache source frame rates for export")
+    #expect(cachedFrameRates.contains { $0 >= 12 && $0 <= 60 }, "real-footage scan must include a supported export frame rate")
+    #expect(cachedFrameRates.allSatisfy { $0 >= 12 && $0 <= 120 })
 
-    // HW3 classic source — these are the four cameras the user's
-    // current ~/Downloads/Teslacam folder carries; if a future
-    // source switches to HW4 the assertion below should be relaxed
-    // to "at least one camera present", but for the locked baseline
-    // (docs/improvement/real-footage-baseline-2026-05-09.md) HW3 is
-    // the canonical test source.
-    let expected: Set<Camera> = [.front, .back, .left_repeater, .right_repeater]
-    #expect(index.camerasFound.isSubset(of: expected) || expected.isSubset(of: index.camerasFound),
-            "real-footage cameras differ from HW3 baseline; got \(index.camerasFound)")
-    #expect(index.layoutProfile == .hw3FourCam, "expected HW3 four-cam layout for the canonical source")
+    #expect(!index.camerasFound.isEmpty, "real-footage source must detect at least one camera")
+    #expect([.hw3FourCam, .hw4SixCam].contains(index.layoutProfile), "real-footage layout must resolve to a concrete camera profile")
   }
 
   @Test func indexerSurvivesUnreadableAndCorruptedClipFilesWithFallbackDuration() async throws {
@@ -1179,7 +1267,7 @@ struct TeslaCamTests {
     try garbage.write(to: garbageURL)
 
     // Index — must not throw.
-    let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: .mergeByTime) { _ in }
+    let index = try await indexClipsOffMain(inputURLs: [root.url], duplicatePolicy: .mergeByTime)
 
     // All three timestamps survived (filename is the source of truth;
     // AVAsset failure does not drop the clip).
@@ -1268,7 +1356,7 @@ struct TeslaCamTests {
       defer { try? root.remove() }
       try materializeDomainFixture(fixture, at: root.url)
 
-      let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: .mergeByTime) { _ in }
+      let index = try await indexClipsOffMain(inputURLs: [root.url], duplicatePolicy: .mergeByTime)
 
       // Empty-dataset branch: assert both sides agree there are no clips.
       if expected.emptyDataset == true {
@@ -1382,7 +1470,7 @@ struct TeslaCamTests {
 
       for policy in DuplicateClipPolicy.allCases {
         let expected = try #require(expectedSelection[policy.contractValue])
-        let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: policy) { _ in }
+        let index = try await indexClipsOffMain(inputURLs: [root.url], duplicatePolicy: policy)
 
         let actual: DomainSelectionManifest
         if index.sets.isEmpty {
@@ -1430,7 +1518,7 @@ struct TeslaCamTests {
       try materializeDomainFixture(fixture, at: root.url)
 
       for policy in DuplicateClipPolicy.allCases {
-        let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: policy) { _ in }
+        let index = try await indexClipsOffMain(inputURLs: [root.url], duplicatePolicy: policy)
         let actual = index.domainScanManifest(relativeTo: root.url).withoutContractHeader
         let expected = try #require(fixture.expectedScan[policy.contractValue])
         #expect(actual == expected)
@@ -1486,6 +1574,27 @@ struct TeslaCamTests {
 
     #expect(abs(state.trimStartSeconds - 0) < 0.001)
     #expect(abs(state.trimEndSeconds - 43) < 0.001)
+  }
+
+  @Test func playheadButtonsSetTrimBoundaries() async throws {
+    let state = AppState()
+    let date = Date(timeIntervalSince1970: 1_700_000_000)
+    state.clipSets = [
+      ClipSet(timestamp: "a", date: date, duration: 120, files: [:])
+    ]
+    state.minDate = date
+    state.maxDate = date.addingTimeInterval(120)
+    state.rebuildTimelineForTesting()
+
+    state.currentSeconds = 30
+    state.setTrimStartAtPlayhead()
+    #expect(abs(state.trimStartSeconds - 30) < 0.001)
+    #expect(abs(state.trimEndSeconds - 120) < 0.001)
+
+    state.currentSeconds = 90
+    state.setTrimEndAtPlayhead()
+    #expect(abs(state.trimStartSeconds - 30) < 0.001)
+    #expect(abs(state.trimEndSeconds - 90) < 0.001)
   }
 
   @Test func testExportRangeClampsAroundCurrentMinute() async throws {
@@ -1571,6 +1680,23 @@ struct TeslaCamTests {
     #expect(abs(gap.duration - 30) < 0.001)
   }
 
+  @Test func recordedTimelineCoverageSkipsDeadTimeBetweenClips() async throws {
+    let anchor = Date(timeIntervalSince1970: 1_700_000_000)
+    let coverage = TimelineCoverageMap(
+      sets: [
+        ClipSet(timestamp: "a", date: anchor, duration: 50, files: [:]),
+        ClipSet(timestamp: "b", date: anchor.addingTimeInterval(80), duration: 60, files: [:])
+      ],
+      scale: .recordedClips
+    )
+
+    #expect(abs(coverage.totalDuration - 110) < 0.001)
+    #expect(coverage.gapRanges().isEmpty)
+    #expect(coverage.activeClipIndex(at: 55) == 1)
+    #expect(coverage.date(forGlobalSeconds: 55) == anchor.addingTimeInterval(85))
+    #expect(abs(coverage.globalSeconds(for: anchor.addingTimeInterval(70)) - 50) < 0.001)
+  }
+
   @Test func timelineCoverageMapCountsCompletedClipsByEndTime() async throws {
     let anchor = Date(timeIntervalSince1970: 1_700_000_000)
     let coverage = TimelineCoverageMap(sets: [
@@ -1609,12 +1735,12 @@ struct TeslaCamTests {
     store.load(sets: sets, minDate: anchor, maxDate: anchor.addingTimeInterval(140))
     store.setTrimRange(startSeconds: 52, endSeconds: 84, snapToMinute: true)
 
-    #expect(abs(store.totalDuration - 140) < 0.001)
-    #expect(store.gapRanges == [TimelineGapRange(startSeconds: 50, endSeconds: 80)])
+    #expect(abs(store.totalDuration - 110) < 0.001)
+    #expect(store.gapRanges.isEmpty)
     #expect(abs(store.trimStartSeconds - 0) < 0.001)
-    #expect(abs(store.trimEndSeconds - 120) < 0.001)
+    #expect(abs(store.trimEndSeconds - 110) < 0.001)
     #expect(store.selectedSetsForExport.map(\.timestamp) == ["a", "b"])
-    #expect(store.currentGapRange(at: 60) == TimelineGapRange(startSeconds: 50, endSeconds: 80))
+    #expect(store.currentGapRange(at: 60) == nil)
   }
 
   @Test func exportStoreResolvesNamesAndBuildsRequests() async throws {
@@ -1698,7 +1824,7 @@ struct TeslaCamTests {
     #expect(resolved.lastPathComponent == "manual-export-2.mp4")
   }
 
-  @Test func duplicateResolverDefaultsToMergePolicyOnly() async throws {
+  @Test func duplicateResolverNeverInterruptsMergePolicy() async throws {
     let state = AppState()
     let summary = DuplicateResolutionSummary(
       duplicateFileCount: 2,
@@ -1707,16 +1833,16 @@ struct TeslaCamTests {
     )
 
     state.presentDuplicateResolverIfNeededForTesting(summary: summary)
-    #expect(state.isDuplicateResolverPresented)
+    #expect(!state.isDuplicateResolverPresented)
 
-    state.dismissDuplicateResolver()
     state.chooseDuplicatePolicy(.keepAll)
     state.presentDuplicateResolverIfNeededForTesting(summary: summary)
     #expect(!state.isDuplicateResolverPresented)
+    #expect(state.duplicatePolicy == .mergeByTime)
 
     state.showDuplicateResolverForConflicts = true
     state.presentDuplicateResolverIfNeededForTesting(summary: summary)
-    #expect(state.isDuplicateResolverPresented)
+    #expect(!state.isDuplicateResolverPresented)
   }
 
   @Test func indexUsesRealClipDurationAndDetectsFourCamProfile() async throws {
@@ -1727,28 +1853,28 @@ struct TeslaCamTests {
     let clipDate = try #require(teslaTimestampDate(timestamp))
     let duration: Double = 2.0
 
-    try makeVideo(
+    try await makeVideo(
       at: root.url.appendingPathComponent("\(timestamp)-front.mov"),
       duration: duration,
       size: CGSize(width: 1280, height: 960)
     )
-    try makeVideo(
+    try await makeVideo(
       at: root.url.appendingPathComponent("\(timestamp)-rear.mov"),
       duration: duration,
       size: CGSize(width: 1280, height: 960)
     )
-    try makeVideo(
+    try await makeVideo(
       at: root.url.appendingPathComponent("\(timestamp)-left_repeater.mov"),
       duration: duration,
       size: CGSize(width: 1280, height: 960)
     )
-    try makeVideo(
+    try await makeVideo(
       at: root.url.appendingPathComponent("\(timestamp)-right_repeater.mov"),
       duration: duration,
       size: CGSize(width: 1280, height: 960)
     )
 
-    let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: .mergeByTime) { _ in }
+    let index = try await indexClipsOffMain(inputURLs: [root.url], duplicatePolicy: .mergeByTime)
 
     #expect(index.layoutProfile == .hw3FourCam)
     #expect(index.sets.count == 1)
@@ -1774,14 +1900,14 @@ struct TeslaCamTests {
     ]
 
     for camera in cameras {
-      try makeVideo(
+      try await makeVideo(
         at: root.url.appendingPathComponent("\(timestamp)-\(camera).mov"),
         duration: duration,
         size: CGSize(width: 1920, height: 1080)
       )
     }
 
-    let index = try ClipIndexer.index(inputURLs: [root.url], duplicatePolicy: .mergeByTime) { _ in }
+    let index = try await indexClipsOffMain(inputURLs: [root.url], duplicatePolicy: .mergeByTime)
 
     #expect(index.layoutProfile == .hw4SixCam)
     #expect(index.sets.count == 1)
@@ -1818,13 +1944,7 @@ struct TeslaCamTests {
     let controller = NativeExportController()
     controller.export(request: request)
 
-    let deadline = Date().addingTimeInterval(30)
-    while Date() < deadline {
-      if controller.currentJob?.isTerminal == true {
-        break
-      }
-      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-    }
+    _ = await waitForTerminalExport(controller)
 
     #expect(controller.currentJob?.phase == .completed)
     let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
@@ -1863,13 +1983,7 @@ struct TeslaCamTests {
     let controller = NativeExportController()
     controller.export(request: request)
 
-    let deadline = Date().addingTimeInterval(30)
-    while Date() < deadline {
-      if controller.currentJob?.isTerminal == true {
-        break
-      }
-      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-    }
+    _ = await waitForTerminalExport(controller)
 
     #expect(controller.currentJob?.phase == .completed)
     let poster = outputURL.deletingPathExtension().appendingPathExtension("poster.png")
@@ -1882,7 +1996,7 @@ struct TeslaCamTests {
     #expect(reportSize > 0)
   }
 
-  @Test func nativeExportUsesThreeByThreeCanvasForHw4Composite() async throws {
+  @Test func nativeExportUsesTwoByThreeCanvasForHw4Composite() async throws {
     let root = try TemporaryDirectory.make()
     defer { try? root.remove() }
 
@@ -1900,7 +2014,7 @@ struct TeslaCamTests {
     ]
 
     for url in files.values {
-      try makeVideo(at: url, duration: duration, size: size)
+      try await makeVideo(at: url, duration: duration, size: size)
     }
 
     let outputURL = root.url.appendingPathComponent("hw4_export.mov")
@@ -1930,23 +2044,403 @@ struct TeslaCamTests {
     let controller = NativeExportController()
     controller.export(request: request)
 
-    let deadline = Date().addingTimeInterval(30)
-    while Date() < deadline {
-      if controller.currentJob?.isTerminal == true {
-        break
-      }
-      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-    }
+    _ = await waitForTerminalExport(controller)
 
     let asset = AVURLAsset(url: outputURL)
     let track = try #require(await asset.loadTracks(withMediaType: .video).first)
     let naturalSize = try await track.load(.naturalSize)
 
     #expect(Int(naturalSize.width.rounded()) == 5760)
-    #expect(Int(naturalSize.height.rounded()) == 3240)
+    #expect(Int(naturalSize.height.rounded()) == 2160)
+  }
+
+  @Test func nativePassthroughExportWritesOriginalCameraTracks() async throws {
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+
+    let timestamp = "2026-04-08_12-00-00"
+    let clipDate = try #require(teslaTimestampDate(timestamp))
+    let duration: Double = 1.0
+    let size = CGSize(width: 1920, height: 1080)
+    let files: [Camera: URL] = [
+      .front: root.url.appendingPathComponent("\(timestamp)-front.mov"),
+      .back: root.url.appendingPathComponent("\(timestamp)-rear.mov")
+    ]
+
+    for url in files.values {
+      try await makeVideo(at: url, duration: duration, size: size)
+    }
+
+    let outputURL = root.url.appendingPathComponent("original_tracks.mov")
+    let request = ExportRequest(
+      sets: [
+        ClipSet(
+          timestamp: timestamp,
+          date: clipDate,
+          duration: duration,
+          files: files,
+          cameraDurations: Dictionary(uniqueKeysWithValues: files.keys.map { ($0, duration) }),
+          naturalSizes: Dictionary(uniqueKeysWithValues: files.keys.map { ($0, size) })
+        )
+      ],
+      outputURL: outputURL,
+      useSixCam: false,
+      preset: .originalTracksMOV,
+      enabledCameras: Set(files.keys),
+      trimStartSeconds: 0,
+      trimEndSeconds: duration,
+      trimStartDate: clipDate,
+      trimEndDate: clipDate.addingTimeInterval(duration),
+      selectedRangeText: "passthrough",
+      partialClipCount: 0
+    )
+
+    let controller = NativeExportController()
+    controller.export(request: request)
+
+    _ = await waitForTerminalExport(controller)
+
+    #expect(controller.currentJob?.phase == .completed)
+    let outputSize = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+    #expect(outputSize > 0)
+
+    let asset = AVURLAsset(url: outputURL)
+    let tracks = try await asset.loadTracks(withMediaType: .video)
+    #expect(tracks.count == files.count)
+  }
+
+  @Test func nativePassthroughExportsBriefRealFootageWhenOptedIn() async throws {
+    guard shouldRunRealFootageExport() else {
+      return
+    }
+    let source = try #require(realFootageSource())
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+
+    let indexStarted = Date()
+    let index = try await indexClipsOffMain(inputURLs: [source], duplicatePolicy: .mergeByTime)
+    let indexElapsed = Date().timeIntervalSince(indexStarted)
+    let expected: Set<Camera> = [.front, .back, .left_repeater, .right_repeater]
+    let selected = try #require(index.sets.first { expected.isSubset(of: Set($0.files.keys)) })
+    let duration = min(10.0, max(1.0, selected.duration))
+    let outputURL = root.url.appendingPathComponent("native-real-footage-original-tracks.mov")
+    let request = ExportRequest(
+      sets: [selected],
+      outputURL: outputURL,
+      useSixCam: false,
+      preset: .originalTracksMOV,
+      enabledCameras: expected,
+      trimStartSeconds: 0,
+      trimEndSeconds: duration,
+      trimStartDate: selected.date,
+      trimEndDate: selected.date.addingTimeInterval(duration),
+      selectedRangeText: "real-footage mux benchmark",
+      partialClipCount: 0
+    )
+
+    let controller = NativeExportController()
+    let exportStarted = Date()
+    controller.export(request: request)
+
+    _ = await waitForTerminalExport(controller, timeout: 90)
+    let exportElapsed = Date().timeIntervalSince(exportStarted)
+
+    #expect(controller.currentJob?.phase == .completed)
+    let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+    #expect(size > 0)
+
+    let asset = AVURLAsset(url: outputURL)
+    let tracks = try await asset.loadTracks(withMediaType: .video)
+    #expect(tracks.count == expected.count)
+    print(String(format: "NATIVE_REAL_FOOTAGE_MUX index=%.3fs export=%.3fs duration=%.3fs tracks=%d bytes=%d", indexElapsed, exportElapsed, duration, tracks.count, size))
+  }
+
+  @Test func nativePassthroughExportsMultipleRealClipSetsWhenOptedIn() async throws {
+    guard shouldRunRealFootageExport() else {
+      return
+    }
+    let source = try #require(realFootageSource())
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+
+    let indexStarted = Date()
+    let index = try await indexClipsOffMain(inputURLs: [source], duplicatePolicy: .mergeByTime)
+    let indexElapsed = Date().timeIntervalSince(indexStarted)
+    let expected: Set<Camera> = [.front, .back, .left_repeater, .right_repeater]
+    let selected = realFootageSets(from: index, expected: expected, limit: 3, maxGapSeconds: 90)
+
+    guard selected.count >= 2 else {
+      Issue.record("real-footage source did not contain consecutive complete camera sets")
+      return
+    }
+
+    let first = try #require(selected.first)
+    let last = try #require(selected.last)
+    let recordedDuration = selected.reduce(0.0) { $0 + max(0.1, $1.duration) }
+    let trimEndDate = last.date.addingTimeInterval(last.duration)
+    let outputURL = root.url.appendingPathComponent("native-real-footage-full-folder-slice.mov")
+    let request = ExportRequest(
+      sets: selected,
+      outputURL: outputURL,
+      useSixCam: false,
+      preset: .originalTracksMOV,
+      enabledCameras: expected,
+      trimStartSeconds: 0,
+      trimEndSeconds: trimEndDate.timeIntervalSince(first.date),
+      trimStartDate: first.date,
+      trimEndDate: trimEndDate,
+      selectedRangeText: "real-footage multi-set mux benchmark",
+      partialClipCount: 0
+    )
+
+    let controller = NativeExportController()
+    let exportStarted = Date()
+    controller.export(request: request)
+
+    _ = await waitForTerminalExport(controller, timeout: 120)
+    let exportElapsed = Date().timeIntervalSince(exportStarted)
+
+    #expect(controller.currentJob?.phase == .completed)
+    let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+    #expect(size > 0)
+
+    let asset = AVURLAsset(url: outputURL)
+    let tracks = try await asset.loadTracks(withMediaType: .video)
+    let outputDuration = CMTimeGetSeconds(try await asset.load(.duration))
+    #expect(tracks.count == expected.count)
+    #expect(outputDuration >= recordedDuration * 0.95)
+    #expect(outputDuration <= recordedDuration + 2.0)
+    print(String(format: "NATIVE_REAL_FOOTAGE_MULTI_MUX index=%.3fs export=%.3fs sets=%d recorded=%.3fs output=%.3fs tracks=%d bytes=%d", indexElapsed, exportElapsed, selected.count, recordedDuration, outputDuration, tracks.count, size))
+  }
+
+  @Test func nativePassthroughExportsLargerRealFootageRangeWhenOptedIn() async throws {
+    guard shouldRunRealFootageScaleExport() else {
+      return
+    }
+    let source = try #require(realFootageSource())
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+
+    let indexStarted = Date()
+    let index = try await indexClipsOffMain(inputURLs: [source], duplicatePolicy: .mergeByTime)
+    let indexElapsed = Date().timeIntervalSince(indexStarted)
+    let expected: Set<Camera> = [.front, .back, .left_repeater, .right_repeater]
+    let requestedSetCount = realFootageScaleSetLimit()
+    let selected = realFootageSets(from: index, expected: expected, limit: requestedSetCount)
+
+    guard selected.count >= min(6, requestedSetCount) else {
+      Issue.record("real-footage source did not contain enough complete camera sets for scale export")
+      return
+    }
+
+    let first = try #require(selected.first)
+    let last = try #require(selected.last)
+    let recordedDuration = selected.reduce(0.0) { $0 + max(0.1, $1.duration) }
+    let trimEndDate = last.date.addingTimeInterval(last.duration)
+    let outputURL = root.url.appendingPathComponent("native-real-footage-scale-original-tracks.mov")
+    let request = ExportRequest(
+      sets: selected,
+      outputURL: outputURL,
+      useSixCam: false,
+      preset: .originalTracksMOV,
+      enabledCameras: expected,
+      trimStartSeconds: 0,
+      trimEndSeconds: trimEndDate.timeIntervalSince(first.date),
+      trimStartDate: first.date,
+      trimEndDate: trimEndDate,
+      selectedRangeText: "real-footage scale mux benchmark",
+      partialClipCount: 0
+    )
+
+    let controller = NativeExportController()
+    let exportStarted = Date()
+    controller.export(request: request)
+
+    _ = await waitForTerminalExport(controller, timeout: 300)
+    let exportElapsed = Date().timeIntervalSince(exportStarted)
+
+    #expect(controller.currentJob?.phase == .completed)
+    let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+    #expect(size > 0)
+
+    let asset = AVURLAsset(url: outputURL)
+    let tracks = try await asset.loadTracks(withMediaType: .video)
+    let outputDuration = CMTimeGetSeconds(try await asset.load(.duration))
+    #expect(tracks.count == expected.count)
+    #expect(outputDuration >= recordedDuration * 0.95)
+    #expect(outputDuration <= recordedDuration + Double(selected.count))
+    print(String(format: "NATIVE_REAL_FOOTAGE_SCALE_MUX index=%.3fs export=%.3fs sets=%d requested=%d recorded=%.3fs output=%.3fs tracks=%d bytes=%d", indexElapsed, exportElapsed, selected.count, requestedSetCount, recordedDuration, outputDuration, tracks.count, size))
+  }
+
+  @Test func nativeExportRendersBriefRealFootageHEVCWhenOptedIn() async throws {
+    guard shouldRunRealFootageExport() else {
+      return
+    }
+    let source = try #require(realFootageSource())
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+
+    let indexStarted = Date()
+    let index = try await indexClipsOffMain(inputURLs: [source], duplicatePolicy: .mergeByTime)
+    let indexElapsed = Date().timeIntervalSince(indexStarted)
+    let expected: Set<Camera> = [.front, .back, .left_repeater, .right_repeater]
+    let selected = try #require(index.sets.first { expected.isSubset(of: Set($0.files.keys)) })
+    let duration = min(10.0, max(1.0, selected.duration))
+    let outputURL = root.url.appendingPathComponent("native-real-footage-hevc.mp4")
+    let request = ExportRequest(
+      sets: [selected],
+      outputURL: outputURL,
+      useSixCam: false,
+      preset: .fastHEVC,
+      enabledCameras: expected,
+      trimStartSeconds: 0,
+      trimEndSeconds: duration,
+      trimStartDate: selected.date,
+      trimEndDate: selected.date.addingTimeInterval(duration),
+      selectedRangeText: "real-footage benchmark",
+      partialClipCount: 0
+    )
+
+    let controller = NativeExportController()
+    let exportStarted = Date()
+    controller.export(request: request)
+
+    _ = await waitForTerminalExport(controller, timeout: 90)
+    let exportElapsed = Date().timeIntervalSince(exportStarted)
+
+    #expect(controller.currentJob?.phase == .completed)
+    let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+    #expect(size > 0)
+
+    let asset = AVURLAsset(url: outputURL)
+    let track = try #require(await asset.loadTracks(withMediaType: .video).first)
+    let naturalSize = try await track.load(.naturalSize)
+    #expect(Int(naturalSize.width.rounded()) == 2560)
+    #expect(Int(naturalSize.height.rounded()) == 1920)
+    print(String(format: "NATIVE_REAL_FOOTAGE_EXPORT index=%.3fs export=%.3fs duration=%.3fs bytes=%d", indexElapsed, exportElapsed, duration, size))
+  }
+
+  private func shouldRunRealFootageExport() -> Bool {
+    let env = ProcessInfo.processInfo.environment
+    let marker = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent(".cache/tmp/run-native-real-footage-export")
+    return env["TESLACAM_REAL_FOOTAGE_NATIVE_EXPORT"] == "1"
+      || FileManager.default.fileExists(atPath: marker.path)
+  }
+
+  private func shouldRunRealFootageScaleExport() -> Bool {
+    let env = ProcessInfo.processInfo.environment
+    return env["TESLACAM_REAL_FOOTAGE_SCALE_EXPORT"] == "1"
+      || FileManager.default.fileExists(atPath: realFootageScaleMarkerURL().path)
+  }
+
+  private func realFootageScaleSetLimit() -> Int {
+    let raw = ProcessInfo.processInfo.environment["TESLACAM_REAL_FOOTAGE_SCALE_SET_LIMIT"] ?? ""
+    let markerRaw = (try? String(contentsOf: realFootageScaleMarkerURL(), encoding: .utf8))
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+    let parsed = Int(raw) ?? Int(markerRaw) ?? 12
+    return min(max(parsed, 6), 60)
+  }
+
+  private func realFootageScaleMarkerURL() -> URL {
+    URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent(".cache/tmp/run-native-real-footage-scale-export")
+  }
+
+  private func realFootageSets(
+    from index: ClipIndex,
+    expected: Set<Camera>,
+    limit: Int,
+    maxGapSeconds: TimeInterval? = nil
+  ) -> [ClipSet] {
+    var selected: [ClipSet] = []
+    for set in index.sets where expected.isSubset(of: Set(set.files.keys)) {
+      if let maxGapSeconds, let previous = selected.last, set.date.timeIntervalSince(previous.date) > maxGapSeconds {
+        selected = [set]
+      } else {
+        selected.append(set)
+      }
+      if selected.count == limit {
+        break
+      }
+    }
+    return selected
+  }
+
+  private func realFootageSource() -> URL? {
+    let env = ProcessInfo.processInfo.environment
+    var candidates: [URL] = []
+    if let raw = env["TESLACAM_REAL_FOOTAGE_SOURCE"], !raw.isEmpty {
+      candidates.append(URL(fileURLWithPath: NSString(string: raw).expandingTildeInPath))
+    }
+    if let home = env["HOME"], !home.isEmpty {
+      candidates.append(URL(fileURLWithPath: home).appendingPathComponent("Downloads").appendingPathComponent("Teslacam"))
+    }
+
+    var isDir: ObjCBool = false
+    return candidates.first { FileManager.default.fileExists(atPath: $0.path, isDirectory: &isDir) && isDir.boolValue }
   }
 
 }
+
+#if os(macOS)
+@MainActor
+private func renderContentViewSnapshot(state: AppState, size: CGSize) throws -> NSBitmapImageRep {
+  let root = ContentView()
+    .environmentObject(state)
+    .frame(width: size.width, height: size.height)
+  let hostingView = NSHostingView(rootView: root)
+  hostingView.frame = CGRect(origin: .zero, size: size)
+  hostingView.setFrameSize(size)
+  hostingView.layoutSubtreeIfNeeded()
+  RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+  hostingView.layoutSubtreeIfNeeded()
+
+  guard let bitmap = hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds) else {
+    throw NSError(
+      domain: "TeslaCamTests",
+      code: 1,
+      userInfo: [NSLocalizedDescriptionKey: "Could not allocate offscreen root-view bitmap."]
+    )
+  }
+  hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+  return bitmap
+}
+
+private func snapshotHasVisibleContent(_ bitmap: NSBitmapImageRep) -> Bool {
+  guard let data = bitmap.bitmapData else { return false }
+  let bytesPerPixel = max(1, bitmap.bitsPerPixel / 8)
+  guard bytesPerPixel >= 3, bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0 else { return false }
+
+  var visibleSamples = 0
+  var colors = Set<UInt32>()
+  let xStride = max(1, bitmap.pixelsWide / 24)
+  let yStride = max(1, bitmap.pixelsHigh / 18)
+
+  for y in stride(from: 0, to: bitmap.pixelsHigh, by: yStride) {
+    for x in stride(from: 0, to: bitmap.pixelsWide, by: xStride) {
+      let offset = y * bitmap.bytesPerRow + x * bytesPerPixel
+      let first = data[offset]
+      let second = data[offset + 1]
+      let third = data[offset + 2]
+      let alpha = bytesPerPixel >= 4 ? data[offset + 3] : 255
+      if alpha > 8, Int(first) + Int(second) + Int(third) > 24 {
+        visibleSamples += 1
+      }
+      colors.insert(UInt32(first) << 16 | UInt32(second) << 8 | UInt32(third))
+      if visibleSamples >= 12, colors.count >= 4 {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+#endif
 
 private struct TemporaryDirectory {
   let url: URL
@@ -2013,7 +2507,13 @@ private func exportRequestForPlan(
   )
 }
 
-private func makeVideo(at url: URL, duration: Double, size: CGSize) throws {
+private func makeVideo(at url: URL, duration: Double, size: CGSize) async throws {
+  try await Task.detached(priority: .userInitiated) {
+    try makeVideoImpl(at: url, duration: duration, size: size)
+  }.value
+}
+
+private func makeVideoImpl(at url: URL, duration: Double, size: CGSize) throws {
   let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
   let settings: [String: Any] = [
     AVVideoCodecKey: AVVideoCodecType.h264,
@@ -2063,10 +2563,10 @@ private func makeVideo(at url: URL, duration: Double, size: CGSize) throws {
     }
 
     CVPixelBufferLockBaseAddress(pixelBuffer, [])
-    defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
     if let base = CVPixelBufferGetBaseAddress(pixelBuffer) {
       memset(base, Int32(frameIndex % 255), CVPixelBufferGetDataSize(pixelBuffer))
     }
+    CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
 
     let time = CMTime(value: CMTimeValue(frameIndex), timescale: CMTimeScale(fps))
     guard adaptor.append(pixelBuffer, withPresentationTime: time) else {
@@ -2197,7 +2697,7 @@ private struct DomainScanManifestWithoutHeader: Codable, Equatable {
   let duplicateFileCount: Int
   let duplicateTimestampCount: Int
   let cameras: [String]
-  let clipSets: [DomainClipSetManifest]
+  let clipSets: [DomainClipSetManifestWithoutHeader]
 
   enum CodingKeys: String, CodingKey {
     case clipSetCount = "clip_set_count"
@@ -2208,6 +2708,20 @@ private struct DomainScanManifestWithoutHeader: Codable, Equatable {
   }
 }
 
+private struct DomainClipSetManifestWithoutHeader: Codable, Equatable {
+  let timestamp: String
+  let startTime: String
+  let cameras: [String]
+  let files: [String: String]
+
+  enum CodingKeys: String, CodingKey {
+    case timestamp
+    case startTime = "start_time"
+    case cameras
+    case files
+  }
+}
+
 private extension DomainScanManifest {
   var withoutContractHeader: DomainScanManifestWithoutHeader {
     DomainScanManifestWithoutHeader(
@@ -2215,7 +2729,18 @@ private extension DomainScanManifest {
       duplicateFileCount: duplicateFileCount,
       duplicateTimestampCount: duplicateTimestampCount,
       cameras: cameras,
-      clipSets: clipSets
+      clipSets: clipSets.map(\.withoutContractHeader)
+    )
+  }
+}
+
+private extension DomainClipSetManifest {
+  var withoutContractHeader: DomainClipSetManifestWithoutHeader {
+    DomainClipSetManifestWithoutHeader(
+      timestamp: timestamp,
+      startTime: startTime,
+      cameras: cameras,
+      files: files
     )
   }
 }
@@ -2234,6 +2759,31 @@ private func repositoryRootForTests() -> URL {
   URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
+}
+
+@MainActor
+private func waitForTerminalExport(
+  _ controller: NativeExportController,
+  timeout: TimeInterval = 30
+) async -> Bool {
+  let deadline = Date().addingTimeInterval(timeout)
+  while Date() < deadline {
+    if controller.currentJob?.isTerminal == true {
+      return true
+    }
+    try? await Task.sleep(nanoseconds: 100_000_000)
+  }
+  return controller.currentJob?.isTerminal == true
+}
+
+@MainActor
+private func indexClipsOffMain(
+  inputURLs: [URL],
+  duplicatePolicy: DuplicateClipPolicy = .mergeByTime
+) async throws -> ClipIndex {
+  try await Task.detached(priority: .userInitiated) {
+    try ClipIndexer.index(inputURLs: inputURLs, duplicatePolicy: duplicatePolicy) { _ in }
+  }.value
 }
 
 private func materializeDomainFixture(_ fixture: DomainFixtureCase, at root: URL) throws {
