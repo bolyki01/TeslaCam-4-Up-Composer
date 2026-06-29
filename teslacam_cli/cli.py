@@ -239,7 +239,7 @@ class CliPresenter:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="teslacam-cli",
-        description="Cross-platform TeslaCam CLI composer. Default output: H.265/HEVC MP4 in lossless mode.",
+        description="Cross-platform TeslaCam CLI composer. Default output: Evidence HEVC MP4.",
     )
     parser.add_argument("source", nargs="?", help="TeslaCam source folder")
     parser.add_argument("-o", "--output", help="Output MP4 path or output directory")
@@ -253,11 +253,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=["lossless", "quality", "review", "share"],
-        default="lossless",
+        choices=["evidence-hevc", "lossless", "quality", "review", "share"],
+        default="evidence-hevc",
         help=(
+            "evidence-hevc = app-style evidence export, x265 CRF 6. "
             "lossless = x265 lossless HEVC (archival, very large). "
-            "quality = x265 CRF 6 (near-lossless). "
+            "quality = legacy alias for evidence-hevc. "
             "review = near-source quality at a fraction of the size "
             "(VideoToolbox or x265 CRF 23). "
             "share = small, messageable files (VideoToolbox or x265 CRF 28)."
@@ -578,16 +579,16 @@ def prompt_run_options(
     )
 
     print("Output mode:")
-    print("  1) lossless - H.265 MP4, x265 lossless, very large files")
-    print("  2) quality  - H.265 MP4, x265 CRF 6, smaller files")
-    print("  3) review   - near-source quality, much smaller (VideoToolbox/x265 CRF 23)")
-    print("  4) share    - small, messageable files (VideoToolbox/x265 CRF 28)")
+    print("  1) evidence-hevc - App-style Evidence HEVC, x265 CRF 6")
+    print("  2) lossless      - H.265 MP4, x265 lossless, very large files")
+    print("  3) review        - near-source quality, much smaller (VideoToolbox/x265 CRF 23)")
+    print("  4) share         - small, messageable files (VideoToolbox/x265 CRF 28)")
     mode = prompt_choice(
-        "Mode [lossless]: ",
-        default="lossless",
-        allowed={"lossless", "quality", "review", "share", "1", "2", "3", "4"},
+        "Mode [evidence-hevc]: ",
+        default="evidence-hevc",
+        allowed={"evidence-hevc", "lossless", "quality", "review", "share", "1", "2", "3", "4"},
     )
-    mode = {"1": "lossless", "2": "quality", "3": "review", "4": "share"}.get(mode, mode)
+    mode = {"1": "evidence-hevc", "2": "lossless", "3": "review", "4": "share"}.get(mode, mode)
 
     default_output = resolve_output_path(
         source_dir,

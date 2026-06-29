@@ -61,10 +61,33 @@
       "scale": "2x"
     },
     {
+      "size": "60x60",
+      "idiom": "iphone",
+      "filename": "icon_ios_120.png",
+      "scale": "2x"
+    },
+    {
+      "size": "60x60",
+      "idiom": "iphone",
+      "filename": "icon_ios_180.png",
+      "scale": "3x"
+    },
+    {
+      "size": "76x76",
+      "idiom": "ipad",
+      "filename": "icon_ios_152.png",
+      "scale": "2x"
+    },
+    {
+      "size": "83.5x83.5",
+      "idiom": "ipad",
+      "filename": "icon_ios_167.png",
+      "scale": "2x"
+    },
+    {
       "size": "1024x1024",
-      "idiom": "universal",
+      "idiom": "ios-marketing",
       "filename": "icon_1024.png",
-      "platform": "ios",
       "scale": "1x"
     }
   ],

@@ -231,26 +231,6 @@ struct TeslaCamTests {
     #expect(text.contains("G: 0.12/-0.34/0.98"))
   }
 
-  @Test func iPadGridMetricsKeepsRegularDashboardWithinPlannedRails() async throws {
-    let metrics = IPadGridMetrics(containerWidth: 1032)
-
-    #expect(metrics.layoutMode == .threeZone)
-    #expect(metrics.eventRailWidth >= 240)
-    #expect(metrics.eventRailWidth <= 280)
-    #expect(metrics.inspectorWidth >= 300)
-    #expect(metrics.inspectorWidth <= 340)
-    #expect(metrics.centerWidth > metrics.inspectorWidth)
-    #expect(Int(metrics.gutter) % 4 == 0)
-  }
-
-  @Test func iPadGridMetricsDoesNotFallBackToStackedPortraitLayout() async throws {
-    let metrics = IPadGridMetrics(containerWidth: 700)
-
-    #expect(metrics.layoutMode == .threeZone)
-    #expect(metrics.centerWidth >= 320)
-    #expect(Int(metrics.gutter) % 4 == 0)
-  }
-
   @Test func compactControlsStayVisuallySmallButKeepTouchTargets() async throws {
     #expect(TeslaCamTheme.Metrics.cardCorner == 8)
     #expect(TeslaCamTheme.Metrics.controlCorner == 7)

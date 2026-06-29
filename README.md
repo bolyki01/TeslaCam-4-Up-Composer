@@ -75,6 +75,8 @@ teslacam-cli /path/to/TeslaCam --dry-run-json -
 
 Dry-run JSON states telemetry capability explicitly. The CLI keeps rendering ffmpeg-only and does not inspect SEI metadata; native app exports can burn timestamp, speed, AP, pedal/brake, steering, heading, and route overlays.
 
+CLI exports default to `--mode evidence-hevc`, matching the app's Evidence HEVC intent. Native Original passthrough muxing remains app-only because it uses AVFoundation composition rather than the portable ffmpeg grid renderer.
+
 ## Architecture
 
 - Domain behavior is fixture-backed and documented in `docs/domain-contract.md`.

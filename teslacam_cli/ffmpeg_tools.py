@@ -336,7 +336,10 @@ def choose_encoder(
     timeout_seconds: Optional[float] = DEFAULT_TOOL_QUERY_TIMEOUT_SECONDS,
 ) -> EncoderPlan:
     encoders = _encoders_text(str(ffmpeg), timeout_seconds)
-    if "libx265" not in encoders:
+    have_x265 = "libx265" in encoders
+    if mode in _DELIVERY_MODES:
+        return _delivery_encoder(mode, x265_preset, encoders)
+    if not have_x265:
         raise ToolResolutionError(
             "This ffmpeg build does not include libx265. Lossless/near-lossless HEVC requires libx265."
         )
@@ -361,10 +364,10 @@ def choose_encoder(
                 "0",
             ],
         )
-    if mode == "quality":
+    if mode in {"quality", "evidence-hevc"}:
         return EncoderPlan(
-            mode="quality",
-            label="hevc_quality",
+            mode=mode,
+            label="hevc_evidence" if mode == "evidence-hevc" else "hevc_quality",
             output_extension="mp4",
             args=[
                 "-c:v",
@@ -383,8 +386,6 @@ def choose_encoder(
                 "0",
             ],
         )
-    if mode in _DELIVERY_MODES:
-        return _delivery_encoder(mode, x265_preset, encoders)
     raise ValueError(f"Unsupported encoder mode: {mode}")
 
 

@@ -72,24 +72,24 @@ enum TeslaCamTheme {
   enum Colors {
     #if os(iOS)
     static let background = Color(red: 0.045, green: 0.047, blue: 0.055)
-    static let backgroundGlow = Color(red: 0.18, green: 0.36, blue: 0.78).opacity(0.22)
-    static let backgroundWarmGlow = Color(red: 0.90, green: 0.34, blue: 0.22).opacity(0.10)
-    static let surface = Color.white.opacity(0.055)
-    static let surfaceElevated = Color.white.opacity(0.09)
-    static let chromeBar = Color.white.opacity(0.07)
-    static let stroke = Color.white.opacity(0.12)
-    static let accent = Color(red: 0.34, green: 0.58, blue: 0.98)
-    static let accentSoft = accent.opacity(0.24)
+    static let backgroundGlow = Color(red: 0.22, green: 0.45, blue: 0.92).opacity(0.16)
+    static let backgroundWarmGlow = Color(red: 0.93, green: 0.38, blue: 0.28).opacity(0.08)
+    static let surface = Color.white.opacity(0.04)
+    static let surfaceElevated = Color.white.opacity(0.065)
+    static let chromeBar = Color.white.opacity(0.055)
+    static let stroke = Color.white.opacity(0.08)
+    static let accent = Color(red: 0.24, green: 0.51, blue: 0.97)
+    static let accentSoft = accent.opacity(0.22)
     static let textPrimary = Color.white.opacity(0.94)
     static let textSecondary = Color.white.opacity(0.72)
     static let textTertiary = Color.white.opacity(0.50)
-    static let gapFill = Color(red: 0.18, green: 0.13, blue: 0.18)
-    static let gapAccent = Color(red: 0.95, green: 0.42, blue: 0.30)
-    static let overlayScrim = Color.black.opacity(0.56)
-    static let overlaySurface = Color.black.opacity(0.32)
-    static let overlaySurfaceStrong = Color.black.opacity(0.54)
-    static let controlKnob = Color.white.opacity(0.90)
-    static let controlKnobStroke = Color.white.opacity(0.24)
+    static let gapFill = Color(red: 0.17, green: 0.12, blue: 0.12)
+    static let gapAccent = Color(red: 0.93, green: 0.38, blue: 0.28)
+    static let overlayScrim = Color.black.opacity(0.78)
+    static let overlaySurface = Color.white.opacity(0.08)
+    static let overlaySurfaceStrong = Color(red: 0.035, green: 0.036, blue: 0.042)
+    static let controlKnob = Color.white.opacity(0.88)
+    static let controlKnobStroke = Color.white.opacity(0.2)
     #else
     static let background = Color(red: 0.045, green: 0.047, blue: 0.055)
     static let backgroundGlow = Color(red: 0.22, green: 0.45, blue: 0.92).opacity(0.16)
@@ -115,8 +115,8 @@ enum TeslaCamTheme {
 
   enum Metrics {
     #if os(iOS)
-    static let controlHeight: CGFloat = 44
-    static let compactControlHeight: CGFloat = 44
+    static let controlHeight: CGFloat = 32
+    static let compactControlHeight: CGFloat = 32
     #else
     static let controlHeight: CGFloat = 32
     static let compactControlHeight: CGFloat = 32
@@ -130,7 +130,7 @@ enum TeslaCamTheme {
 
     /// Padding inside a primary content card (e.g. TimelineExportCard, PreviewPanelCard).
     static let cardPadding: CGFloat = 20
-    /// Padding inside a secondary / compact card (e.g. StatCard, RangeControlCard, TelemetryMetric).
+    /// Padding inside a secondary / compact card.
     static let cardPaddingCompact: CGFloat = 14
     /// Padding inside a small inline chip (chips, info banners).
     static let chipPaddingHorizontal: CGFloat = 10
@@ -186,15 +186,11 @@ enum TeslaCamTheme {
     static let numericBody = Font.system(size: 15, weight: .semibold, design: .monospaced)
     static let numericLarge = Font.system(size: 18, weight: .semibold, design: .monospaced)
     static let metricValue = Font.system(size: 13, weight: .semibold, design: .monospaced)
-    static let miniMetricValue = Font.system(size: 12, weight: .semibold, design: .monospaced)
-    static let inspectorChip = Font.system(size: 11, weight: .semibold)
-    static let inspectorSymbol = Font.system(size: 12, weight: .semibold)
   }
 }
 
 enum SurfaceRole: CaseIterable {
   case panel
-  case rail
   case overlay
   case control
   case selected
@@ -202,8 +198,6 @@ enum SurfaceRole: CaseIterable {
   var fill: Color {
     switch self {
     case .panel:
-      return TeslaCamTheme.Colors.surface
-    case .rail:
       return TeslaCamTheme.Colors.surface
     case .overlay:
       return TeslaCamTheme.Colors.overlaySurfaceStrong
@@ -235,7 +229,7 @@ enum SurfaceRole: CaseIterable {
       #endif
     case .control:
       return TeslaCamTheme.Colors.surfaceElevated
-    case .panel, .rail:
+    case .panel:
       return nil
     }
   }
@@ -283,39 +277,6 @@ enum CompactControlSize: CaseIterable {
   }
 }
 
-struct IPadGridMetrics: Equatable {
-  enum LayoutMode {
-    case threeZone
-  }
-
-  let containerWidth: CGFloat
-
-  var layoutMode: LayoutMode {
-    .threeZone
-  }
-
-  var gutter: CGFloat { 12 }
-  var outerPadding: CGFloat { 12 }
-
-  var eventRailWidth: CGFloat {
-    if containerWidth < 900 {
-      return min(220, max(152, floor(containerWidth * 0.22 / 4) * 4))
-    }
-    return min(300, max(276, floor(containerWidth * 0.215 / 4) * 4))
-  }
-
-  var inspectorWidth: CGFloat {
-    if containerWidth < 900 {
-      return min(260, max(196, floor(containerWidth * 0.28 / 4) * 4))
-    }
-    return min(380, max(340, floor(containerWidth * 0.265 / 4) * 4))
-  }
-
-  var centerWidth: CGFloat {
-    max(320, containerWidth - eventRailWidth - inspectorWidth - gutter * 2)
-  }
-}
-
 struct TeslaCamSceneBackground: View {
   var body: some View {
     TeslaCamTheme.Colors.background
@@ -350,31 +311,12 @@ private struct TeslaCamCardModifier: ViewModifier {
 
   @ViewBuilder
   func body(content: Content) -> some View {
-    #if os(iOS)
-    if #available(iOS 26.0, *) {
-      content
-        .background(fill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .glassEffect(.regular.tint(fill), in: .rect(cornerRadius: radius))
-        .overlay(
-          RoundedRectangle(cornerRadius: radius, style: .continuous)
-            .stroke(TeslaCamTheme.Colors.stroke, lineWidth: 1)
-        )
-    } else {
-      content
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .overlay(
-          RoundedRectangle(cornerRadius: radius, style: .continuous)
-            .stroke(TeslaCamTheme.Colors.stroke, lineWidth: 1)
-        )
-    }
-    #else
     content
       .background(fill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
       .overlay(
         RoundedRectangle(cornerRadius: radius, style: .continuous)
           .stroke(TeslaCamTheme.Colors.stroke, lineWidth: 1)
       )
-    #endif
   }
 }
 
@@ -385,47 +327,12 @@ private struct GlassSurfaceModifier: ViewModifier {
 
   @ViewBuilder
   func body(content: Content) -> some View {
-    #if os(iOS)
-    if #available(iOS 26.0, *) {
-      if let tint = role.glassTint {
-        content
-          .background(role.fill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-          .glassEffect(
-            .regular.tint(tint).interactive(interactive),
-            in: .rect(cornerRadius: radius)
-          )
-          .overlay(
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-              .stroke(role.stroke, lineWidth: 1)
-          )
-      } else {
-        content
-          .background(role.fill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-          .glassEffect(
-            .regular.interactive(interactive),
-            in: .rect(cornerRadius: radius)
-          )
-          .overlay(
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-              .stroke(role.stroke, lineWidth: 1)
-          )
-      }
-    } else {
-      content
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .overlay(
-          RoundedRectangle(cornerRadius: radius, style: .continuous)
-            .stroke(role.stroke, lineWidth: 1)
-        )
-    }
-    #else
     content
       .background(role.fill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
       .overlay(
         RoundedRectangle(cornerRadius: radius, style: .continuous)
           .stroke(role.stroke, lineWidth: 1)
       )
-    #endif
   }
 }
 

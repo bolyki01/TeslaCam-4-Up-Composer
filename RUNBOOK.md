@@ -53,6 +53,10 @@ Domain dry-run comparison:
 teslacam-cli /absolute/path/to/TeslaCam --dry-run-json manifest.json
 ```
 
+The CLI default mode is `evidence-hevc`, the portable ffmpeg equivalent of the
+app's Evidence HEVC export intent. Native Original passthrough muxing and
+telemetry engraving stay in the app path.
+
 The integration test expects working `ffmpeg` fixtures.
 
 ## Lint, format, and typecheck

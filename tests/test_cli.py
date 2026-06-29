@@ -143,6 +143,16 @@ class CliPathTests(unittest.TestCase):
 
         self.assertEqual(args.dry_run_json, "-")
 
+    def test_parser_defaults_to_app_style_evidence_hevc(self):
+        args = build_parser().parse_args(["/tmp/source"])
+
+        self.assertEqual(args.mode, "evidence-hevc")
+
+    def test_parser_accepts_legacy_quality_mode(self):
+        args = build_parser().parse_args(["/tmp/source", "--mode", "quality"])
+
+        self.assertEqual(args.mode, "quality")
+
     def test_dry_run_json_accepts_output_path(self):
         args = build_parser().parse_args(["/tmp/source", "--dry-run-json", "/tmp/manifest.json"])
 

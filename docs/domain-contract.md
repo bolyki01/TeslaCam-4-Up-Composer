@@ -52,7 +52,7 @@ Layout plans expose a requested profile, expected cameras, render order, hidden 
 
 Native preview/export can layer camera-track cuts over this base layout. A camera-track cut is a timeline second plus camera id; during native export, the latest cut at or before the render second focuses that camera full-frame. Without cuts, export uses the base grid layout above. The portable CLI does not currently apply camera-track cuts.
 
-Native export presets are intent labels over native codecs: Evidence HEVC, Fast Review HEVC, Social 25 MB HEVC, Proxy HEVC, and Master ProRes. The portable CLI keeps its existing ffmpeg preset adapters unless a fixture explicitly expands the shared contract.
+Native export presets are intent labels over native codecs: Original passthrough, Evidence HEVC, Fast Review HEVC, Social 25 MB HEVC, Proxy HEVC, and Master ProRes. The portable CLI exposes `evidence-hevc` as the app-style default plus its existing ffmpeg adapters (`lossless`, `quality`, `review`, `share`) unless a fixture explicitly expands the shared contract. Original passthrough muxing is native-only.
 
 ## Output naming and conflicts
 

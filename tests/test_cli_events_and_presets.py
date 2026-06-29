@@ -104,6 +104,17 @@ class DeliveryPresetTests(unittest.TestCase):
         self.assertIn("hevc_videotoolbox", plan.args)
         self.assertNotIn("libx265", plan.args)
 
+    def test_review_uses_videotoolbox_without_x265(self):
+        plan = self._choose("review", "hevc_videotoolbox\n")
+        self.assertEqual(plan.label, "hevc_review")
+        self.assertIn("hevc_videotoolbox", plan.args)
+
+    def test_evidence_hevc_matches_app_style_quality_mode(self):
+        plan = self._choose("evidence-hevc", "libx265\n")
+        self.assertEqual(plan.label, "hevc_evidence")
+        self.assertIn("libx265", plan.args)
+        self.assertIn("6", plan.args)
+
     def test_share_falls_back_to_x265_crf_without_videotoolbox(self):
         plan = self._choose("share", "libx265\n")
         self.assertEqual(plan.label, "hevc_share")

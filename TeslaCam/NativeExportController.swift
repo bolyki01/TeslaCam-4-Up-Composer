@@ -605,9 +605,11 @@ final class NativeExportController: ObservableObject {
         enabledCameras: plan.enabledCameras,
         overlayOptions: plan.overlayOptions
       )
+      appendLog("Render pipeline: \(composer.pipelineDescription)\n")
       let frameCount = max(1, Int((frameProvider.totalDuration * fps).rounded(.up)))
       var renderedFrames = 0
       var pendingFrame: PendingFrameBuffer?
+      var renderMetrics = ExportRenderMetrics()
 
       for frameIndex in 0..<frameCount {
         if cancelRequested {
@@ -647,16 +649,25 @@ final class NativeExportController: ObservableObject {
 
         do {
           try autoreleasepool {
+            let prepareStarted = ContinuousClock.now
             let nextFrame = try composer.makePendingFrameBuffer(
               at: context.localSeconds,
               set: context.set,
               cameraOverride: cameraOverride,
               presentationTime: CMTime(seconds: renderSeconds, preferredTimescale: 600)
             )
+            renderMetrics.recordPrepare(prepareStarted.duration(to: .now))
             if let pendingFrame {
+              let compositeStarted = ContinuousClock.now
               pendingFrame.complete()
-              try writer.append(buffer: pendingFrame.buffer, at: pendingFrame.presentationTime)
+              renderMetrics.recordComposite(compositeStarted.duration(to: .now))
+              let appendStarted = ContinuousClock.now
+              let writerWait = try writer.append(buffer: pendingFrame.buffer, at: pendingFrame.presentationTime)
+              renderMetrics.recordAppend(appendStarted.duration(to: .now), writerWait: writerWait)
               renderedFrames += 1
+              if renderMetrics.shouldLog(frame: renderedFrames, fps: fps) {
+                appendLog(renderMetrics.summaryLine(frame: renderedFrames, totalFrames: frameCount, renderSeconds: renderSeconds))
+              }
             }
             pendingFrame = nextFrame
           }
@@ -669,10 +680,15 @@ final class NativeExportController: ObservableObject {
       }
 
       if let pendingFrame {
+        let compositeStarted = ContinuousClock.now
         pendingFrame.complete()
-        try writer.append(buffer: pendingFrame.buffer, at: pendingFrame.presentationTime)
+        renderMetrics.recordComposite(compositeStarted.duration(to: .now))
+        let appendStarted = ContinuousClock.now
+        let writerWait = try writer.append(buffer: pendingFrame.buffer, at: pendingFrame.presentationTime)
+        renderMetrics.recordAppend(appendStarted.duration(to: .now), writerWait: writerWait)
         renderedFrames += 1
       }
+      appendLog(renderMetrics.summaryLine(frame: renderedFrames, totalFrames: frameCount, renderSeconds: renderDuration))
 
       runOnMain {
         self.updateSession {
@@ -1126,6 +1142,51 @@ private struct NativeFilterGraphSummary {
 
   var description: String {
     steps.joined(separator: " -> ")
+  }
+}
+
+private struct ExportRenderMetrics {
+  private var prepareSeconds: Double = 0
+  private var compositeSeconds: Double = 0
+  private var appendSeconds: Double = 0
+  private var writerWaitSeconds: Double = 0
+  private var preparedFrames: Int = 0
+  private var compositedFrames: Int = 0
+  private var appendedFrames: Int = 0
+
+  mutating func recordPrepare(_ duration: Duration) {
+    prepareSeconds += Self.seconds(duration)
+    preparedFrames += 1
+  }
+
+  mutating func recordComposite(_ duration: Duration) {
+    compositeSeconds += Self.seconds(duration)
+    compositedFrames += 1
+  }
+
+  mutating func recordAppend(_ duration: Duration, writerWait: TimeInterval) {
+    appendSeconds += Self.seconds(duration)
+    writerWaitSeconds += writerWait
+    appendedFrames += 1
+  }
+
+  func shouldLog(frame: Int, fps: Double) -> Bool {
+    let cadence = max(24, Int((fps * 5).rounded()))
+    return frame > 0 && frame.isMultiple(of: cadence)
+  }
+
+  func summaryLine(frame: Int, totalFrames: Int, renderSeconds: Double) -> String {
+    "perf render frame=\(frame)/\(totalFrames) seconds=\(String(format: "%.2f", renderSeconds)) prepare_avg_ms=\(Self.ms(prepareSeconds, preparedFrames)) composite_avg_ms=\(Self.ms(compositeSeconds, compositedFrames)) append_avg_ms=\(Self.ms(appendSeconds, appendedFrames)) writer_wait_avg_ms=\(Self.ms(writerWaitSeconds, appendedFrames))\n"
+  }
+
+  private static func ms(_ seconds: Double, _ count: Int) -> String {
+    guard count > 0 else { return "0.00" }
+    return String(format: "%.2f", seconds * 1000.0 / Double(count))
+  }
+
+  static func seconds(_ duration: Duration) -> Double {
+    let components = duration.components
+    return Double(components.seconds) + Double(components.attoseconds) / 1_000_000_000_000_000_000.0
   }
 }
 
@@ -1611,6 +1672,18 @@ nonisolated private final class SequentialMetalDecoder: @unchecked Sendable {
 /// VideoToolbox), composite (GPU), and encode (hardware HEVC) are all off the
 /// CPU; only the small HUD text overlay stays on CoreGraphics.
 nonisolated private final class MetalExportCompositor: @unchecked Sendable {
+  static var decodeModeDescription: String {
+    shouldDecodeSerially ? "serial" : "concurrent"
+  }
+
+  private static var shouldDecodeSerially: Bool {
+    #if targetEnvironment(simulator)
+    return true
+    #else
+    return false
+    #endif
+  }
+
   let device: MTLDevice
   private let commandQueue: MTLCommandQueue
   private let pipeline: MTLRenderPipelineState
@@ -1698,35 +1771,36 @@ nonisolated private final class MetalExportCompositor: @unchecked Sendable {
 
     var draws: [(index: Int, frame: DecodedMetalFrame, viewport: MTLViewport)] = []
     draws.reserveCapacity(decoderRequests.count)
-    if decoderRequests.count == 1 {
-      let item = decoderRequests[0]
-      if let frame = item.decoder.frame(at: item.request.seconds) {
-        draws.append((
-          index: 0,
-          frame: frame,
-          viewport: aspectFitViewport(
-            cell: item.request.rect,
-            textureWidth: frame.texture.width,
-            textureHeight: frame.texture.height
-          )
-        ))
+
+    func makeDraw(index: Int, item: (decoder: SequentialMetalDecoder, request: FrameImageRequest)) -> (index: Int, frame: DecodedMetalFrame, viewport: MTLViewport)? {
+      guard let frame = item.decoder.frame(at: item.request.seconds) else { return nil }
+      return (
+        index: index,
+        frame: frame,
+        viewport: aspectFitViewport(
+          cell: item.request.rect,
+          textureWidth: frame.texture.width,
+          textureHeight: frame.texture.height
+        )
+      )
+    }
+
+    if decoderRequests.count == 1 || Self.shouldDecodeSerially {
+      for (index, item) in decoderRequests.enumerated() {
+        guard let draw = makeDraw(index: index, item: item) else { continue }
+        draws.append(draw)
       }
     } else if !decoderRequests.isEmpty {
       let drawLock = NSLock()
       DispatchQueue.concurrentPerform(iterations: decoderRequests.count) { index in
         let item = decoderRequests[index]
-        guard let frame = item.decoder.frame(at: item.request.seconds) else { return }
-        let draw = (
-          index: index,
-          frame: frame,
-          viewport: aspectFitViewport(
-            cell: item.request.rect,
-            textureWidth: frame.texture.width,
-            textureHeight: frame.texture.height
-          )
-        )
+        guard let draw = makeDraw(index: index, item: item) else { return }
         drawLock.lock()
-        draws.append(draw)
+        draws.append((
+          index: draw.index,
+          frame: draw.frame,
+          viewport: draw.viewport
+        ))
         drawLock.unlock()
       }
       draws.sort { $0.index < $1.index }
@@ -1832,6 +1906,13 @@ nonisolated private final class TimelineFrameComposer: @unchecked Sendable {
       &pool
     )
     pixelBufferPool = pool
+  }
+
+  var pipelineDescription: String {
+    if metalCompositor != nil {
+      return "composite=metal decode=\(MetalExportCompositor.decodeModeDescription)"
+    }
+    return "composite=coregraphics decode=cpu"
   }
 
   func makeFrameBuffer(at localSeconds: Double, set: ClipSet?, cameraOverride: Camera? = nil) throws -> CVPixelBuffer {
@@ -2122,7 +2203,12 @@ nonisolated private enum ExportOverlayDrawing {
     guard options.telemetryHUD else { return }
 
     let panelHeight: CGFloat = options.telemetryHUDMode == .minimal ? 118 : 208
-    let panel = CGRect(x: 26, y: 26, width: min(680, canvasSize.width * 0.42), height: panelHeight)
+    let panel = CGRect(
+      x: 26,
+      y: max(26, canvasSize.height - 26 - panelHeight),
+      width: min(680, canvasSize.width * 0.42),
+      height: panelHeight
+    )
     context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.58))
     context.fill(panel)
     context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.16))
@@ -2156,7 +2242,7 @@ nonisolated private enum ExportOverlayDrawing {
       ]
     }
     for (index, row) in rows.enumerated() {
-      let y = panel.minY + 16 + CGFloat(index * 29)
+      let y = panel.maxY - 40 - CGFloat(index * 29)
       drawSymbol(
         row.symbol,
         in: CGRect(x: panel.minX + 18, y: y + 2, width: 18, height: 18),
@@ -2271,7 +2357,7 @@ nonisolated private enum ExportOverlayDrawing {
   ) {
     #if canImport(AppKit)
     NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+    NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
     let paragraph = NSMutableParagraphStyle()
     paragraph.lineBreakMode = .byTruncatingTail
     let attributed = NSAttributedString(
@@ -2315,7 +2401,7 @@ nonisolated private enum ExportOverlayDrawing {
     guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return }
     image.isTemplate = true
     NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+    NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
     (NSColor(cgColor: color) ?? .white).set()
     image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.88)
     NSGraphicsContext.restoreGraphicsState()
@@ -2486,6 +2572,7 @@ nonisolated private enum PassthroughMovieMuxer {
 }
 
 private final class NativeMovieWriter {
+  private static let videoEncoderSpecificationSettingsKey = "AVVideoEncoderSpecification"
   private let writer: AVAssetWriter
   private let input: AVAssetWriterInput
   private let adaptor: AVAssetWriterInputPixelBufferAdaptor
@@ -2528,14 +2615,9 @@ private final class NativeMovieWriter {
     if !compression.isEmpty {
       settings[AVVideoCompressionPropertiesKey] = compression
     }
-    #if os(macOS)
     if requiresHardwareEncoder {
-      settings[AVVideoEncoderSpecificationKey] = [
-        kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: true,
-        kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String: true
-      ]
+      settings[Self.videoEncoderSpecificationSettingsKey] = Self.hardwareEncoderSpecification()
     }
-    #endif
 
     input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
     input.expectsMediaDataInRealTime = false
@@ -2557,6 +2639,16 @@ private final class NativeMovieWriter {
     writer.add(input)
   }
 
+  private static func hardwareEncoderSpecification() -> [String: Any] {
+    var specification: [String: Any] = [
+      kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: true
+    ]
+    #if !targetEnvironment(simulator)
+    specification[kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String] = true
+    #endif
+    return specification
+  }
+
   func start() throws {
     guard writer.startWriting() else {
       throw NSError(domain: "TeslaCam", code: 6, userInfo: [NSLocalizedDescriptionKey: writer.error?.localizedDescription ?? "Failed to start writer."])
@@ -2564,16 +2656,22 @@ private final class NativeMovieWriter {
     writer.startSession(atSourceTime: .zero)
   }
 
-  func append(buffer: CVPixelBuffer, at time: CMTime) throws {
+  @discardableResult
+  func append(buffer: CVPixelBuffer, at time: CMTime) throws -> TimeInterval {
+    let waitStarted = ContinuousClock.now
+    var waited = false
     while !input.isReadyForMoreMediaData {
       if writer.status == .failed || writer.status == .cancelled {
         throw NSError(domain: "TeslaCam", code: 7, userInfo: [NSLocalizedDescriptionKey: writer.error?.localizedDescription ?? "Writer stopped before accepting the next frame."])
       }
+      waited = true
       Thread.sleep(forTimeInterval: 0.001)
     }
+    let waitSeconds = waited ? ExportRenderMetrics.seconds(waitStarted.duration(to: .now)) : 0
     guard adaptor.append(buffer, withPresentationTime: time) else {
       throw NSError(domain: "TeslaCam", code: 7, userInfo: [NSLocalizedDescriptionKey: writer.error?.localizedDescription ?? "Failed to append frame."])
     }
+    return waitSeconds
   }
 
   func finishWriting() throws {
