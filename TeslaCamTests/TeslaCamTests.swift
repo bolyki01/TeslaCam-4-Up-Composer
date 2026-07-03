@@ -21,20 +21,28 @@ struct TeslaCamTests {
   @Test func exportPresetMappingsRemainStable() async throws {
     #expect(ExportPreset.originalTracksMOV.scriptPreset == "PASSTHROUGH_MOV")
     #expect(ExportPreset.maxQualityHEVC.scriptPreset == "HEVC_CPU_MAX")
+    #expect(ExportPreset.maxQualityH264.scriptPreset == "H264_CPU_MAX")
     #expect(ExportPreset.fastHEVC.scriptPreset == "HEVC_MAX")
     #expect(ExportPreset.editFriendlyProRes.scriptPreset == "PRORES_HQ")
     #expect(ExportPreset.originalTracksMOV.defaultExtension == "mov")
     #expect(ExportPreset.maxQualityHEVC.defaultExtension == "mp4")
+    #expect(ExportPreset.maxQualityH264.defaultExtension == "mp4")
+    #expect(ExportPreset.maxQualityH264.outputLabel == "evidence_h264")
     #expect(ExportPreset.editFriendlyProRes.defaultExtension == "mov")
   }
 
-  @Test func appDefaultsToEvidenceExportWithTelemetryHUD() async throws {
+  @Test func appDefaultsToLosslessMuxExport() async throws {
+    // Mux-first default: with no rendered overlays requested, the export takes
+    // the lossless passthrough path (no re-encode) — the fastest, unaltered
+    // copy. Telemetry is review-only in the dock, not engraved by default.
     let state = AppState()
-    #expect(state.exportPreset == .maxQualityHEVC)
-    #expect(state.exportOverlayOptions.telemetryHUD)
+    #expect(!state.exportOverlayOptions.telemetryHUD)
     #expect(!state.exportOverlayOptions.routeMap)
     #expect(!state.exportOverlayOptions.privacyMask)
     #expect(!state.exportOverlayOptions.needsSidecars)
+    #expect(state.effectiveExportPreset == .originalTracksMOV)
+    #expect(!state.exportWillReencode)
+    #expect(state.exportModeCaption == "Muxed · originals preserved · no re-encode")
   }
 
   @Test func fastestMuxingExportPreflightAcceptsDefaultOptions() async throws {
@@ -49,7 +57,6 @@ struct TeslaCamTests {
 
   @Test func advancedExportOptionsResolveToRenderedPreset() async throws {
     let state = AppState()
-    state.exportPreset = .originalTracksMOV
     state.exportOverlayOptions.telemetryHUD = false
 
     #expect(state.effectiveExportPreset == .originalTracksMOV)
@@ -83,7 +90,6 @@ struct TeslaCamTests {
     defer { try? root.remove() }
 
     let state = AppState()
-    state.exportPreset = .originalTracksMOV
     state.exportOverlayOptions.routeMap = true
 
     let resolved = state.resolvedExportURL(forTesting: root.url.appendingPathComponent("manual-export.mov"))
@@ -91,12 +97,50 @@ struct TeslaCamTests {
     #expect(resolved.lastPathComponent == "manual-export.mp4")
   }
 
-  @Test func exportPresetsExposeOnlySimpleChoices() async throws {
-    let names = ExportPreset.visibleCases.map(\.displayName)
+  @Test func videoCodecMapsFromMediaSubType() async throws {
+    #expect(VideoCodec(mediaSubType: kCMVideoCodecType_HEVC) == .hevc)
+    #expect(VideoCodec(mediaSubType: kCMVideoCodecType_H264) == .h264)
+    #expect(VideoCodec(mediaSubType: kCMVideoCodecType_AppleProRes422) == .other)
+    #expect(VideoCodec.hevc.displayName == "H.265")
+    #expect(VideoCodec.h264.displayName == "H.264")
+  }
 
-    #expect(names == ["Original", "Evidence HEVC"])
-    #expect(ExportPreset.socialShareHEVC.defaultExtension == "mp4")
-    #expect(ExportPreset.proxyHEVC.defaultExtension == "mp4")
+  @Test func exportAdoptsSourceCodecWhenReencoding() async throws {
+    // H.264 footage re-encodes to H.264 (never needlessly transcoded to HEVC);
+    // HEVC footage re-encodes to HEVC. Re-encode is triggered by an overlay.
+    let h264State = AppState()
+    h264State.clipSets = [
+      ClipSet(
+        timestamp: "h264",
+        date: Date(timeIntervalSince1970: 1_700_000_000),
+        duration: 60,
+        files: [:],
+        cameraCodecs: [.front: .h264]
+      )
+    ]
+    #expect(h264State.dominantSourceCodec == .h264)
+    #expect(h264State.exportCodecLabel == "H.264")
+    // No overlays → still lossless mux (adopts codec inherently).
+    #expect(h264State.effectiveExportPreset == .originalTracksMOV)
+    // Overlay forces composite → adopts H.264.
+    h264State.exportOverlayOptions.telemetryHUD = true
+    #expect(h264State.effectiveExportPreset == .maxQualityH264)
+    #expect(h264State.exportWillReencode)
+    #expect(h264State.exportModeCaption == "Re-encoded · H.264 · hardware accelerated")
+
+    let hevcState = AppState()
+    hevcState.clipSets = [
+      ClipSet(
+        timestamp: "hevc",
+        date: Date(timeIntervalSince1970: 1_700_000_000),
+        duration: 60,
+        files: [:],
+        cameraCodecs: [.front: .hevc]
+      )
+    ]
+    hevcState.exportOverlayOptions.privacyMask = true
+    #expect(hevcState.dominantSourceCodec == .hevc)
+    #expect(hevcState.effectiveExportPreset == .maxQualityHEVC)
   }
 
   @Test func cameraTrackResolvesLatestCutAtTimelineSecond() async throws {
@@ -1778,7 +1822,7 @@ struct TeslaCamTests {
     ]
     state.selectedExportCameras = [.front]
     state.layoutProfile = .hw3FourCam
-    state.exportPreset = .maxQualityHEVC
+    state.exportOverlayOptions.telemetryHUD = true // force composite → mp4
     state.rebuildTimelineForTesting()
 
     let initial = state.resolvedExportURL(forTesting: root.url)
@@ -1797,7 +1841,7 @@ struct TeslaCamTests {
     try Data().write(to: chosen)
 
     let state = AppState()
-    state.exportPreset = .maxQualityHEVC
+    state.exportOverlayOptions.telemetryHUD = true // force composite → mp4
 
     let resolved = state.resolvedExportURL(forTesting: chosen)
 

@@ -938,11 +938,38 @@ private struct TimelineExportCard: View {
   private func macControlStack(minDate _: Date, maxDate _: Date) -> some View {
     VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
       ViewThatFits(in: .horizontal) {
-        controlTopRow(timeWidth: 118, presetWidth: 210, exportWidth: 176)
-        controlTopRow(timeWidth: 104, presetWidth: 166, exportWidth: 132)
-        controlTopRow(timeWidth: 88, presetWidth: 120, exportWidth: 112)
+        controlTopRow(timeWidth: 118, exportWidth: 176)
+        controlTopRow(timeWidth: 104, exportWidth: 132)
+        controlTopRow(timeWidth: 88, exportWidth: 112)
       }
       .frame(height: TeslaCamTheme.Metrics.compactControlHeight)
+
+      HStack(spacing: TeslaCamTheme.Spacing.s) {
+        // Opt-in engraving. Default off keeps the fast, lossless muxed copy;
+        // turning it on burns the telemetry HUD into the file, which forces a
+        // composite re-encode (the caption to the right reflects the switch).
+        Toggle(isOn: $state.exportOverlayOptions.telemetryHUD) {
+          Text("Engrave telemetry")
+            .font(TeslaCamTheme.Typography.label)
+            .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+        }
+        .toggleStyle(.switch)
+        .tint(TeslaCamTheme.Colors.accent)
+        .fixedSize()
+        .accessibilityIdentifier("engrave-telemetry-toggle")
+        .accessibilityHint("Burns the telemetry HUD into the exported video. Off keeps a lossless, faster muxed copy.")
+
+        Spacer(minLength: 0)
+
+        RoundedRectangle(cornerRadius: 2, style: .continuous)
+          .fill(TeslaCamTheme.Colors.accent)
+          .frame(width: 6, height: 6)
+        Text(state.exportModeCaption)
+          .font(TeslaCamTheme.Typography.monoSmall)
+          .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.7)
+      }
 
       HStack(alignment: .top, spacing: TeslaCamTheme.Spacing.s) {
         MacCameraToggleGrid(state: state)
@@ -961,7 +988,7 @@ private struct TimelineExportCard: View {
     }
   }
 
-  private func controlTopRow(timeWidth: CGFloat, presetWidth: CGFloat, exportWidth: CGFloat) -> some View {
+  private func controlTopRow(timeWidth: CGFloat, exportWidth: CGFloat) -> some View {
     HStack(spacing: TeslaCamTheme.Spacing.s) {
       macTimeField(formatHMS(playbackUI.currentSeconds), alignment: .leading, width: timeWidth)
 
@@ -973,8 +1000,7 @@ private struct TimelineExportCard: View {
 
       Spacer(minLength: 0)
 
-      macPresetField
-        .frame(width: presetWidth)
+      codecField
 
       Button {
         state.exportRange()
@@ -1004,35 +1030,18 @@ private struct TimelineExportCard: View {
     .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
   }
 
-  private var macPresetField: some View {
+  // Read-only codec indicator. The export codec is fully automatic — adopted
+  // from the source footage (H.264 vs H.265) — so this is informational, not a
+  // menu. A fixed-width segment, so it can never overflow into the timeline the
+  // way the old PRESET dropdown did.
+  private var codecField: some View {
     HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
-      Image(systemName: "slider.horizontal.3")
+      Text("Codec".uppercased())
         .font(TeslaCamTheme.Typography.label)
         .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
 
-      Text("Preset".uppercased())
-        .font(TeslaCamTheme.Typography.label)
-        .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-
-      Picker("", selection: exportPresetBinding) {
-        ForEach(ExportPreset.visibleCases) { preset in
-          Text(preset.displayName).tag(preset)
-        }
-      }
-      .labelsHidden()
-      .pickerStyle(.menu)
-      .frame(maxWidth: .infinity, alignment: .leading)
+      CodecSegmentIndicator(activeCodec: state.dominantSourceCodec)
     }
-    .padding(.horizontal, TeslaCamTheme.Spacing.s)
-    .frame(height: TeslaCamTheme.Metrics.compactControlHeight)
-    .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
-  }
-
-  private var exportPresetBinding: Binding<ExportPreset> {
-    Binding(
-      get: { state.exportPreset },
-      set: { state.setExportPreset($0) }
-    )
   }
 
   private var playbackSecondsBinding: Binding<Double> {
@@ -1208,6 +1217,49 @@ private struct ClipInfoTile: View {
         .minimumScaleFactor(0.62)
     }
     .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
+  }
+}
+
+/// Read-only two-segment codec indicator (H.265 / H.264). The active segment
+/// reflects the codec the export adopts from the source footage; it is not a
+/// control. Fixed width by construction so it cannot bleed into the timeline.
+private struct CodecSegmentIndicator: View {
+  let activeCodec: VideoCodec
+
+  private let options: [VideoCodec] = [.hevc, .h264]
+
+  private var resolvedActive: VideoCodec {
+    activeCodec == .h264 ? .h264 : .hevc
+  }
+
+  var body: some View {
+    HStack(spacing: 2) {
+      ForEach(options, id: \.self) { codec in
+        segment(for: codec, isActive: codec == resolvedActive)
+      }
+    }
+    .padding(3)
+    .frame(height: TeslaCamTheme.Metrics.compactControlHeight)
+    .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Export codec")
+    .accessibilityValue("\(resolvedActive.displayName), adopted from source")
+    .accessibilityIdentifier("export-codec-indicator")
+  }
+
+  @ViewBuilder
+  private func segment(for codec: VideoCodec, isActive: Bool) -> some View {
+    let label = Text(codec.displayName)
+      .font(TeslaCamTheme.Typography.monoSmall.weight(.semibold))
+      .foregroundStyle(isActive ? TeslaCamTheme.Colors.textPrimary : TeslaCamTheme.Colors.textTertiary)
+      .padding(.horizontal, 11)
+      .frame(height: 26)
+
+    if isActive {
+      label.glassSurface(role: .selected, radius: TeslaCamTheme.Metrics.compactCorner)
+    } else {
+      label
+    }
   }
 }
 

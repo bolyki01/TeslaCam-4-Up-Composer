@@ -254,7 +254,18 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         start = source.index("private func macControlStack")
         end = source.index("private func controlTopRow", start)
         control_source = source[start:end]
-        self.assertIn("controlTopRow(timeWidth: 88, presetWidth: 120, exportWidth: 112)", control_source)
+        self.assertIn("controlTopRow(timeWidth: 88, exportWidth: 112)", control_source)
+
+    def test_engrave_telemetry_is_opt_in_and_defaults_off(self):
+        # Justification: mux-first is the default (fast, lossless). Burning the
+        # telemetry HUD into the export is an explicit opt-in switch, defaulting
+        # off; it must bind the raw overlay flag so toggling forces composite.
+        view_source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        self.assertIn('isOn: $state.exportOverlayOptions.telemetryHUD', view_source)
+        self.assertIn('"engrave-telemetry-toggle"', view_source)
+        state_source = (SWIFT_SHIPPING_ROOT / "AppState.swift").read_text(encoding="utf-8")
+        self.assertIn("telemetryHUD: false", state_source)
+        self.assertNotIn("telemetryHUD: true,", state_source)
 
     def test_timeline_track_hides_telemetry_event_markers(self):
         # Justification: telemetry markers appeared only after scrubbing and

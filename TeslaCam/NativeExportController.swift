@@ -262,6 +262,8 @@ struct ExportPreflight {
       bytesPerSecond = 32 * 1024 * 1024
     case .maxQualityHEVC:
       bytesPerSecond = 8 * 1024 * 1024
+    case .maxQualityH264:
+      bytesPerSecond = 11 * 1024 * 1024
     case .fastHEVC:
       bytesPerSecond = 4 * 1024 * 1024
     case .socialShareHEVC:
@@ -2595,6 +2597,10 @@ private final class NativeMovieWriter {
       requiresHardwareEncoder = false
     case .maxQualityHEVC, .fastHEVC, .socialShareHEVC, .proxyHEVC:
       codec = .hevc
+      compression = preset.nativeCompressionProperties(for: size, frameRate: frameRate)
+      requiresHardwareEncoder = true
+    case .maxQualityH264:
+      codec = .h264
       compression = preset.nativeCompressionProperties(for: size, frameRate: frameRate)
       requiresHardwareEncoder = true
     }

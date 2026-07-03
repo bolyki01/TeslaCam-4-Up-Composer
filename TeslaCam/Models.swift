@@ -348,9 +348,40 @@ nonisolated private extension Sequence where Element == Camera {
   }
 }
 
+/// Source video codec detected from a clip's video track. Tesla hardware
+/// generations differ: older cars (HW2/2.5/3) record H.264, HW4 records HEVC
+/// (H.265). The export pipeline adopts this codec so H.264 footage is never
+/// needlessly transcoded to HEVC.
+nonisolated enum VideoCodec: String, Hashable, Codable {
+  case hevc
+  case h264
+  case other
+
+  /// Maps a CoreMedia media sub-type (`CMFormatDescriptionGetMediaSubType`).
+  init(mediaSubType: CMVideoCodecType) {
+    switch mediaSubType {
+    case kCMVideoCodecType_HEVC:
+      self = .hevc
+    case kCMVideoCodecType_H264:
+      self = .h264
+    default:
+      self = .other
+    }
+  }
+
+  var displayName: String {
+    switch self {
+    case .hevc: return "H.265"
+    case .h264: return "H.264"
+    case .other: return "Source"
+    }
+  }
+}
+
 enum ExportPreset: String, CaseIterable, Identifiable {
   case originalTracksMOV
   case maxQualityHEVC
+  case maxQualityH264
   case fastHEVC
   case socialShareHEVC
   case proxyHEVC
@@ -361,17 +392,14 @@ enum ExportPreset: String, CaseIterable, Identifiable {
 
   var id: String { rawValue }
 
-  static let visibleCases: [ExportPreset] = [
-    .originalTracksMOV,
-    .maxQualityHEVC
-  ]
-
   var displayName: String {
     switch self {
     case .originalTracksMOV:
       return "Original"
     case .maxQualityHEVC:
       return "Evidence HEVC"
+    case .maxQualityH264:
+      return "Evidence H.264"
     case .fastHEVC:
       return "Fast Review HEVC"
     case .socialShareHEVC:
@@ -389,6 +417,8 @@ enum ExportPreset: String, CaseIterable, Identifiable {
       return "PASSTHROUGH_MOV"
     case .maxQualityHEVC:
       return "HEVC_CPU_MAX"
+    case .maxQualityH264:
+      return "H264_CPU_MAX"
     case .fastHEVC:
       return "HEVC_MAX"
     case .socialShareHEVC:
@@ -404,7 +434,7 @@ enum ExportPreset: String, CaseIterable, Identifiable {
     switch self {
     case .originalTracksMOV, .editFriendlyProRes:
       return "mov"
-    case .maxQualityHEVC, .fastHEVC, .socialShareHEVC, .proxyHEVC:
+    case .maxQualityHEVC, .maxQualityH264, .fastHEVC, .socialShareHEVC, .proxyHEVC:
       return "mp4"
     }
   }
@@ -415,6 +445,8 @@ enum ExportPreset: String, CaseIterable, Identifiable {
       return "original_tracks"
     case .maxQualityHEVC:
       return "evidence_hevc"
+    case .maxQualityH264:
+      return "evidence_h264"
     case .fastHEVC:
       return "fast_review_hevc"
     case .socialShareHEVC:
@@ -439,6 +471,21 @@ enum ExportPreset: String, CaseIterable, Identifiable {
           scalingExponent: 0.8,
           maximumBitRate: 240_000_000
         ),
+        AVVideoExpectedSourceFrameRateKey: sourceFrameRate,
+        AVVideoMaxKeyFrameIntervalKey: sourceFrameRate
+      ]
+    case .maxQualityH264:
+      // H.264 is ~1.4× the bits of HEVC for equivalent quality, so the
+      // reference/ceiling are scaled up accordingly. Same max-quality intent
+      // as the HEVC evidence preset, just on the faster/wider-compatible codec.
+      return [
+        AVVideoAverageBitRateKey: scaledHEVCBitRate(
+          for: canvasSize,
+          referenceBitRate: 63_000_000,
+          scalingExponent: 0.8,
+          maximumBitRate: 320_000_000
+        ),
+        AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
         AVVideoExpectedSourceFrameRateKey: sourceFrameRate,
         AVVideoMaxKeyFrameIntervalKey: sourceFrameRate
       ]
@@ -1567,6 +1614,7 @@ nonisolated struct ClipSet: Identifiable, Hashable {
   var cameraDurations: [Camera: Double]
   var naturalSizes: [Camera: CGSize]
   var cameraFrameRates: [Camera: Double]
+  var cameraCodecs: [Camera: VideoCodec]
   /// Cameras in this set whose clip failed to probe (corrupt/truncated media).
   /// Empty for a healthy set. The clip still occupies its grid cell (rendered
   /// black) so the timeline is unbroken, but the UI can flag it.
@@ -1581,6 +1629,7 @@ nonisolated struct ClipSet: Identifiable, Hashable {
     cameraDurations: [Camera: Double] = [:],
     naturalSizes: [Camera: CGSize] = [:],
     cameraFrameRates: [Camera: Double] = [:],
+    cameraCodecs: [Camera: VideoCodec] = [:],
     unreadableCameras: Set<Camera> = []
   ) {
     self.id = id ?? timestamp
@@ -1591,6 +1640,7 @@ nonisolated struct ClipSet: Identifiable, Hashable {
     self.cameraDurations = cameraDurations
     self.naturalSizes = naturalSizes
     self.cameraFrameRates = cameraFrameRates
+    self.cameraCodecs = cameraCodecs
     self.unreadableCameras = unreadableCameras
   }
 
@@ -1602,6 +1652,7 @@ nonisolated struct ClipSet: Identifiable, Hashable {
     cameraDurations: [Camera: Double] = [:],
     naturalSizes: [Camera: CGSize] = [:],
     cameraFrameRates: [Camera: Double] = [:],
+    cameraCodecs: [Camera: VideoCodec] = [:],
     unreadableCameras: Set<Camera> = []
   ) {
     self.init(
@@ -1613,6 +1664,7 @@ nonisolated struct ClipSet: Identifiable, Hashable {
       cameraDurations: cameraDurations,
       naturalSizes: naturalSizes,
       cameraFrameRates: cameraFrameRates,
+      cameraCodecs: cameraCodecs,
       unreadableCameras: unreadableCameras
     )
   }
@@ -1634,6 +1686,20 @@ nonisolated struct ClipSet: Identifiable, Hashable {
 
   func frameRate(for camera: Camera) -> Double? {
     cameraFrameRates[camera]
+  }
+
+  func codec(for camera: Camera) -> VideoCodec? {
+    cameraCodecs[camera]
+  }
+
+  /// The codec the export pipeline should adopt for this set: the first
+  /// readable camera's codec, preferring concrete H.264/HEVC over `.other`.
+  var dominantCodec: VideoCodec? {
+    let codecs = cameraCodecs.values
+    if let concrete = codecs.first(where: { $0 == .hevc || $0 == .h264 }) {
+      return concrete
+    }
+    return codecs.first
   }
 
   var endDate: Date {

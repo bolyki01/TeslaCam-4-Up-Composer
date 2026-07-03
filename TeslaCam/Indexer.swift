@@ -257,6 +257,12 @@ final class ClipIndexer {
           } else {
             frameRates.removeValue(forKey: camera)
           }
+          var codecs = keepAllSets[primaryIndex].cameraCodecs
+          if let codec = metadata.codec {
+            codecs[camera] = codec
+          } else {
+            codecs.removeValue(forKey: camera)
+          }
           var unreadable = keepAllSets[primaryIndex].unreadableCameras
           if metadata.isReadable { unreadable.remove(camera) } else { unreadable.insert(camera) }
           keepAllSets[primaryIndex] = ClipSet(
@@ -268,6 +274,7 @@ final class ClipIndexer {
             cameraDurations: durations,
             naturalSizes: naturalSizes,
             cameraFrameRates: frameRates,
+            cameraCodecs: codecs,
             unreadableCameras: unreadable
           )
         } else {
@@ -287,6 +294,7 @@ final class ClipIndexer {
               cameraDurations: [camera: metadata.duration],
               naturalSizes: [camera: metadata.naturalSize],
               cameraFrameRates: metadata.frameRate.map { [camera: $0] } ?? [:],
+              cameraCodecs: metadata.codec.map { [camera: $0] } ?? [:],
               unreadableCameras: metadata.isReadable ? [] : [camera]
             )
           )
@@ -303,6 +311,7 @@ final class ClipIndexer {
             cameraDurations: [camera: metadata.duration],
             naturalSizes: [camera: metadata.naturalSize],
             cameraFrameRates: metadata.frameRate.map { [camera: $0] } ?? [:],
+            cameraCodecs: metadata.codec.map { [camera: $0] } ?? [:],
             unreadableCameras: metadata.isReadable ? [] : [camera]
           )
         )
@@ -410,6 +419,7 @@ final class ClipIndexer {
       duration: durationSeconds,
       naturalSize: loaded.naturalSize ?? CGSize(width: 1280, height: 960),
       frameRate: loaded.frameRate,
+      codec: loaded.codec,
       isReadable: isReadable
     )
   }
@@ -474,11 +484,12 @@ final class ClipIndexer {
     return seconds
   }
 
-  private static nonisolated func loadAssetMetadata(for asset: AVURLAsset) -> (duration: CMTime, naturalSize: CGSize?, frameRate: Double?) {
+  private static nonisolated func loadAssetMetadata(for asset: AVURLAsset) -> (duration: CMTime, naturalSize: CGSize?, frameRate: Double?, codec: VideoCodec?) {
     let semaphore = DispatchSemaphore(value: 0)
     var loadedDuration = CMTime.invalid
     var loadedNaturalSize: CGSize?
     var loadedFrameRate: Double?
+    var loadedCodec: VideoCodec?
 
     Task.detached(priority: .userInitiated) {
       defer { semaphore.signal() }
@@ -490,23 +501,29 @@ final class ClipIndexer {
           async let naturalSize = track.load(.naturalSize)
           async let preferredTransform = track.load(.preferredTransform)
           async let nominalFrameRate = track.load(.nominalFrameRate)
+          async let formatDescriptions = track.load(.formatDescriptions)
           let transformed = try await naturalSize.applying(preferredTransform)
           loadedNaturalSize = CGSize(width: abs(transformed.width), height: abs(transformed.height))
           let frameRate = try await nominalFrameRate
           loadedFrameRate = frameRate > 0 ? Double(frameRate) : nil
+          if let formatDescription = try await formatDescriptions.first {
+            loadedCodec = VideoCodec(mediaSubType: CMFormatDescriptionGetMediaSubType(formatDescription))
+          }
         } else {
           loadedNaturalSize = nil
           loadedFrameRate = nil
+          loadedCodec = nil
         }
       } catch {
         loadedDuration = .invalid
         loadedNaturalSize = nil
         loadedFrameRate = nil
+        loadedCodec = nil
       }
     }
 
     semaphore.wait()
-    return (loadedDuration, loadedNaturalSize, loadedFrameRate)
+    return (loadedDuration, loadedNaturalSize, loadedFrameRate, loadedCodec)
   }
 
   private static nonisolated func detectLayoutProfile(camerasFound: Set<Camera>) -> CameraLayoutProfile {
@@ -529,6 +546,9 @@ nonisolated private struct ClipAssetProbe {
   let duration: Double
   let naturalSize: CGSize
   let frameRate: Double?
+  /// Source video codec (H.264 vs HEVC), or nil when undetectable. The export
+  /// pipeline adopts this so footage is never needlessly transcoded.
+  var codec: VideoCodec?
   /// `false` when the asset failed to load a valid duration / video track —
   /// i.e. a corrupt or truncated clip. Such clips still get a fallback
   /// duration so the timeline stays intact, but they are flagged rather than
@@ -543,6 +563,7 @@ nonisolated private struct IndexedClipSetBuilder {
   var durations: [Camera: Double] = [:]
   var naturalSizes: [Camera: CGSize] = [:]
   var frameRates: [Camera: Double] = [:]
+  var codecs: [Camera: VideoCodec] = [:]
   var unreadableCameras: Set<Camera> = []
 
   mutating func insert(camera: Camera, url: URL, metadata: ClipAssetProbe) {
@@ -553,6 +574,11 @@ nonisolated private struct IndexedClipSetBuilder {
       frameRates[camera] = frameRate
     } else {
       frameRates.removeValue(forKey: camera)
+    }
+    if let codec = metadata.codec {
+      codecs[camera] = codec
+    } else {
+      codecs.removeValue(forKey: camera)
     }
     if metadata.isReadable {
       unreadableCameras.remove(camera)
@@ -574,6 +600,7 @@ nonisolated private struct IndexedClipSetBuilder {
       cameraDurations: durations,
       naturalSizes: naturalSizes,
       cameraFrameRates: frameRates,
+      cameraCodecs: codecs,
       unreadableCameras: unreadableCameras
     )
   }
