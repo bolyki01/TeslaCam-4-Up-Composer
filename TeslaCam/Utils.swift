@@ -46,6 +46,28 @@ func formatHMS(_ seconds: Double) -> String {
   return String(format: "%02d:%02d:%02d", h, m, s)
 }
 
+func parseHMS(_ text: String) -> Double? {
+  let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !trimmed.isEmpty else { return nil }
+
+  let rawParts = trimmed.split(separator: ":", omittingEmptySubsequences: false)
+  guard (1...3).contains(rawParts.count) else { return nil }
+
+  let parts = rawParts.compactMap { Int($0) }
+  guard parts.count == rawParts.count, parts.allSatisfy({ $0 >= 0 }) else { return nil }
+
+  switch parts.count {
+  case 1:
+    return Double(parts[0])
+  case 2:
+    return Double(parts[0] * 60 + parts[1])
+  case 3:
+    return Double(parts[0] * 3600 + parts[1] * 60 + parts[2])
+  default:
+    return nil
+  }
+}
+
 func floorToMinute(_ date: Date) -> Date {
   let calendar = Calendar.current
   let comps = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)

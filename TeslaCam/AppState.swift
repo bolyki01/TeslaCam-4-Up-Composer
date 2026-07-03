@@ -327,6 +327,7 @@ final class AppState: ObservableObject {
   @Published var camerasDetected: [Camera] = []
   @Published var duplicatePolicy: DuplicateClipPolicy = .mergeByTime
   @Published var selectedExportCameras: Set<Camera> = Set(Camera.allCases)
+  @Published var exportPreset: ExportPreset = .maxQualityHEVC
   @Published var healthSummary: ExportHealthSummary?
   @Published var layoutProfile: CameraLayoutProfile = .mixedUnknown
   @Published var duplicateSummary = DuplicateResolutionSummary(
@@ -370,11 +371,8 @@ final class AppState: ObservableObject {
       )
     }
   }
-  // Mux-first default: the common export takes the lossless passthrough path
-  // (no re-encode), which is both the fastest and an unaltered "evidence" copy.
-  // Telemetry is always visible in the in-app clip-info dock for review;
-  // burning it into the file (which forces a composite re-encode) is opt-in via
-  // privacy mode, camera cuts, or a loaded layout preset.
+  // Keep telemetry engraving opt-in, but the default export itself stays the
+  // regular encoded grid video users expect from the app.
   @Published var exportOverlayOptions = ExportOverlayOptions(
     telemetryHUD: false,
     routeMap: false,
@@ -914,6 +912,26 @@ final class AppState: ObservableObject {
     )
   }
 
+  @discardableResult
+  func applyTrimStartInput(_ text: String) -> Bool {
+    guard let seconds = parseHMS(text) else { return false }
+    setTrimRange(
+      startSeconds: seconds,
+      endSeconds: trimEndSeconds
+    )
+    return true
+  }
+
+  @discardableResult
+  func applyTrimEndInput(_ text: String) -> Bool {
+    guard let seconds = parseHMS(text) else { return false }
+    setTrimRange(
+      startSeconds: trimStartSeconds,
+      endSeconds: seconds
+    )
+    return true
+  }
+
   func beginSeek() {
     guard !isUserSeeking else { return }
     wasPlayingBeforeSeek = playback.isPlaying
@@ -1101,29 +1119,37 @@ final class AppState: ObservableObject {
   }
 
   /// Whether the export will composite + re-encode (vs. lossless passthrough
-  /// mux). Driven entirely by what rendered content is requested — never a
-  /// manual codec choice.
+  /// mux).
   var exportWillReencode: Bool {
     effectiveExportPreset != .originalTracksMOV
   }
 
-  /// Read-only codec label for the dock indicator ("H.265" / "H.264").
+  /// Human-readable codec label for the active export mode.
   var exportCodecLabel: String {
-    dominantSourceCodec.displayName
+    switch effectiveExportPreset {
+    case .maxQualityH264:
+      return "H.264"
+    case .maxQualityHEVC, .fastHEVC, .socialShareHEVC, .proxyHEVC:
+      return "H.265"
+    case .editFriendlyProRes:
+      return "ProRes"
+    case .originalTracksMOV:
+      return dominantSourceCodec.displayName
+    }
   }
 
-  /// Caption beneath the export cluster, reflecting the automatic mode.
+  /// Caption beneath the export cluster.
   var exportModeCaption: String {
     exportWillReencode
-      ? "Re-encoded · \(exportCodecLabel) · hardware accelerated"
-      : "Muxed · originals preserved · no re-encode"
+      ? "Grid export · \(exportCodecLabel)"
+      : "Muxed · originals preserved"
   }
 
   var effectiveExportPreset: ExportPreset {
-    automaticExportPreset(
+    resolvedExportPreset(
+      requested: exportPreset,
       overlayOptions: effectiveExportOverlayOptions,
-      cameraTrack: cameraTrack,
-      sourceCodec: dominantSourceCodec
+      cameraTrack: cameraTrack
     )
   }
 
@@ -1424,28 +1450,20 @@ final class AppState: ObservableObject {
     )
   }
 
-  /// Fully-automatic export preset selection. No manual codec choice: the app
-  /// muxes losslessly whenever no rendered content is required (the fastest,
-  /// non-destructive path), and otherwise composites and re-encodes, adopting
-  /// the source codec (H.264 footage → H.264, HEVC footage → HEVC) so it never
-  /// needlessly transcodes across codecs.
-  private func automaticExportPreset(
+  private func resolvedExportPreset(
+    requested preset: ExportPreset,
     overlayOptions: ExportOverlayOptions,
-    cameraTrack: CameraTrack,
-    sourceCodec: VideoCodec
+    cameraTrack: CameraTrack
   ) -> ExportPreset {
-    let needsComposite = overlayOptions.telemetryHUD
+    guard preset == .originalTracksMOV else { return preset }
+    if overlayOptions.telemetryHUD
       || overlayOptions.routeMap
       || overlayOptions.privacyMask
       || overlayOptions.needsSidecars
-      || !cameraTrack.isEmpty
-    guard needsComposite else { return .originalTracksMOV }
-    switch sourceCodec {
-    case .h264:
-      return .maxQualityH264
-    case .hevc, .other:
+      || !cameraTrack.isEmpty {
       return .maxQualityHEVC
     }
+    return preset
   }
 
   private func exportRange(to chosenURL: URL, previewOnly: Bool, queued: Bool) {
@@ -1503,11 +1521,7 @@ final class AppState: ObservableObject {
     let sets = selectedSetsForExport
     let startDate = trimStartDate
     let overlayOptions = effectiveExportOverlayOptions
-    let preset = automaticExportPreset(
-      overlayOptions: overlayOptions,
-      cameraTrack: cameraTrack,
-      sourceCodec: dominantSourceCodec
-    )
+    let preset = effectiveExportPreset
     let endDate: Date
     let endSeconds: Double
     let rangeText: String
@@ -1537,6 +1551,19 @@ final class AppState: ObservableObject {
       cameraTrack: cameraTrack,
       isPreviewSample: previewOnly
     )
+  }
+
+  func setExportPreset(_ preset: ExportPreset) {
+    exportPreset = preset
+    switch preset {
+    case .originalTracksMOV:
+      exportOverlayOptions.telemetryHUD = false
+      exportOverlayOptions.routeMap = false
+      exportOverlayOptions.includeReport = false
+      exportOverlayOptions.includeScreenshot = false
+    case .maxQualityHEVC, .maxQualityH264, .fastHEVC, .socialShareHEVC, .proxyHEVC, .editFriendlyProRes:
+      break
+    }
   }
 
   private func buildHealthSummary(from sets: [ClipSet]) -> ExportHealthSummary {

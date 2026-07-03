@@ -781,6 +781,10 @@ private struct TimelineExportCard: View {
   @ObservedObject var playbackUI: PlaybackUIState
   let timelineMarkers: [Date]
   let isSingleDayTimeline: Bool
+  @State private var trimStartInput = ""
+  @State private var trimEndInput = ""
+  @FocusState private var focusedTrimField: TrimField?
+  @State private var lastFocusedTrimField: TrimField?
 
   var body: some View {
     let minDate = state.minDate ?? Date()
@@ -793,6 +797,25 @@ private struct TimelineExportCard: View {
     }
     .padding(TeslaCamTheme.Metrics.cardPaddingCompact)
     .teslaCamCard()
+    .onAppear(perform: syncTrimInputs)
+    .onChange(of: state.trimStartSeconds) {
+      guard focusedTrimField != .start else { return }
+      trimStartInput = formatHMS(state.trimStartSeconds)
+    }
+    .onChange(of: state.trimEndSeconds) {
+      guard focusedTrimField != .end else { return }
+      trimEndInput = formatHMS(state.trimEndSeconds)
+    }
+    .onChange(of: focusedTrimField) {
+      let newValue = focusedTrimField
+      if lastFocusedTrimField == .start, newValue != .start {
+        commitTrimStartInput()
+      }
+      if lastFocusedTrimField == .end, newValue != .end {
+        commitTrimEndInput()
+      }
+      lastFocusedTrimField = newValue
+    }
   }
 
   private var timelineDock: some View {
@@ -945,9 +968,8 @@ private struct TimelineExportCard: View {
       .frame(height: TeslaCamTheme.Metrics.compactControlHeight)
 
       HStack(spacing: TeslaCamTheme.Spacing.s) {
-        // Opt-in engraving. Default off keeps the fast, lossless muxed copy;
-        // turning it on burns the telemetry HUD into the file, which forces a
-        // composite re-encode (the caption to the right reflects the switch).
+        // Telemetry burn-in remains optional. The base export stays a regular
+        // encoded grid unless the user explicitly asks for original tracks.
         Toggle(isOn: $state.exportOverlayOptions.telemetryHUD) {
           Text("Engrave telemetry")
             .font(TeslaCamTheme.Typography.label)
@@ -957,7 +979,7 @@ private struct TimelineExportCard: View {
         .tint(TeslaCamTheme.Colors.accent)
         .fixedSize()
         .accessibilityIdentifier("engrave-telemetry-toggle")
-        .accessibilityHint("Burns the telemetry HUD into the exported video. Off keeps a lossless, faster muxed copy.")
+        .accessibilityHint("Burns the telemetry HUD into the exported video.")
 
         Spacer(minLength: 0)
 
@@ -990,17 +1012,17 @@ private struct TimelineExportCard: View {
 
   private func controlTopRow(timeWidth: CGFloat, exportWidth: CGFloat) -> some View {
     HStack(spacing: TeslaCamTheme.Spacing.s) {
-      macTimeField(formatHMS(playbackUI.currentSeconds), alignment: .leading, width: timeWidth)
+      trimInputField("In", text: $trimStartInput, field: .start, width: timeWidth)
 
       transportButtonCluster
 
-      macTimeField(formatHMS(state.totalDuration), alignment: .trailing, width: timeWidth)
+      trimInputField("Out", text: $trimEndInput, field: .end, width: timeWidth)
 
       inOutCluster
 
       Spacer(minLength: 0)
 
-      codecField
+      codecPickerField
 
       Button {
         state.exportRange()
@@ -1015,33 +1037,69 @@ private struct TimelineExportCard: View {
     }
   }
 
-  private func macTimeField(_ value: String, alignment: Alignment, width: CGFloat = 118) -> some View {
+  private func trimInputField(_ title: String, text: Binding<String>, field: TrimField, width: CGFloat = 118) -> some View {
     HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
-      Image(systemName: "timer")
+      Text(title.uppercased())
         .font(TeslaCamTheme.Typography.label)
-      Text(value)
+        .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+      TextField(title, text: text)
+        .textFieldStyle(.plain)
         .font(TeslaCamTheme.Typography.monoDetail)
+        .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+        .multilineTextAlignment(.leading)
+        .focused($focusedTrimField, equals: field)
+        .onSubmit {
+          switch field {
+          case .start:
+            commitTrimStartInput()
+          case .end:
+            commitTrimEndInput()
+          }
+        }
         .lineLimit(1)
         .minimumScaleFactor(0.72)
     }
-    .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
     .padding(.horizontal, TeslaCamTheme.Spacing.s)
-    .frame(width: width, height: TeslaCamTheme.Metrics.compactControlHeight, alignment: alignment)
+    .frame(width: width, height: TeslaCamTheme.Metrics.compactControlHeight, alignment: .leading)
     .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
   }
 
-  // Read-only codec indicator. The export codec is fully automatic — adopted
-  // from the source footage (H.264 vs H.265) — so this is informational, not a
-  // menu. A fixed-width segment, so it can never overflow into the timeline the
-  // way the old PRESET dropdown did.
-  private var codecField: some View {
+  private var codecPickerField: some View {
     HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
       Text("Codec".uppercased())
         .font(TeslaCamTheme.Typography.label)
         .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
 
-      CodecSegmentIndicator(activeCodec: state.dominantSourceCodec)
+      Picker("", selection: exportPresetBinding) {
+        Text("H.265").tag(ExportPreset.maxQualityHEVC)
+        Text("H.264").tag(ExportPreset.maxQualityH264)
+      }
+      .labelsHidden()
+      .pickerStyle(.segmented)
+      .frame(width: 132)
     }
+  }
+
+  private var exportPresetBinding: Binding<ExportPreset> {
+    Binding(
+      get: { state.exportPreset == .maxQualityH264 ? .maxQualityH264 : .maxQualityHEVC },
+      set: { state.setExportPreset($0) }
+    )
+  }
+
+  private func syncTrimInputs() {
+    trimStartInput = formatHMS(state.trimStartSeconds)
+    trimEndInput = formatHMS(state.trimEndSeconds)
+  }
+
+  private func commitTrimStartInput() {
+    _ = state.applyTrimStartInput(trimStartInput)
+    trimStartInput = formatHMS(state.trimStartSeconds)
+  }
+
+  private func commitTrimEndInput() {
+    _ = state.applyTrimEndInput(trimEndInput)
+    trimEndInput = formatHMS(state.trimEndSeconds)
   }
 
   private var playbackSecondsBinding: Binding<Double> {
@@ -1099,6 +1157,11 @@ private struct TimelineExportCard: View {
     }
 
     return parts.joined(separator: " • ")
+  }
+
+  private enum TrimField: Hashable {
+    case start
+    case end
   }
 }
 

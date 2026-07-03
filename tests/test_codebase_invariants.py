@@ -257,15 +257,25 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         self.assertIn("controlTopRow(timeWidth: 88, exportWidth: 112)", control_source)
 
     def test_engrave_telemetry_is_opt_in_and_defaults_off(self):
-        # Justification: mux-first is the default (fast, lossless). Burning the
-        # telemetry HUD into the export is an explicit opt-in switch, defaulting
-        # off; it must bind the raw overlay flag so toggling forces composite.
+        # Justification: telemetry burn-in should remain explicit even when the
+        # default export stays a regular encoded 2x2 grid.
         view_source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
         self.assertIn('isOn: $state.exportOverlayOptions.telemetryHUD', view_source)
         self.assertIn('"engrave-telemetry-toggle"', view_source)
         state_source = (SWIFT_SHIPPING_ROOT / "AppState.swift").read_text(encoding="utf-8")
         self.assertIn("telemetryHUD: false", state_source)
         self.assertNotIn("telemetryHUD: true,", state_source)
+
+    def test_export_controls_keep_manual_trim_inputs_and_live_codec_choice(self):
+        # Justification: the mac export dock must allow direct keyboard entry
+        # for IN/OUT and the codec control must stay interactive, not merely a
+        # decorative indicator.
+        view_source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        self.assertIn('trimInputField("In"', view_source)
+        self.assertIn('trimInputField("Out"', view_source)
+        self.assertIn("applyTrimStartInput", view_source)
+        self.assertIn("applyTrimEndInput", view_source)
+        self.assertIn("selection: exportPresetBinding", view_source)
 
     def test_timeline_track_hides_telemetry_event_markers(self):
         # Justification: telemetry markers appeared only after scrubbing and
