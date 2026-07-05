@@ -475,7 +475,8 @@
 				DEVELOPMENT_TEAM = 3T84D5XQXL;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_TESTABILITY = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = TeslaCam/TeslaCam_iPad_Info.plist;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = TeslaCam;
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
@@ -789,7 +790,8 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 3T84D5XQXL;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = TeslaCam/TeslaCam_iPad_Info.plist;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = TeslaCam;
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;

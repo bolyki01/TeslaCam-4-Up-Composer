@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 import unittest
+import plistlib
 from pathlib import Path
 from typing import Iterable
 
@@ -26,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SHIPPING_ROOT = REPO_ROOT / "teslacam_cli"
 SWIFT_SHIPPING_ROOT = REPO_ROOT / "TeslaCam"
 XCODE_PROJECT_FILE = REPO_ROOT / "TeslaCam.xcodeproj" / "project.pbxproj"
+IPAD_INFO_PLIST = SWIFT_SHIPPING_ROOT / "TeslaCam_iPad_Info.plist"
 
 
 def _shipping_python_files() -> Iterable[Path]:
@@ -57,6 +59,21 @@ def _grep_lines(pattern: re.Pattern[str], paths: Iterable[Path]) -> list[tuple[P
 
 def _format_hits(hits: list[tuple[Path, int, str]]) -> str:
     return "\n".join(f"  {path.relative_to(REPO_ROOT)}:{line}: {body}" for path, line, body in hits)
+
+
+def _swift_block(source: str, declaration: str) -> str:
+    start = source.index(declaration)
+    brace = source.index("{", start)
+    depth = 0
+    for index in range(brace, len(source)):
+        character = source[index]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:index + 1]
+    raise AssertionError(f"could not find end of Swift block starting at {declaration!r}")
 
 
 class ForbiddenPatternTests(unittest.TestCase):
@@ -191,50 +208,79 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         self.assertIn('TARGETED_DEVICE_FAMILY = "1,2";', text)
         self.assertIn("INFOPLIST_KEY_UIRequiresFullScreen = YES;", text)
 
+    def test_ios_target_registers_folder_documents(self):
+        # Justification: Files handoff and SwiftUI import both need the
+        # iOS app registered for folder documents, otherwise a TeslaCam
+        # folder in Downloads can open to a no-op app launch.
+        text = XCODE_PROJECT_FILE.read_text(encoding="utf-8")
+        self.assertIn("INFOPLIST_FILE = TeslaCam/TeslaCam_iPad_Info.plist;", text)
+        with IPAD_INFO_PLIST.open("rb") as fh:
+            plist = plistlib.load(fh)
+        document_types = plist.get("CFBundleDocumentTypes", [])
+        flattened_types = {
+            content_type
+            for document_type in document_types
+            for content_type in document_type.get("LSItemContentTypes", [])
+        }
+        self.assertIn("public.folder", flattened_types)
+        self.assertIn("public.directory", flattened_types)
+        self.assertTrue(plist.get("UISupportsDocumentBrowser"))
+        self.assertTrue(plist.get("LSSupportsOpeningDocumentsInPlace"))
+
     def test_ipad_dashboard_has_no_static_top_app_title(self):
         # Justification: the iPad dashboard uses the footage grid as
         # the app identity. A static top title wastes vertical space.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
         self.assertNotIn("TeslaCam CCTV", source)
 
-    def test_ios_loaded_workspace_uses_mac_style_preview_and_dock(self):
-        # Justification: iPhone and iPad should not maintain a separate
-        # rail/sidebar UI. The loaded screen should match the mac
-        # preview, timeline, control dock, and clip information flow.
+    def test_content_view_routes_to_separate_platform_views(self):
+        # Justification: macOS and iOS share the engine, not the view tree.
+        # ContentView stays thin so iOS can be a native touch workspace
+        # without inheriting desktop-only density decisions.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
-        start = source.index("private struct IPadLoadedScreen")
-        end = source.index("struct IOSLandscapeWorkspaceMetrics", start)
-        loaded_source = source[start:end]
-        self.assertIn("PreviewPanelCard(", loaded_source)
-        self.assertIn("TimelineExportCard(", loaded_source)
-        self.assertIn(".ignoresSafeArea(.container, edges: .vertical)", loaded_source)
+        content_view = _swift_block(source, "struct ContentView: View")
+        self.assertIn("MacContentView(state: state)", content_view)
+        self.assertIn("IOSContentView(state: state)", content_view)
+        self.assertNotIn("MacLoadedWorkspace(", content_view)
+        self.assertNotIn("IOSReviewWorkspace(", content_view)
+        self.assertIn("private struct MacContentView", source)
+        self.assertIn("private struct IOSContentView", source)
         self.assertIn(".statusBarHidden(true)", source)
-        self.assertNotIn("CompactIOSLoadedScreen", source)
-        self.assertNotIn("IPadEventRail(state:", loaded_source)
-        self.assertNotIn("IPadTelemetryRail(state:", loaded_source)
-        self.assertNotIn("ScopeBar(", loaded_source)
+        self.assertNotIn("private struct IPadLoadedScreen", source)
 
-    def test_ios_landscape_workspace_avoids_hardware_cutouts(self):
-        # Justification: screenshots and runtime should use the visible
-        # landscape workspace without drawing controls under the island.
+    def test_ios_loaded_workspace_is_native_touch_tree(self):
+        # Justification: iOS needs its own editor surface with stage,
+        # timeline, touch dock, and clipped metadata moved to a sheet.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
-        start = source.index("private struct IPadLoadedScreen")
-        end = source.index("struct IOSLandscapeWorkspaceMetrics", start)
-        loaded_source = source[start:end]
-        self.assertIn(".ignoresSafeArea(.container, edges: .vertical)", loaded_source)
+        workspace_source = _swift_block(source, "private struct IOSReviewWorkspace")
+        self.assertIn("PreviewPanelCard(", workspace_source)
+        self.assertIn("IOSControlDock(", workspace_source)
+        self.assertIn("IOSWorkspaceMetrics", workspace_source)
+        self.assertIn(".ignoresSafeArea(.container, edges: [.horizontal, .vertical])", workspace_source)
+        self.assertNotIn("TimelineExportCard(", workspace_source)
+        self.assertIn("private struct IOSControlDock", source)
+        self.assertIn("private struct IOSClipDetailsSheet", source)
+        self.assertIn("private struct IOSClipSummaryBar", source)
+
+    def test_ios_landscape_workspace_fills_landscape_width(self):
+        # Justification: iPhone landscape must not leave large side bars.
+        # The content owns cutout avoidance inside its compact layout budget.
+        source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
+        loaded_source = _swift_block(source, "private struct IOSReviewWorkspace")
+        self.assertIn(".ignoresSafeArea(.container, edges: [.horizontal, .vertical])", loaded_source)
         self.assertNotIn(".ignoresSafeArea()", loaded_source)
 
     def test_ios_landscape_workspace_uses_compact_height_budget(self):
         # Justification: iPhone should not leave a large bottom void, and
-        # iPad should reserve enough space for the full lower dock.
+        # iPad should reserve enough space for the richer lower dock.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
-        start = source.index("struct IOSLandscapeWorkspaceMetrics")
-        end = source.index("private struct IPadLandscapeLockScreen", start)
-        metrics_source = source[start:end]
+        metrics_source = _swift_block(source, "private struct IOSWorkspaceMetrics")
+        self.assertIn("let safeAreaInsets: EdgeInsets", metrics_source)
         self.assertIn("var outerPadding: CGFloat", metrics_source)
         self.assertIn("workspaceSpacing", metrics_source)
-        self.assertIn("usesCompactPhoneLayout", metrics_source)
-        self.assertIn("return 224", metrics_source)
+        self.assertIn("isCompactPhoneLandscape", metrics_source)
+        self.assertIn("size.height < 520 || size.width < 900", metrics_source)
+        self.assertIn("return 268", metrics_source)
         self.assertIn("return 252", metrics_source)
 
     def test_ipad_timeline_track_has_enough_vertical_room(self):
@@ -248,13 +294,13 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         self.assertIn("recordedTickFractions", timeline_source)
 
     def test_ios_control_row_has_phone_safe_area_fallback(self):
-        # Justification: after respecting iPhone horizontal safe areas,
-        # the action row still needs a fallback narrow enough to fit.
+        # Justification: iPhone landscape needs touch-sized controls that
+        # still fit inside safe-area constrained widths.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
-        start = source.index("private func macControlStack")
-        end = source.index("private func controlTopRow", start)
-        control_source = source[start:end]
-        self.assertIn("controlTopRow(timeWidth: 88, exportWidth: 112)", control_source)
+        control_source = _swift_block(source, "private struct IOSControlDock")
+        self.assertIn("ScrollView(.horizontal", control_source)
+        self.assertIn("iosControlTopRow(timeWidth: 86, exportWidth: 120)", control_source)
+        self.assertIn(".contentMargins(.horizontal, metrics.safeHorizontalInset, for: .scrollContent)", control_source)
 
     def test_engrave_telemetry_is_opt_in_and_defaults_off(self):
         # Justification: telemetry burn-in should remain explicit even when the
@@ -267,12 +313,13 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         self.assertNotIn("telemetryHUD: true,", state_source)
 
     def test_export_controls_keep_manual_trim_inputs_and_live_codec_choice(self):
-        # Justification: the mac export dock must allow direct keyboard entry
-        # for IN/OUT and the codec control must stay interactive, not merely a
-        # decorative indicator.
+        # Justification: both platform docks must allow direct IN/OUT entry
+        # and keep the codec control interactive.
         view_source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
         self.assertIn('trimInputField("In"', view_source)
         self.assertIn('trimInputField("Out"', view_source)
+        self.assertIn('iosTrimInputField("In"', view_source)
+        self.assertIn('iosTrimInputField("Out"', view_source)
         self.assertIn("applyTrimStartInput", view_source)
         self.assertIn("applyTrimEndInput", view_source)
         self.assertIn("selection: exportPresetBinding", view_source)
@@ -302,26 +349,25 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         self.assertIn('NSGraphicsContext(cgContext: context, flipped: false)', source)
         self.assertNotIn('NSGraphicsContext(cgContext: context, flipped: true)', source)
 
-    def test_native_hevc_hardware_encoder_policy_is_not_macos_only(self):
-        # Justification: iPhone/iPad device exports should fail fast instead
-        # of silently falling back to slow software HEVC. Simulators can only
-        # request hardware acceleration because they may not expose it.
+    def test_native_writer_uses_supported_encoder_specification_key(self):
+        # Justification: AVAssetWriter rejects the raw
+        # "AVVideoEncoderSpecification" key at runtime; use the SDK key where
+        # the SDK exposes it and never ship the crashing raw key.
         source = (SWIFT_SHIPPING_ROOT / "NativeExportController.swift").read_text(encoding="utf-8")
         self.assertIn("private static func hardwareEncoderSpecification()", source)
-        self.assertIn("videoEncoderSpecificationSettingsKey", source)
-        self.assertIn('"AVVideoEncoderSpecification"', source)
+        self.assertIn("settings[AVVideoEncoderSpecificationKey]", source)
+        self.assertNotIn('"AVVideoEncoderSpecification"', source)
         self.assertIn("#if !targetEnvironment(simulator)", source)
-        self.assertNotIn("#if os(macOS)\n    if requiresHardwareEncoder", source)
 
-    def test_ios_simulator_export_decodes_serially(self):
-        # Justification: simulator AVAssetReader/VideoToolbox decode can
-        # collapse on timestamp-irregular Tesla clips when four readers run
-        # concurrently. Real devices keep the concurrent path.
+    def test_ios_export_decodes_serially(self):
+        # Justification: iOS AVAssetReader/VideoToolbox decode can collapse on
+        # timestamp-irregular Tesla clips when four camera readers run
+        # concurrently. Keep Mac concurrent; keep all iOS exports serial.
         source = (SWIFT_SHIPPING_ROOT / "NativeExportController.swift").read_text(encoding="utf-8")
         start = source.index("nonisolated private final class MetalExportCompositor")
         end = source.index("nonisolated private final class TimelineFrameComposer", start)
         compositor_source = source[start:end]
-        self.assertIn("#if targetEnvironment(simulator)", compositor_source)
+        self.assertIn("#if os(iOS)", compositor_source)
         self.assertIn("private static var shouldDecodeSerially", compositor_source)
         self.assertIn("decoderRequests.count == 1 || Self.shouldDecodeSerially", compositor_source)
         self.assertIn("decode=\\(MetalExportCompositor.decodeModeDescription)", source)
@@ -332,14 +378,13 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         # still claim an original-track passthrough export.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
         matches = re.findall(r'private var exportButtonTitle: String \{\s*"Export"', source)
-        self.assertEqual(len(matches), 1)
+        self.assertEqual(len(matches), 2)
         self.assertNotIn("state.exportPreset == .originalTracksMOV ? \"Export Original Tracks\"", source)
         self.assertNotIn("\"Export Original Tracks\"", source)
 
     def test_ios_workspace_does_not_keep_removed_rail_dashboard_components(self):
-        # Justification: the iOS app now shares the mac-style loaded
-        # workspace. Old side rails, map pages, and inspector panels are
-        # dead weight and should not be kept as private orphan views.
+        # Justification: the iOS app has a native footage editor tree.
+        # Old side rails, map pages, and inspector panels are dead weight.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
         stale_symbols = [
             "IPadWorkspaceMode",
@@ -360,16 +405,16 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
             self.assertNotIn(symbol, source)
 
     def test_ipad_dashboard_tracks_dark_material_reference(self):
-        # Justification: the iOS dashboard design target is now the
-        # matte mac workspace with a dominant footage stage. Keep this
-        # guarded so it does not drift back to a separate iPad style.
+        # Justification: the iOS dashboard keeps the matte CCTV direction,
+        # but owns its native layout instead of reusing the mac dock.
         content = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
         utils = (SWIFT_SHIPPING_ROOT / "Utils.swift").read_text(encoding="utf-8")
         self.assertIn("preferredTeslaCamColorScheme()", content)
-        self.assertIn("IOSLandscapeWorkspaceMetrics", content)
+        self.assertIn("IOSWorkspaceMetrics", content)
+        self.assertIn("IOSReviewWorkspace", content)
+        self.assertIn("IOSControlDock", content)
         self.assertIn("PreviewPanelCard", content)
-        self.assertIn("TimelineExportCard", content)
-        self.assertIn("ClipInformationPanel", content)
+        self.assertIn("IOSClipSummaryBar", content)
         self.assertIn("DemoVideoWallPlaceholder", content)
         self.assertIn("currentPreviewNaturalSizes", content)
         self.assertIn("Color(red: 0.045, green: 0.047, blue: 0.055)", utils)
@@ -382,12 +427,10 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         self.assertNotIn("mountainLayer", content)
 
     def test_ios_loaded_workspace_has_no_browse_map_scope_bar(self):
-        # Justification: the loaded iOS workspace should be the mac
+        # Justification: the loaded iOS workspace should be the native
         # review/export surface, not a separate Browse/Map dashboard.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
-        start = source.index("private struct IPadLoadedScreen")
-        end = source.index("struct IOSLandscapeWorkspaceMetrics", start)
-        loaded_source = source[start:end]
+        loaded_source = _swift_block(source, "private struct IOSReviewWorkspace")
         self.assertNotIn("IPadWorkspaceMode", loaded_source)
         self.assertNotIn("workspaceMode", loaded_source)
         self.assertNotIn("IPadMapPage", loaded_source)

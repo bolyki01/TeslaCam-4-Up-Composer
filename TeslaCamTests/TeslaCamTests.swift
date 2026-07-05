@@ -1042,6 +1042,30 @@ struct TeslaCamTests {
     #expect(normalized.map(\.path) == [liveOne.standardizedFileURL.path, liveTwo.standardizedFileURL.path])
   }
 
+  @Test func sourceStoreNormalizeProbesExistenceInsideSecurityScope() async throws {
+    let folder = URL(fileURLWithPath: "/private/var/mobile/Containers/Shared/AppGroup/TeslaCam", isDirectory: true)
+    var events: [String] = []
+
+    let store = SourceStore(
+      fileExists: { _ in
+        events.append("exists")
+        return events.contains("start")
+      },
+      startSecurityScopedAccess: { _ in
+        events.append("start")
+        return true
+      },
+      stopSecurityScopedAccess: { _ in
+        events.append("stop")
+      }
+    )
+
+    let normalized = store.normalize([folder])
+
+    #expect(normalized == [folder.standardizedFileURL])
+    #expect(events == ["start", "exists", "stop"])
+  }
+
   @Test func sourceStoreBookmarkRoundTripRestoresPreviouslyRememberedURLs() async throws {
     let root = try TemporaryDirectory.make()
     defer { try? root.remove() }

@@ -33,8 +33,18 @@ final class TeslaCamUITests: XCTestCase {
     app.launchEnvironment["TESLACAM_DEBUG_EXPORT_DIR"] = NSTemporaryDirectory()
     app.launchArguments.append(contentsOf: ["--teslacam-ui-test-mode", "sample"])
     app.launch()
+    dismissCrashRecoveryIfNeeded(in: app)
 
     XCTAssertTrue(app.descendants(matching: .any)["loaded-screen"].waitForExistence(timeout: 5))
+    #if os(macOS)
+    app.typeKey("e", modifierFlags: .command)
+    #else
+    let exportButton = app.descendants(matching: .any)["export-video"]
+    XCTAssertTrue(exportButton.waitForExistence(timeout: 5))
+    exportButton.tap()
+    #endif
+    XCTAssertTrue(app.descendants(matching: .any)["export-overlay"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.descendants(matching: .any)["Export Complete"].waitForExistence(timeout: 60))
   }
 
   @MainActor
@@ -85,6 +95,18 @@ final class TeslaCamUITests: XCTestCase {
     app.launchEnvironment["TESLACAM_UI_TEST_MODE"] = mode
     app.launchArguments.append(contentsOf: ["--teslacam-ui-test-mode", mode])
     app.launch()
+    dismissCrashRecoveryIfNeeded(in: app)
     return app
+  }
+
+  private func dismissCrashRecoveryIfNeeded(in app: XCUIApplication) {
+    let button = app.buttons["action-button--999"]
+    if button.waitForExistence(timeout: 1) {
+      #if os(macOS)
+      button.click()
+      #else
+      button.tap()
+      #endif
+    }
   }
 }

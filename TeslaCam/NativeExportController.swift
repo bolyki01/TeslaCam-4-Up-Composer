@@ -1679,7 +1679,7 @@ nonisolated private final class MetalExportCompositor: @unchecked Sendable {
   }
 
   private static var shouldDecodeSerially: Bool {
-    #if targetEnvironment(simulator)
+    #if os(iOS)
     return true
     #else
     return false
@@ -2574,7 +2574,6 @@ nonisolated private enum PassthroughMovieMuxer {
 }
 
 private final class NativeMovieWriter {
-  private static let videoEncoderSpecificationSettingsKey = "AVVideoEncoderSpecification"
   private let writer: AVAssetWriter
   private let input: AVAssetWriterInput
   private let adaptor: AVAssetWriterInputPixelBufferAdaptor
@@ -2621,9 +2620,11 @@ private final class NativeMovieWriter {
     if !compression.isEmpty {
       settings[AVVideoCompressionPropertiesKey] = compression
     }
+    #if os(macOS)
     if requiresHardwareEncoder {
-      settings[Self.videoEncoderSpecificationSettingsKey] = Self.hardwareEncoderSpecification()
+      settings[AVVideoEncoderSpecificationKey] = Self.hardwareEncoderSpecification()
     }
+    #endif
 
     input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
     input.expectsMediaDataInRealTime = false

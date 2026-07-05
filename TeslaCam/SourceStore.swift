@@ -13,9 +13,11 @@ final class SourceStore {
 
   private let bookmarkKey: String
   private let userDefaults: UserDefaults
-  private let fileManager: FileManager
+  private let fileExists: (String) -> Bool
   private let bookmarkCreationOptions: URL.BookmarkCreationOptions
   private let bookmarkResolutionOptions: URL.BookmarkResolutionOptions
+  private let startSecurityScopedAccess: (URL) -> Bool
+  private let stopSecurityScopedAccess: (URL) -> Void
   private var activeSecurityScopedURLs: [URL] = []
 
   init(
@@ -23,13 +25,18 @@ final class SourceStore {
     userDefaults: UserDefaults = .standard,
     fileManager: FileManager = .default,
     bookmarkCreationOptions: URL.BookmarkCreationOptions = PlatformFileAccess.bookmarkCreationOptions,
-    bookmarkResolutionOptions: URL.BookmarkResolutionOptions = PlatformFileAccess.bookmarkResolutionOptions
+    bookmarkResolutionOptions: URL.BookmarkResolutionOptions = PlatformFileAccess.bookmarkResolutionOptions,
+    fileExists: ((String) -> Bool)? = nil,
+    startSecurityScopedAccess: @escaping (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
+    stopSecurityScopedAccess: @escaping (URL) -> Void = { $0.stopAccessingSecurityScopedResource() }
   ) {
     self.bookmarkKey = bookmarkKey
     self.userDefaults = userDefaults
-    self.fileManager = fileManager
+    self.fileExists = fileExists ?? { fileManager.fileExists(atPath: $0) }
     self.bookmarkCreationOptions = bookmarkCreationOptions
     self.bookmarkResolutionOptions = bookmarkResolutionOptions
+    self.startSecurityScopedAccess = startSecurityScopedAccess
+    self.stopSecurityScopedAccess = stopSecurityScopedAccess
   }
 
   /// Standardizes paths, drops missing entries, and de-duplicates while preserving order.
@@ -39,7 +46,7 @@ final class SourceStore {
     out.reserveCapacity(urls.count)
     for raw in urls {
       let u = raw.standardizedFileURL
-      guard fileManager.fileExists(atPath: u.path) else { continue }
+      guard withSecurityScopedAccess(for: u, { fileExists(u.path) }) else { continue }
       if seen.insert(u.path).inserted {
         out.append(u)
       }
@@ -90,11 +97,7 @@ final class SourceStore {
       // sandboxed folder bookmark can read as "missing" even when it is
       // present and reachable. (Plain, non-scoped bookmarks return false from
       // startAccessing and the probe still works.)
-      let scoped = url.startAccessingSecurityScopedResource()
-      let exists = fileManager.fileExists(atPath: url.path)
-      if scoped {
-        url.stopAccessingSecurityScopedResource()
-      }
+      let exists = withSecurityScopedAccess(for: url) { fileExists(url.path) }
       guard exists else {
         continue
       }
@@ -122,14 +125,24 @@ final class SourceStore {
   /// active scope is released first.
   func activateSecurityScope(for urls: [URL]) {
     deactivateSecurityScope()
-    activeSecurityScopedURLs = urls.filter { $0.startAccessingSecurityScopedResource() }
+    activeSecurityScopedURLs = urls.filter { startSecurityScopedAccess($0) }
   }
 
   /// Releases all currently held security-scoped access.
   func deactivateSecurityScope() {
     for url in activeSecurityScopedURLs {
-      url.stopAccessingSecurityScopedResource()
+      stopSecurityScopedAccess(url)
     }
     activeSecurityScopedURLs.removeAll()
+  }
+
+  private func withSecurityScopedAccess<T>(for url: URL, _ body: () -> T) -> T {
+    let scoped = startSecurityScopedAccess(url)
+    defer {
+      if scoped {
+        stopSecurityScopedAccess(url)
+      }
+    }
+    return body()
   }
 }

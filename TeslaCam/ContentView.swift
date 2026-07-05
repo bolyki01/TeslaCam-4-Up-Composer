@@ -9,70 +9,46 @@ struct ContentView: View {
   @State private var isDropTarget = false
 
   var body: some View {
-    ZStack {
-      TeslaCamSceneBackground()
-
-      Group {
-        if state.isIndexing {
-          IndexingScreen(state: state)
-        } else if state.clipSets.isEmpty {
-          OnboardingScreen(state: state)
-        } else {
-          loadedScreen
+    platformContent
+      .preferredTeslaCamColorScheme()
+      #if os(iOS)
+      .statusBarHidden(true)
+      #endif
+      .onAppear { state.onAppear() }
+      .alert("Error", isPresented: $state.showError) {
+        Button("OK", role: .cancel) {}
+      } message: {
+        Text(state.errorMessage)
+      }
+      .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTarget, perform: handleFileDrop(providers:))
+      .onOpenURL { url in
+        state.indexSources([url])
+      }
+      #if os(iOS)
+      .fileImporter(
+        isPresented: $state.isFileImporterPresented,
+        allowedContentTypes: [.folder],
+        allowsMultipleSelection: false
+      ) { result in
+        switch result {
+        case .success(let urls):
+          state.indexSources(urls)
+        case .failure(let error):
+          let nsError = error as NSError
+          guard nsError.code != NSUserCancelledError else { return }
+          state.errorMessage = "Couldn't open the selected folder. Pick the TeslaCam folder again from Files."
+          state.showError = true
         }
       }
-      .disabled(state.exporter.isExporting)
-
-      if let job = state.exporter.currentJob, state.exporter.isExporting || state.exporter.isStatusPresented {
-        ExportOverlayCard(state: state, job: job)
-      }
-    }
-    #if os(macOS)
-    .frame(minWidth: 1100, minHeight: 760)
-    #endif
-    .preferredTeslaCamColorScheme()
-    #if os(iOS)
-    .statusBarHidden(true)
-    #endif
-    .onAppear { state.onAppear() }
-    .alert("Error", isPresented: $state.showError) {
-      Button("OK", role: .cancel) {}
-    } message: {
-      Text(state.errorMessage)
-    }
-    .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTarget, perform: handleFileDrop(providers:))
-    #if os(iOS)
-    .fileImporter(
-      isPresented: $state.isFileImporterPresented,
-      allowedContentTypes: [.folder],
-      allowsMultipleSelection: false
-    ) { result in
-      switch result {
-      case .success(let urls):
-        state.indexSources(urls)
-      case .failure:
-        break
-      }
-    }
-    #endif
+      #endif
   }
 
-  private var loadedScreen: some View {
+  @ViewBuilder
+  private var platformContent: some View {
 #if os(iOS)
-    IPadLoadedScreen(state: state, playbackUI: state.playbackUI)
+    IOSContentView(state: state)
 #else
-    GeometryReader { proxy in
-      MacLoadedWorkspace(
-        state: state,
-        playback: state.playback,
-        playbackUI: state.playbackUI,
-        timelineMarkers: timelineMarkers,
-        isSingleDayTimeline: isSingleDayTimeline,
-        loadedContentMaxWidth: loadedContentMaxWidth,
-        maxPreviewHeight: loadedPreviewMaxHeight(for: proxy.size.height)
-      )
-    }
-    .accessibilityIdentifier("loaded-screen")
+    MacContentView(state: state)
 #endif
   }
 
@@ -104,6 +80,48 @@ struct ContentView: View {
       state.ingestDroppedURLs(urls)
     }
     return true
+  }
+}
+
+#if os(macOS)
+private struct MacContentView: View {
+  @ObservedObject var state: AppState
+
+  var body: some View {
+    ZStack {
+      TeslaCamSceneBackground()
+
+      Group {
+        if state.isIndexing {
+          IndexingScreen(state: state)
+        } else if state.clipSets.isEmpty {
+          OnboardingScreen(state: state)
+        } else {
+          loadedScreen
+        }
+      }
+      .disabled(state.exporter.isExporting)
+
+      if let job = state.exporter.currentJob, state.exporter.isExporting || state.exporter.isStatusPresented {
+        ExportOverlayCard(state: state, job: job)
+      }
+    }
+    .frame(minWidth: 1100, minHeight: 760)
+  }
+
+  private var loadedScreen: some View {
+    GeometryReader { proxy in
+      MacLoadedWorkspace(
+        state: state,
+        playback: state.playback,
+        playbackUI: state.playbackUI,
+        timelineMarkers: timelineMarkers,
+        isSingleDayTimeline: isSingleDayTimeline,
+        loadedContentMaxWidth: loadedContentMaxWidth,
+        maxPreviewHeight: loadedPreviewMaxHeight(for: proxy.size.height)
+      )
+    }
+    .accessibilityIdentifier("loaded-screen")
   }
 
   private var timelineMarkers: [Date] {
@@ -137,6 +155,7 @@ struct ContentView: View {
     return max(240, totalHeight - reserved)
   }
 }
+#endif
 
 #if os(iOS)
 private struct GridPanel<Content: View>: View {
@@ -215,39 +234,69 @@ private struct CommandChip: View {
   }
 }
 
-private struct IPadLoadedScreen: View {
+private struct IOSContentView: View {
   @ObservedObject var state: AppState
-  @ObservedObject var playbackUI: PlaybackUIState
 
   var body: some View {
     GeometryReader { proxy in
-      if proxy.size.height > proxy.size.width {
-        IPadLandscapeLockScreen()
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else {
-        let metrics = IOSLandscapeWorkspaceMetrics(size: proxy.size)
-        VStack(alignment: .leading, spacing: metrics.workspaceSpacing) {
-          PreviewPanelCard(
-            state: state,
-            playbackUI: playbackUI,
-            maxAvailableHeight: metrics.previewHeight,
-            usesCompactPhonePreview: metrics.usesCompactPhoneLayout
-          )
+      ZStack {
+        TeslaCamSceneBackground()
 
-          TimelineExportCard(
-            state: state,
-            playback: state.playback,
-            playbackUI: playbackUI,
-            timelineMarkers: timelineMarkers,
-            isSingleDayTimeline: isSingleDayTimeline
-          )
+        Group {
+          if proxy.size.height > proxy.size.width {
+            IPadLandscapeLockScreen()
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+          } else if state.isIndexing {
+            IndexingScreen(state: state)
+          } else if state.clipSets.isEmpty {
+            OnboardingScreen(state: state)
+          } else {
+            IOSReviewWorkspace(
+              state: state,
+              playbackUI: state.playbackUI,
+              metrics: IOSWorkspaceMetrics(size: proxy.size, safeAreaInsets: proxy.safeAreaInsets)
+            )
+          }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(metrics.outerPadding)
+        .disabled(state.exporter.isExporting)
+
+        if let job = state.exporter.currentJob, state.exporter.isExporting || state.exporter.isStatusPresented {
+          ExportOverlayCard(state: state, job: job)
+        }
       }
     }
+  }
+}
+
+private struct IOSReviewWorkspace: View {
+  @ObservedObject var state: AppState
+  @ObservedObject var playbackUI: PlaybackUIState
+  let metrics: IOSWorkspaceMetrics
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: metrics.workspaceSpacing) {
+      PreviewPanelCard(
+        state: state,
+        playbackUI: playbackUI,
+        maxAvailableHeight: metrics.previewHeight,
+        usesCompactPhonePreview: metrics.isCompactPhoneLandscape
+      )
+
+      IOSControlDock(
+        state: state,
+        playback: state.playback,
+        playbackUI: playbackUI,
+        metrics: metrics,
+        timelineMarkers: timelineMarkers,
+        isSingleDayTimeline: isSingleDayTimeline
+      )
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    .padding(.top, metrics.topPadding)
+    .padding(.bottom, metrics.bottomPadding)
+    .padding(.horizontal, metrics.outerPadding)
     .accessibilityIdentifier("loaded-screen")
-    .ignoresSafeArea(.container, edges: .vertical)
+    .ignoresSafeArea(.container, edges: [.horizontal, .vertical])
   }
 
   private var timelineMarkers: [Date] {
@@ -265,15 +314,28 @@ private struct IPadLoadedScreen: View {
   }
 }
 
-private struct IOSLandscapeWorkspaceMetrics {
+private struct IOSWorkspaceMetrics {
   let size: CGSize
+  let safeAreaInsets: EdgeInsets
 
-  var usesCompactPhoneLayout: Bool {
-    size.height < 430 || size.width < 900
+  var isCompactPhoneLandscape: Bool {
+    size.height < 520 || size.width < 900
+  }
+
+  var safeHorizontalInset: CGFloat {
+    isCompactPhoneLandscape ? max(safeAreaInsets.leading, safeAreaInsets.trailing, 10) : 0
   }
 
   var outerPadding: CGFloat {
-    0
+    isCompactPhoneLandscape ? 0 : TeslaCamTheme.Spacing.m
+  }
+
+  var topPadding: CGFloat {
+    isCompactPhoneLandscape ? 0 : TeslaCamTheme.Spacing.m
+  }
+
+  var bottomPadding: CGFloat {
+    isCompactPhoneLandscape ? 0 : TeslaCamTheme.Spacing.m
   }
 
   var workspaceSpacing: CGFloat {
@@ -281,8 +343,8 @@ private struct IOSLandscapeWorkspaceMetrics {
   }
 
   var controlDockHeight: CGFloat {
-    if usesCompactPhoneLayout {
-      return 224
+    if isCompactPhoneLandscape {
+      return 268
     }
     if size.width < 900 {
       return 244
@@ -292,7 +354,408 @@ private struct IOSLandscapeWorkspaceMetrics {
 
   var previewHeight: CGFloat {
     let minimumPreviewHeight: CGFloat = size.height < 520 ? 132 : 172
-    return max(minimumPreviewHeight, size.height - outerPadding * 2 - controlDockHeight - workspaceSpacing)
+    return max(minimumPreviewHeight, size.height - topPadding - bottomPadding - controlDockHeight - workspaceSpacing)
+  }
+}
+
+private struct IOSControlDock: View {
+  @ObservedObject var state: AppState
+  @ObservedObject var playback: MultiCamPlaybackController
+  @ObservedObject var playbackUI: PlaybackUIState
+  let metrics: IOSWorkspaceMetrics
+  let timelineMarkers: [Date]
+  let isSingleDayTimeline: Bool
+  @State private var trimStartInput = ""
+  @State private var trimEndInput = ""
+  @State private var isClipDetailsPresented = false
+  @FocusState private var focusedTrimField: TrimField?
+  @State private var lastFocusedTrimField: TrimField?
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: dockSpacing) {
+      iosTimelineDock
+
+      ScrollView(.horizontal, showsIndicators: false) {
+        ViewThatFits(in: .horizontal) {
+          iosControlTopRow(timeWidth: 104, exportWidth: 148)
+          iosControlTopRow(timeWidth: 86, exportWidth: 120)
+        }
+        .frame(minWidth: max(0, metrics.size.width - metrics.safeHorizontalInset * 2), alignment: .leading)
+      }
+      .scrollIndicators(.hidden)
+      .contentMargins(.horizontal, metrics.safeHorizontalInset, for: .scrollContent)
+
+      if metrics.isCompactPhoneLandscape {
+        compactBottomDock
+      } else {
+        regularBottomDock
+      }
+    }
+    .padding(.horizontal, horizontalPadding)
+    .padding(.vertical, verticalPadding)
+    .frame(maxWidth: .infinity, minHeight: metrics.controlDockHeight, maxHeight: metrics.controlDockHeight, alignment: .topLeading)
+    .teslaCamCard()
+    .sheet(isPresented: $isClipDetailsPresented) {
+      IOSClipDetailsSheet(state: state, playbackUI: playbackUI, statusText: selectedSpanSummary)
+        .preferredTeslaCamColorScheme()
+    }
+    .onAppear(perform: syncTrimInputs)
+    .onChange(of: state.trimStartSeconds) {
+      guard focusedTrimField != .start else { return }
+      trimStartInput = formatHMS(state.trimStartSeconds)
+    }
+    .onChange(of: state.trimEndSeconds) {
+      guard focusedTrimField != .end else { return }
+      trimEndInput = formatHMS(state.trimEndSeconds)
+    }
+    .onChange(of: focusedTrimField) {
+      let newValue = focusedTrimField
+      if lastFocusedTrimField == .start, newValue != .start {
+        commitTrimStartInput()
+      }
+      if lastFocusedTrimField == .end, newValue != .end {
+        commitTrimEndInput()
+      }
+      lastFocusedTrimField = newValue
+    }
+  }
+
+  private var iosTimelineDock: some View {
+    VStack(alignment: .leading, spacing: timelineSpacing) {
+      TimelineSelectionTrack(
+        currentSeconds: playbackSecondsBinding,
+        selectedStartSeconds: $state.trimStartSeconds,
+        selectedEndSeconds: $state.trimEndSeconds,
+        gapRanges: state.timelineGapRanges,
+        totalDuration: max(state.totalDuration, 1),
+        onSeekStart: { state.beginSeek() },
+        onSeekChange: { state.liveSeek(to: $0) },
+        onSeekEnd: { state.endSeek() },
+        onDragStart: { state.beginTrimDrag() },
+        onDragChange: { start, end in state.updateTrimRange(startSeconds: start, endSeconds: end) },
+        onDragEnd: { start, end in state.endTrimDrag(startSeconds: start, endSeconds: end) }
+      )
+      .frame(height: metrics.isCompactPhoneLandscape ? 30 : 36)
+
+      HStack(spacing: 0) {
+        Text(formatHMS(0))
+          .frame(width: metrics.isCompactPhoneLandscape ? 58 : 72, alignment: .leading)
+        ForEach(recordedTickFractions, id: \.self) { fraction in
+          Text(formatHMS(state.totalDuration * fraction))
+            .frame(maxWidth: .infinity)
+        }
+        Text(formatHMS(state.totalDuration))
+          .frame(width: metrics.isCompactPhoneLandscape ? 58 : 72, alignment: .trailing)
+      }
+      .font(TeslaCamTheme.Typography.monoSmall)
+      .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+      .padding(.horizontal, metrics.isCompactPhoneLandscape ? 12 : 20)
+    }
+  }
+
+  private var compactBottomDock: some View {
+    HStack(alignment: .top, spacing: TeslaCamTheme.Spacing.tightGap) {
+      MacCameraToggleGrid(state: state)
+        .frame(width: state.camerasDetected.count > 4 ? 214 : 136, alignment: .topLeading)
+
+      MacRangeGrid(state: state)
+        .frame(width: 112, alignment: .topLeading)
+
+      IOSClipSummaryBar(
+        state: state,
+        playbackUI: playbackUI,
+        statusText: selectedSpanSummary,
+        detailsAction: { isClipDetailsPresented = true }
+      )
+      .frame(minWidth: 230, maxWidth: .infinity, alignment: .topLeading)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private var regularBottomDock: some View {
+    HStack(alignment: .top, spacing: TeslaCamTheme.Spacing.s) {
+      MacCameraToggleGrid(state: state)
+        .frame(width: state.camerasDetected.count > 4 ? 242 : 156, alignment: .topLeading)
+
+      MacRangeGrid(state: state)
+        .frame(width: 124, alignment: .topLeading)
+
+      ClipInformationPanel(
+        state: state,
+        playbackUI: playbackUI,
+        statusText: selectedSpanSummary
+      )
+      .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+  }
+
+  private func iosControlTopRow(timeWidth: CGFloat, exportWidth: CGFloat) -> some View {
+    HStack(spacing: TeslaCamTheme.Spacing.s) {
+      iosTrimInputField("In", text: $trimStartInput, field: .start, width: timeWidth)
+
+      transportButtonCluster
+
+      iosTrimInputField("Out", text: $trimEndInput, field: .end, width: timeWidth)
+
+      inOutCluster
+
+      codecPickerField
+
+      Button {
+        state.exportRange()
+      } label: {
+        Label(exportButtonTitle, systemImage: "square.and.arrow.up")
+      }
+      .buttonStyle(PrimaryButtonStyle(fixedWidth: exportWidth))
+      .disabled(state.clipSets.isEmpty || state.exporter.isExporting)
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(exportButtonTitle)
+      .accessibilityIdentifier("export-video")
+    }
+  }
+
+  private var transportButtonCluster: some View {
+    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+      Button {
+        state.stepPlayback(by: -5)
+      } label: {
+        Label("Back 5 seconds", systemImage: "gobackward.5")
+          .labelStyle(.iconOnly)
+      }
+      .buttonStyle(IconButtonStyle())
+      .disabled(state.clipSets.isEmpty)
+      .accessibilityLabel("Back 5 seconds")
+      .accessibilityIdentifier("step-back-5")
+
+      Button {
+        state.togglePlay()
+      } label: {
+        Label(
+          playback.isPlaying ? "Pause" : "Play",
+          systemImage: playback.isPlaying ? "pause.fill" : "play.fill"
+        )
+        .labelStyle(.iconOnly)
+      }
+      .buttonStyle(IconButtonStyle(prominent: true))
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
+      .accessibilityValue(playback.isPlaying ? "playing" : "paused")
+      .accessibilityIdentifier("toggle-playback")
+
+      Button {
+        state.stepPlayback(by: 5)
+      } label: {
+        Label("Forward 5 seconds", systemImage: "goforward.5")
+          .labelStyle(.iconOnly)
+      }
+      .buttonStyle(IconButtonStyle())
+      .disabled(state.clipSets.isEmpty)
+      .accessibilityLabel("Forward 5 seconds")
+      .accessibilityIdentifier("step-forward-5")
+    }
+  }
+
+  private var inOutCluster: some View {
+    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+      Button("In") { state.setTrimStartAtPlayhead() }
+        .buttonStyle(QuickActionButtonStyle())
+        .disabled(state.clipSets.isEmpty)
+        .accessibilityLabel("Set export start to playhead")
+        .accessibilityIdentifier("set-trim-start-at-playhead")
+
+      Button("Out") { state.setTrimEndAtPlayhead() }
+        .buttonStyle(QuickActionButtonStyle())
+        .disabled(state.clipSets.isEmpty)
+        .accessibilityLabel("Set export end to playhead")
+        .accessibilityIdentifier("set-trim-end-at-playhead")
+    }
+  }
+
+  private func iosTrimInputField(_ title: String, text: Binding<String>, field: TrimField, width: CGFloat) -> some View {
+    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+      Text(title.uppercased())
+        .font(TeslaCamTheme.Typography.label)
+        .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+      TextField(title, text: text)
+        .textFieldStyle(.plain)
+        .keyboardType(.numbersAndPunctuation)
+        .font(TeslaCamTheme.Typography.monoDetail)
+        .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+        .multilineTextAlignment(.leading)
+        .focused($focusedTrimField, equals: field)
+        .onSubmit {
+          switch field {
+          case .start:
+            commitTrimStartInput()
+          case .end:
+            commitTrimEndInput()
+          }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+    }
+    .padding(.horizontal, TeslaCamTheme.Spacing.s)
+    .frame(width: width, height: TeslaCamTheme.Metrics.compactControlHeight, alignment: .leading)
+    .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
+  }
+
+  private var codecPickerField: some View {
+    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+      Text("Codec".uppercased())
+        .font(TeslaCamTheme.Typography.label)
+        .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+
+      Picker("", selection: exportPresetBinding) {
+        Text("H.265").tag(ExportPreset.maxQualityHEVC)
+        Text("H.264").tag(ExportPreset.maxQualityH264)
+      }
+      .labelsHidden()
+      .pickerStyle(.segmented)
+      .frame(width: metrics.isCompactPhoneLandscape ? 116 : 132)
+    }
+  }
+
+  private var exportPresetBinding: Binding<ExportPreset> {
+    Binding(
+      get: { state.exportPreset == .maxQualityH264 ? .maxQualityH264 : .maxQualityHEVC },
+      set: { state.setExportPreset($0) }
+    )
+  }
+
+  private func syncTrimInputs() {
+    trimStartInput = formatHMS(state.trimStartSeconds)
+    trimEndInput = formatHMS(state.trimEndSeconds)
+  }
+
+  private func commitTrimStartInput() {
+    _ = state.applyTrimStartInput(trimStartInput)
+    trimStartInput = formatHMS(state.trimStartSeconds)
+  }
+
+  private func commitTrimEndInput() {
+    _ = state.applyTrimEndInput(trimEndInput)
+    trimEndInput = formatHMS(state.trimEndSeconds)
+  }
+
+  private var playbackSecondsBinding: Binding<Double> {
+    Binding(
+      get: { playbackUI.currentSeconds },
+      set: { playbackUI.currentSeconds = $0 }
+    )
+  }
+
+  private var selectedSpanSummary: String {
+    "\(formatHMS(state.selectedTrimDuration)) • \(state.selectedSetsForExport.count) spans"
+  }
+
+  private var recordedTickFractions: [Double] {
+    metrics.isCompactPhoneLandscape ? [0.25, 0.5, 0.75] : [0.2, 0.4, 0.6, 0.8]
+  }
+
+  private var exportButtonTitle: String {
+    "Export"
+  }
+
+  private var horizontalPadding: CGFloat {
+    metrics.isCompactPhoneLandscape ? TeslaCamTheme.Spacing.xs : TeslaCamTheme.Metrics.cardPaddingCompact
+  }
+
+  private var verticalPadding: CGFloat {
+    metrics.isCompactPhoneLandscape ? TeslaCamTheme.Spacing.xs : TeslaCamTheme.Metrics.cardPaddingCompact
+  }
+
+  private var dockSpacing: CGFloat {
+    metrics.isCompactPhoneLandscape ? 4 : TeslaCamTheme.Spacing.s
+  }
+
+  private var timelineSpacing: CGFloat {
+    metrics.isCompactPhoneLandscape ? 2 : TeslaCamTheme.Spacing.s
+  }
+
+  private enum TrimField: Hashable {
+    case start
+    case end
+  }
+}
+
+private struct IOSClipSummaryBar: View {
+  @ObservedObject var state: AppState
+  @ObservedObject var playbackUI: PlaybackUIState
+  let statusText: String
+  let detailsAction: () -> Void
+
+  var body: some View {
+    HStack(spacing: TeslaCamTheme.Spacing.s) {
+      VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.xs) {
+        Text("Clip summary".uppercased())
+          .font(TeslaCamTheme.Typography.label)
+          .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+
+        Text(primarySummary)
+          .font(TeslaCamTheme.Typography.monoSmall)
+          .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.62)
+
+        Text(secondarySummary)
+          .font(TeslaCamTheme.Typography.monoSmall)
+          .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.62)
+      }
+
+      Spacer(minLength: 0)
+
+      Button("Details", action: detailsAction)
+        .buttonStyle(QuickActionButtonStyle())
+        .accessibilityIdentifier("clip-details")
+    }
+    .padding(.horizontal, TeslaCamTheme.Spacing.s)
+    .padding(.vertical, TeslaCamTheme.Spacing.s)
+    .frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
+    .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
+  }
+
+  private var primarySummary: String {
+    let time = playbackUI.overlayText.isEmpty ? "--" : playbackUI.overlayText
+    let speed = telemetryModel?.speedText(unit: state.exportOverlayOptions.speedUnit) ?? "No speed"
+    return "\(time) • \(speed)"
+  }
+
+  private var secondarySummary: String {
+    let gps = telemetryModel?.locationText ?? "No GPS"
+    return "\(statusText) • \(gps) • \(coverageText)"
+  }
+
+  private var telemetryModel: TelemetryDisplayModel? {
+    state.privacyMode ? nil : state.telemetryModel
+  }
+
+  private var exportHUDText: String {
+    state.effectiveExportOverlayOptions.telemetryHUD ? "Engraved" : "Preview only"
+  }
+
+  private var coverageText: String {
+    "G\(state.timelineGapRanges.count) P\(state.partialSelectedSetCount) H\(state.hiddenExportCameraNames.count) \(exportHUDText)"
+  }
+}
+
+private struct IOSClipDetailsSheet: View {
+  @ObservedObject var state: AppState
+  @ObservedObject var playbackUI: PlaybackUIState
+  let statusText: String
+
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        ClipInformationPanel(state: state, playbackUI: playbackUI, statusText: statusText)
+          .padding(TeslaCamTheme.Spacing.m)
+      }
+      .background(TeslaCamTheme.Colors.background)
+      .navigationTitle("Clip Details")
+      .navigationBarTitleDisplayMode(.inline)
+    }
+    .presentationDetents([.medium, .large])
   }
 }
 

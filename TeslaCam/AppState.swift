@@ -514,7 +514,14 @@ final class AppState: ObservableObject {
   func indexSources(_ urls: [URL], surfaceErrors: Bool = true) {
     guard !exporter.isExporting else { return }
     let normalizedSources = normalizeSources(urls)
-    guard !normalizedSources.isEmpty else { return }
+    guard !normalizedSources.isEmpty else {
+      if surfaceErrors {
+        errorMessage = "Couldn't open the selected folder. Pick the TeslaCam folder again from Files."
+        showError = true
+        debug("index failed: selected source was unreadable", category: "index")
+      }
+      return
+    }
     debug("index start: \(normalizedSources.map { $0.lastPathComponent }.joined(separator: ", "))", category: "index")
 
     let previousSources = sourceURLs
