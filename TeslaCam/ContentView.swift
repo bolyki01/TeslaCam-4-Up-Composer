@@ -7,12 +7,18 @@ import UIKit
 struct ContentView: View {
   @EnvironmentObject var state: AppState
   @State private var isDropTarget = false
+  #if os(iOS)
+  @Environment(\.verticalSizeClass) private var verticalSizeClass
+  #endif
 
   var body: some View {
     platformContent
       .preferredTeslaCamColorScheme()
       #if os(iOS)
-      .statusBarHidden(true)
+      // Hide the status bar only in landscape (no room / no Dynamic Island reserve
+      // needed there). In portrait, keep it visible so the system reserves the
+      // Dynamic Island region and content is inset below it.
+      .statusBarHidden(verticalSizeClass == .compact)
       #endif
       .onAppear { state.onAppear() }
       .alert("Error", isPresented: $state.showError) {
@@ -236,169 +242,71 @@ private struct CommandChip: View {
 
 private struct IOSContentView: View {
   @ObservedObject var state: AppState
+  @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
   var body: some View {
     GeometryReader { proxy in
-      ZStack {
-        TeslaCamSceneBackground()
-
-        Group {
-          if proxy.size.height > proxy.size.width {
-            IPadLandscapeLockScreen()
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
-          } else if state.isIndexing {
-            IndexingScreen(state: state)
-          } else if state.clipSets.isEmpty {
-            OnboardingScreen(state: state)
-          } else {
-            IOSReviewWorkspace(
-              state: state,
-              playbackUI: state.playbackUI,
-              metrics: IOSWorkspaceMetrics(size: proxy.size, safeAreaInsets: proxy.safeAreaInsets)
-            )
-          }
+      // `proxy` (no ignoresSafeArea) is already the usable, island-free size — hand
+      // it straight to the workspace and let the scene background bleed behind via
+      // `.background()`'s own ignoresSafeArea. `isWide` picks the split-column vs
+      // vertical layout; it's a pure layout decision, not a safe-area hack.
+      let isWide = proxy.size.width > proxy.size.height
+      Group {
+        if state.isIndexing {
+          IndexingScreen(state: state)
+        } else if state.clipSets.isEmpty {
+          OnboardingScreen(state: state)
+        } else {
+          IOSWorkspace(
+            state: state,
+            playback: state.playback,
+            playbackUI: state.playbackUI,
+            size: proxy.size,
+            isWide: isWide,
+            horizontalSizeClass: horizontalSizeClass
+          )
         }
-        .disabled(state.exporter.isExporting)
-
+      }
+      .frame(width: proxy.size.width, height: proxy.size.height)
+      .disabled(state.exporter.isExporting)
+      .overlay {
         if let job = state.exporter.currentJob, state.exporter.isExporting || state.exporter.isStatusPresented {
           ExportOverlayCard(state: state, job: job)
         }
       }
     }
+    .background(TeslaCamSceneBackground())
   }
 }
 
-private struct IOSReviewWorkspace: View {
-  @ObservedObject var state: AppState
-  @ObservedObject var playbackUI: PlaybackUIState
-  let metrics: IOSWorkspaceMetrics
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: metrics.workspaceSpacing) {
-      PreviewPanelCard(
-        state: state,
-        playbackUI: playbackUI,
-        maxAvailableHeight: metrics.previewHeight,
-        usesCompactPhonePreview: metrics.isCompactPhoneLandscape
-      )
-
-      IOSControlDock(
-        state: state,
-        playback: state.playback,
-        playbackUI: playbackUI,
-        metrics: metrics,
-        timelineMarkers: timelineMarkers,
-        isSingleDayTimeline: isSingleDayTimeline
-      )
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    .padding(.top, metrics.topPadding)
-    .padding(.bottom, metrics.bottomPadding)
-    .padding(.horizontal, metrics.outerPadding)
-    .accessibilityIdentifier("loaded-screen")
-    .ignoresSafeArea(.container, edges: [.horizontal, .vertical])
-  }
-
-  private var timelineMarkers: [Date] {
-    guard let min = state.minDate, let max = state.maxDate else { return [] }
-    let interval = max.timeIntervalSince(min)
-    guard interval > 0 else { return [] }
-    return [0.2, 0.4, 0.6, 0.8].map { fraction in
-      min.addingTimeInterval(interval * fraction)
-    }
-  }
-
-  private var isSingleDayTimeline: Bool {
-    guard let min = state.minDate, let max = state.maxDate else { return true }
-    return Calendar.current.isDate(min, inSameDayAs: max)
-  }
-}
-
-private struct IOSWorkspaceMetrics {
-  let size: CGSize
-  let safeAreaInsets: EdgeInsets
-
-  var isCompactPhoneLandscape: Bool {
-    size.height < 520 || size.width < 900
-  }
-
-  var safeHorizontalInset: CGFloat {
-    isCompactPhoneLandscape ? max(safeAreaInsets.leading, safeAreaInsets.trailing, 10) : 0
-  }
-
-  var outerPadding: CGFloat {
-    isCompactPhoneLandscape ? 0 : TeslaCamTheme.Spacing.m
-  }
-
-  var topPadding: CGFloat {
-    isCompactPhoneLandscape ? 0 : TeslaCamTheme.Spacing.m
-  }
-
-  var bottomPadding: CGFloat {
-    isCompactPhoneLandscape ? 0 : TeslaCamTheme.Spacing.m
-  }
-
-  var workspaceSpacing: CGFloat {
-    size.height < 520 ? 4 : TeslaCamTheme.Spacing.xs
-  }
-
-  var controlDockHeight: CGFloat {
-    if isCompactPhoneLandscape {
-      return 268
-    }
-    if size.width < 900 {
-      return 244
-    }
-    return 252
-  }
-
-  var previewHeight: CGFloat {
-    let minimumPreviewHeight: CGFloat = size.height < 520 ? 132 : 172
-    return max(minimumPreviewHeight, size.height - topPadding - bottomPadding - controlDockHeight - workspaceSpacing)
-  }
-}
-
-private struct IOSControlDock: View {
+/// The single adaptive iOS/iPadOS workspace over the shared core. In a compact
+/// (portrait) width it's a vertical scroll of Teslatlas-styled sections with the
+/// export CTA pinned above the home indicator; in a wide (landscape / iPad) width
+/// it splits into a filling player on the left and a scrollable control column on
+/// the right. Safe areas are handled by the parent and standard containers — no
+/// manual inset math lives here.
+private struct IOSWorkspace: View {
   @ObservedObject var state: AppState
   @ObservedObject var playback: MultiCamPlaybackController
   @ObservedObject var playbackUI: PlaybackUIState
-  let metrics: IOSWorkspaceMetrics
-  let timelineMarkers: [Date]
-  let isSingleDayTimeline: Bool
+  let size: CGSize
+  let isWide: Bool
+  let horizontalSizeClass: UserInterfaceSizeClass?
+
   @State private var trimStartInput = ""
   @State private var trimEndInput = ""
-  @State private var isClipDetailsPresented = false
   @FocusState private var focusedTrimField: TrimField?
   @State private var lastFocusedTrimField: TrimField?
 
   var body: some View {
-    VStack(alignment: .leading, spacing: dockSpacing) {
-      iosTimelineDock
-
-      ScrollView(.horizontal, showsIndicators: false) {
-        ViewThatFits(in: .horizontal) {
-          iosControlTopRow(timeWidth: 104, exportWidth: 148)
-          iosControlTopRow(timeWidth: 86, exportWidth: 120)
-        }
-        .frame(minWidth: max(0, metrics.size.width - metrics.safeHorizontalInset * 2), alignment: .leading)
-      }
-      .scrollIndicators(.hidden)
-      .contentMargins(.horizontal, metrics.safeHorizontalInset, for: .scrollContent)
-
-      if metrics.isCompactPhoneLandscape {
-        compactBottomDock
+    Group {
+      if isWide {
+        wideBody
       } else {
-        regularBottomDock
+        compactBody
       }
     }
-    .padding(.horizontal, horizontalPadding)
-    .padding(.vertical, verticalPadding)
-    .frame(maxWidth: .infinity, minHeight: metrics.controlDockHeight, maxHeight: metrics.controlDockHeight, alignment: .topLeading)
-    .teslaCamCard()
-    .sheet(isPresented: $isClipDetailsPresented) {
-      IOSClipDetailsSheet(state: state, playbackUI: playbackUI, statusText: selectedSpanSummary)
-        .preferredTeslaCamColorScheme()
-    }
+    .accessibilityIdentifier("loaded-screen")
     .onAppear(perform: syncTrimInputs)
     .onChange(of: state.trimStartSeconds) {
       guard focusedTrimField != .start else { return }
@@ -410,168 +318,315 @@ private struct IOSControlDock: View {
     }
     .onChange(of: focusedTrimField) {
       let newValue = focusedTrimField
-      if lastFocusedTrimField == .start, newValue != .start {
-        commitTrimStartInput()
-      }
-      if lastFocusedTrimField == .end, newValue != .end {
-        commitTrimEndInput()
-      }
+      if lastFocusedTrimField == .start, newValue != .start { commitTrimStartInput() }
+      if lastFocusedTrimField == .end, newValue != .end { commitTrimEndInput() }
       lastFocusedTrimField = newValue
     }
   }
 
-  private var iosTimelineDock: some View {
-    VStack(alignment: .leading, spacing: timelineSpacing) {
-      TimelineSelectionTrack(
-        currentSeconds: playbackSecondsBinding,
-        selectedStartSeconds: $state.trimStartSeconds,
-        selectedEndSeconds: $state.trimEndSeconds,
-        gapRanges: state.timelineGapRanges,
-        totalDuration: max(state.totalDuration, 1),
-        onSeekStart: { state.beginSeek() },
-        onSeekChange: { state.liveSeek(to: $0) },
-        onSeekEnd: { state.endSeek() },
-        onDragStart: { state.beginTrimDrag() },
-        onDragChange: { start, end in state.updateTrimRange(startSeconds: start, endSeconds: end) },
-        onDragEnd: { start, end in state.endTrimDrag(startSeconds: start, endSeconds: end) }
-      )
-      .frame(height: metrics.isCompactPhoneLandscape ? 30 : 36)
+  // MARK: Compact (portrait) layout
 
-      HStack(spacing: 0) {
-        Text(formatHMS(0))
-          .frame(width: metrics.isCompactPhoneLandscape ? 58 : 72, alignment: .leading)
-        ForEach(recordedTickFractions, id: \.self) { fraction in
-          Text(formatHMS(state.totalDuration * fraction))
-            .frame(maxWidth: .infinity)
-        }
-        Text(formatHMS(state.totalDuration))
-          .frame(width: metrics.isCompactPhoneLandscape ? 58 : 72, alignment: .trailing)
+  private var compactBody: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.l) {
+        TeslaCamPageHeader(title: "TeslaCam", subtitle: headerSubtitle, subtitleSystemImage: "car.fill")
+          .teslaCamReveal(index: 0, trigger: revealTrigger)
+
+        PreviewPanelCard(
+          state: state,
+          playbackUI: playbackUI,
+          maxAvailableHeight: playerHeight,
+          usesCompactPhonePreview: true,
+          fixedHeight: playerHeight
+        )
+        .teslaCamReveal(index: 1, trigger: revealTrigger)
+
+        transportSection.teslaCamReveal(index: 2, trigger: revealTrigger)
+        scrubberSection.teslaCamReveal(index: 3, trigger: revealTrigger)
+        rangeSection.teslaCamReveal(index: 4, trigger: revealTrigger)
+        cameraSection.teslaCamReveal(index: 5, trigger: revealTrigger)
+        exportSection.teslaCamReveal(index: 6, trigger: revealTrigger)
       }
-      .font(TeslaCamTheme.Typography.monoSmall)
-      .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-      .padding(.horizontal, metrics.isCompactPhoneLandscape ? 12 : 20)
+      .frame(maxWidth: contentColumnWidth)
+      .frame(maxWidth: .infinity)
+      .padding(.horizontal, pagePadding)
+      .padding(.top, TeslaCamTheme.Spacing.s)
     }
+    .scrollIndicators(.hidden)
+    .scrollDismissesKeyboard(.interactively)
+    .safeAreaInset(edge: .bottom, spacing: 0) { exportCTABar }
   }
 
-  private var compactBottomDock: some View {
-    HStack(alignment: .top, spacing: TeslaCamTheme.Spacing.tightGap) {
-      MacCameraToggleGrid(state: state)
-        .frame(width: state.camerasDetected.count > 4 ? 214 : 136, alignment: .topLeading)
+  // MARK: Wide (landscape / iPad) layout
 
-      MacRangeGrid(state: state)
-        .frame(width: 112, alignment: .topLeading)
-
-      IOSClipSummaryBar(
+  private var wideBody: some View {
+    HStack(alignment: .top, spacing: TeslaCamTheme.Spacing.m) {
+      // Left: the player alone fills the whole column — the biggest possible
+      // cameras. All the controls live in the column on the right.
+      PreviewPanelCard(
         state: state,
         playbackUI: playbackUI,
-        statusText: selectedSpanSummary,
-        detailsAction: { isClipDetailsPresented = true }
+        maxAvailableHeight: 0,
+        fillsContainer: true
       )
-      .frame(minWidth: 230, maxWidth: .infinity, alignment: .topLeading)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+      // Right: transport pinned at the top (always reachable), then the scrollable
+      // controls, then the export CTA pinned at the base — no dead space.
+      VStack(spacing: TeslaCamTheme.Spacing.s) {
+        transportSection
+
+        ScrollView {
+          VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.m) {
+            scrubberSection
+            rangeSection
+            cameraSection
+            exportSection
+          }
+          .padding(.bottom, TeslaCamTheme.Spacing.s)
+        }
+        .scrollIndicators(.hidden)
+        .scrollDismissesKeyboard(.interactively)
+
+        wideExportButton
+      }
+      .frame(width: controlColumnWidth)
+      .frame(maxHeight: .infinity, alignment: .top)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .padding(.horizontal, pagePadding)
+    .padding(.top, TeslaCamTheme.Spacing.s)
+    .padding(.bottom, TeslaCamTheme.Spacing.s)
   }
 
-  private var regularBottomDock: some View {
-    HStack(alignment: .top, spacing: TeslaCamTheme.Spacing.s) {
-      MacCameraToggleGrid(state: state)
-        .frame(width: state.camerasDetected.count > 4 ? 242 : 156, alignment: .topLeading)
-
-      MacRangeGrid(state: state)
-        .frame(width: 124, alignment: .topLeading)
-
-      ClipInformationPanel(
-        state: state,
-        playbackUI: playbackUI,
-        statusText: selectedSpanSummary
-      )
-      .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-  }
-
-  private func iosControlTopRow(timeWidth: CGFloat, exportWidth: CGFloat) -> some View {
-    HStack(spacing: TeslaCamTheme.Spacing.s) {
-      iosTrimInputField("In", text: $trimStartInput, field: .start, width: timeWidth)
-
-      transportButtonCluster
-
-      iosTrimInputField("Out", text: $trimEndInput, field: .end, width: timeWidth)
-
-      inOutCluster
-
-      codecPickerField
-
+  private var wideExportButton: some View {
+    VStack(spacing: TeslaCamTheme.Spacing.s) {
+      Rectangle()
+        .fill(TeslaCamTheme.Colors.stroke)
+        .frame(height: 1)
       Button {
         state.exportRange()
       } label: {
         Label(exportButtonTitle, systemImage: "square.and.arrow.up")
       }
-      .buttonStyle(PrimaryButtonStyle(fixedWidth: exportWidth))
+      .buttonStyle(TeslaCamCTAButtonStyle())
       .disabled(state.clipSets.isEmpty || state.exporter.isExporting)
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel(exportButtonTitle)
       .accessibilityIdentifier("export-video")
     }
+    .padding(.top, TeslaCamTheme.Spacing.s)
   }
 
-  private var transportButtonCluster: some View {
-    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
-      Button {
-        state.stepPlayback(by: -5)
-      } label: {
-        Label("Back 5 seconds", systemImage: "gobackward.5")
-          .labelStyle(.iconOnly)
-      }
-      .buttonStyle(IconButtonStyle())
-      .disabled(state.clipSets.isEmpty)
-      .accessibilityLabel("Back 5 seconds")
-      .accessibilityIdentifier("step-back-5")
+  // MARK: Sections
 
-      Button {
-        state.togglePlay()
-      } label: {
-        Label(
-          playback.isPlaying ? "Pause" : "Play",
-          systemImage: playback.isPlaying ? "pause.fill" : "play.fill"
+  private var transportSection: some View {
+    HStack(spacing: 0) {
+      // Balance the row so the transport cluster is optically centered while the
+      // rate chip sits on the trailing edge.
+      Color.clear.frame(width: 56, height: 1)
+      Spacer(minLength: 0)
+      HStack(spacing: TeslaCamTheme.Spacing.xl) {
+        transportButton("gobackward.5", label: "Back 5 seconds", id: "step-back-5") { state.stepPlayback(by: -5) }
+        transportButton(
+          playback.isPlaying ? "pause.fill" : "play.fill",
+          label: playback.isPlaying ? "Pause" : "Play",
+          id: "toggle-playback",
+          prominent: true
+        ) { state.togglePlay() }
+        transportButton("goforward.5", label: "Forward 5 seconds", id: "step-forward-5") { state.stepPlayback(by: 5) }
+      }
+      Spacer(minLength: 0)
+      rateChip
+    }
+    .padding(.vertical, TeslaCamTheme.Spacing.xs)
+  }
+
+  private var scrubberSection: some View {
+    TeslaCamSectionCard(title: "Timeline", systemImage: "timeline.selection") {
+      VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.s) {
+        HStack {
+          Text(formatHMS(playbackUI.currentSeconds))
+            .font(TeslaCamTheme.Typography.numericLarge)
+            .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
+          Spacer()
+          Text(formatHMS(state.totalDuration))
+            .font(TeslaCamTheme.Typography.numericBody)
+            .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+        }
+
+        TimelineSelectionTrack(
+          currentSeconds: playbackSecondsBinding,
+          selectedStartSeconds: $state.trimStartSeconds,
+          selectedEndSeconds: $state.trimEndSeconds,
+          gapRanges: state.timelineGapRanges,
+          totalDuration: max(state.totalDuration, 1),
+          onSeekStart: { state.beginSeek() },
+          onSeekChange: { state.liveSeek(to: $0) },
+          onSeekEnd: { state.endSeek() },
+          onDragStart: { state.beginTrimDrag() },
+          onDragChange: { start, end in state.updateTrimRange(startSeconds: start, endSeconds: end) },
+          onDragEnd: { start, end in state.endTrimDrag(startSeconds: start, endSeconds: end) }
         )
-        .labelStyle(.iconOnly)
+        .frame(height: 44)
       }
-      .buttonStyle(IconButtonStyle(prominent: true))
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
-      .accessibilityValue(playback.isPlaying ? "playing" : "paused")
-      .accessibilityIdentifier("toggle-playback")
-
-      Button {
-        state.stepPlayback(by: 5)
-      } label: {
-        Label("Forward 5 seconds", systemImage: "goforward.5")
-          .labelStyle(.iconOnly)
-      }
-      .buttonStyle(IconButtonStyle())
-      .disabled(state.clipSets.isEmpty)
-      .accessibilityLabel("Forward 5 seconds")
-      .accessibilityIdentifier("step-forward-5")
     }
   }
 
-  private var inOutCluster: some View {
-    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
-      Button("In") { state.setTrimStartAtPlayhead() }
-        .buttonStyle(QuickActionButtonStyle())
-        .disabled(state.clipSets.isEmpty)
-        .accessibilityLabel("Set export start to playhead")
-        .accessibilityIdentifier("set-trim-start-at-playhead")
-
-      Button("Out") { state.setTrimEndAtPlayhead() }
-        .buttonStyle(QuickActionButtonStyle())
-        .disabled(state.clipSets.isEmpty)
-        .accessibilityLabel("Set export end to playhead")
-        .accessibilityIdentifier("set-trim-end-at-playhead")
+  private var rangeSection: some View {
+    TeslaCamSectionCard(title: "Export range", systemImage: "scissors") {
+      VStack(spacing: TeslaCamTheme.Spacing.s) {
+        HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+          rangeButton("All", "arrow.left.and.right", id: "range-whole-timeline") { state.setFullRange() }
+          rangeButton("1m", "clock", id: "range-current-minute") { state.setCurrentMinuteRange() }
+          rangeButton("5m", "clock.arrow.circlepath", id: "range-last-5m") { state.setRecentRange(minutes: 5) }
+          rangeButton("15m", "clock.badge", id: "range-last-15m") { state.setRecentRange(minutes: 15) }
+        }
+        HStack(spacing: TeslaCamTheme.Spacing.s) {
+          trimField("In", text: $trimStartInput, field: .start)
+          Button("At playhead") { state.setTrimStartAtPlayhead() }
+            .buttonStyle(QuickActionButtonStyle())
+            .disabled(state.clipSets.isEmpty)
+            .accessibilityLabel("Set export start to playhead")
+            .accessibilityIdentifier("set-trim-start-at-playhead")
+        }
+        HStack(spacing: TeslaCamTheme.Spacing.s) {
+          trimField("Out", text: $trimEndInput, field: .end)
+          Button("At playhead") { state.setTrimEndAtPlayhead() }
+            .buttonStyle(QuickActionButtonStyle())
+            .disabled(state.clipSets.isEmpty)
+            .accessibilityLabel("Set export end to playhead")
+            .accessibilityIdentifier("set-trim-end-at-playhead")
+        }
+      }
     }
   }
 
-  private func iosTrimInputField(_ title: String, text: Binding<String>, field: TrimField, width: CGFloat) -> some View {
+  private var cameraSection: some View {
+    TeslaCamSectionCard(title: "Cameras", systemImage: "camera") {
+      MacCameraToggleGrid(state: state)
+    }
+  }
+
+  private var exportSection: some View {
+    TeslaCamSectionCard(title: "Export", systemImage: "square.and.arrow.up") {
+      VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.m) {
+        HStack(spacing: TeslaCamTheme.Spacing.s) {
+          Text("CODEC")
+            .font(TeslaCamTheme.Typography.label)
+            .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+            .tracking(0.6)
+          Spacer(minLength: TeslaCamTheme.Spacing.s)
+          TeslaCamPillPicker(
+            options: [
+              TeslaCamPillOption(ExportPreset.maxQualityHEVC, "H.265"),
+              TeslaCamPillOption(ExportPreset.maxQualityH264, "H.264")
+            ],
+            selection: exportPresetBinding,
+            accessibilityLabel: "Export codec"
+          )
+          .frame(width: 168)
+          .accessibilityIdentifier("export-codec-picker")
+        }
+
+        Toggle(isOn: $state.exportOverlayOptions.telemetryHUD) {
+          Text("Engrave telemetry")
+            .font(TeslaCamTheme.Typography.bodySmall)
+            .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
+        }
+        .toggleStyle(.switch)
+        .tint(TeslaCamTheme.Colors.accent)
+        .accessibilityIdentifier("engrave-telemetry-toggle")
+        .accessibilityHint("Burns the telemetry HUD into the exported video. Off keeps a lossless, faster muxed copy.")
+
+        HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
+          RoundedRectangle(cornerRadius: 2, style: .continuous)
+            .fill(TeslaCamTheme.Colors.accent)
+            .frame(width: 6, height: 6)
+          Text(state.exportModeCaption)
+            .font(TeslaCamTheme.Typography.monoSmall)
+            .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+            .lineLimit(2)
+        }
+      }
+    }
+  }
+
+  private var exportCTABar: some View {
+    Button {
+      state.exportRange()
+    } label: {
+      Label(exportButtonTitle, systemImage: "square.and.arrow.up")
+    }
+    .buttonStyle(TeslaCamCTAButtonStyle())
+    .disabled(state.clipSets.isEmpty || state.exporter.isExporting)
+    .accessibilityIdentifier("export-video")
+    .frame(maxWidth: contentColumnWidth)
+    .frame(maxWidth: .infinity)
+    .padding(.horizontal, pagePadding)
+    .padding(.top, TeslaCamTheme.Spacing.s)
+    .padding(.bottom, TeslaCamTheme.Spacing.s)
+    .background(alignment: .top) {
+      ZStack(alignment: .top) {
+        TeslaCamTheme.Colors.overlaySurfaceStrong.opacity(0.9)
+        Rectangle()
+          .fill(TeslaCamTheme.Colors.stroke)
+          .frame(height: 1)
+      }
+      .ignoresSafeArea(.container, edges: .bottom)
+    }
+  }
+
+  // MARK: Reusable controls
+
+  private func transportButton(_ system: String, label: String, id: String, prominent: Bool = false, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      Image(systemName: system)
+        .font(.system(size: prominent ? 24 : 18, weight: .semibold))
+        .foregroundStyle(prominent ? Color.white : TeslaCamTheme.Colors.textPrimary)
+        .frame(width: prominent ? 64 : 52, height: prominent ? 64 : 52)
+        .background(
+          Circle().fill(prominent ? TeslaCamTheme.Colors.accent : TeslaCamTheme.Colors.surfaceElevated)
+        )
+        .overlay(Circle().stroke(TeslaCamTheme.Colors.stroke, lineWidth: prominent ? 0 : 1))
+    }
+    .buttonStyle(.plain)
+    .disabled(state.clipSets.isEmpty)
+    .accessibilityLabel(label)
+    .accessibilityIdentifier(id)
+  }
+
+  private var rateChip: some View {
+    Button {
+      state.cyclePlaybackRate()
+    } label: {
+      Text(rateText)
+        .font(TeslaCamTheme.Typography.monoDetail.weight(.semibold))
+        .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
+        .frame(width: 56, height: 44)
+        .glassSurface(role: .control, radius: TeslaCamTheme.Metrics.compactCorner)
+    }
+    .buttonStyle(.plain)
+    .disabled(state.clipSets.isEmpty)
+    .accessibilityLabel("Playback speed")
+    .accessibilityValue(rateText)
+  }
+
+  private func rangeButton(_ title: String, _ system: String, id: String, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      VStack(spacing: 3) {
+        Image(systemName: system).font(.system(size: 14, weight: .semibold))
+        Text(title).font(.system(size: 11, weight: .semibold))
+      }
+      .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
+      .frame(maxWidth: .infinity)
+      .frame(height: 48)
+      .glassSurface(role: .control, radius: TeslaCamTheme.Metrics.compactCorner)
+    }
+    .buttonStyle(.plain)
+    .disabled(state.clipSets.isEmpty)
+    .accessibilityLabel(title)
+    .accessibilityIdentifier(id)
+  }
+
+  private func trimField(_ title: String, text: Binding<String>, field: TrimField) -> some View {
     HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
       Text(title.uppercased())
         .font(TeslaCamTheme.Typography.label)
@@ -581,44 +636,77 @@ private struct IOSControlDock: View {
         .keyboardType(.numbersAndPunctuation)
         .font(TeslaCamTheme.Typography.monoDetail)
         .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-        .multilineTextAlignment(.leading)
         .focused($focusedTrimField, equals: field)
         .onSubmit {
-          switch field {
-          case .start:
-            commitTrimStartInput()
-          case .end:
-            commitTrimEndInput()
-          }
+          if field == .start { commitTrimStartInput() } else { commitTrimEndInput() }
         }
         .lineLimit(1)
         .minimumScaleFactor(0.72)
     }
-    .padding(.horizontal, TeslaCamTheme.Spacing.s)
-    .frame(width: width, height: TeslaCamTheme.Metrics.compactControlHeight, alignment: .leading)
-    .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
+    .padding(.horizontal, TeslaCamTheme.Spacing.m)
+    .frame(height: 44)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .glassSurface(role: .control, radius: TeslaCamTheme.Metrics.controlCorner)
   }
 
-  private var codecPickerField: some View {
-    HStack(spacing: TeslaCamTheme.Spacing.tightGap) {
-      Text("Codec".uppercased())
-        .font(TeslaCamTheme.Typography.label)
-        .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
+  // MARK: Derived values
 
-      Picker("", selection: exportPresetBinding) {
-        Text("H.265").tag(ExportPreset.maxQualityHEVC)
-        Text("H.264").tag(ExportPreset.maxQualityH264)
-      }
-      .labelsHidden()
-      .pickerStyle(.segmented)
-      .frame(width: metrics.isCompactPhoneLandscape ? 116 : 132)
-    }
+  private var isPad: Bool { horizontalSizeClass == .regular }
+
+  private var pagePadding: CGFloat {
+    isPad ? TeslaCamTheme.Spacing.screen : TeslaCamTheme.Spacing.screenCompact
+  }
+
+  private var contentColumnWidth: CGFloat {
+    isPad ? TeslaCamTheme.Layout.contentMaxWidth : .infinity
+  }
+
+  /// Width of the control column in the wide (landscape / iPad) layout. The player
+  /// takes all the rest, so keep this as narrow as the controls allow.
+  private var controlColumnWidth: CGFloat {
+    min(max(320, size.width * 0.32), 420)
+  }
+
+  private var contentWidth: CGFloat {
+    let column = isPad ? min(size.width, TeslaCamTheme.Layout.contentMaxWidth) : size.width
+    return max(0, column - pagePadding * 2)
+  }
+
+  private var playerHeight: CGFloat {
+    let aspect: CGFloat = state.camerasDetected.count > 4 ? 1.85 : 1.5
+    let ideal = contentWidth / aspect
+    return min(max(190, ideal), size.height * 0.5)
+  }
+
+  private var revealTrigger: String { state.rootURL?.path ?? "demo" }
+
+  private var headerSubtitle: String {
+    let cams = state.camerasDetected.count
+    let camText = "\(cams) camera\(cams == 1 ? "" : "s")"
+    return "\(camText) · \(formatHMS(state.totalDuration))"
+  }
+
+  private var rateText: String {
+    let rate = state.playbackRate
+    let value = (rate == rate.rounded()) ? String(Int(rate)) : String(format: "%g", rate)
+    return value + "×"
+  }
+
+  private var exportButtonTitle: String {
+    state.exporter.isExporting ? "Exporting…" : "Export video"
   }
 
   private var exportPresetBinding: Binding<ExportPreset> {
     Binding(
       get: { state.exportPreset == .maxQualityH264 ? .maxQualityH264 : .maxQualityHEVC },
       set: { state.setExportPreset($0) }
+    )
+  }
+
+  private var playbackSecondsBinding: Binding<Double> {
+    Binding(
+      get: { playbackUI.currentSeconds },
+      set: { playbackUI.currentSeconds = $0 }
     )
   }
 
@@ -637,145 +725,9 @@ private struct IOSControlDock: View {
     trimEndInput = formatHMS(state.trimEndSeconds)
   }
 
-  private var playbackSecondsBinding: Binding<Double> {
-    Binding(
-      get: { playbackUI.currentSeconds },
-      set: { playbackUI.currentSeconds = $0 }
-    )
-  }
-
-  private var selectedSpanSummary: String {
-    "\(formatHMS(state.selectedTrimDuration)) • \(state.selectedSetsForExport.count) spans"
-  }
-
-  private var recordedTickFractions: [Double] {
-    metrics.isCompactPhoneLandscape ? [0.25, 0.5, 0.75] : [0.2, 0.4, 0.6, 0.8]
-  }
-
-  private var exportButtonTitle: String {
-    "Export"
-  }
-
-  private var horizontalPadding: CGFloat {
-    metrics.isCompactPhoneLandscape ? TeslaCamTheme.Spacing.xs : TeslaCamTheme.Metrics.cardPaddingCompact
-  }
-
-  private var verticalPadding: CGFloat {
-    metrics.isCompactPhoneLandscape ? TeslaCamTheme.Spacing.xs : TeslaCamTheme.Metrics.cardPaddingCompact
-  }
-
-  private var dockSpacing: CGFloat {
-    metrics.isCompactPhoneLandscape ? 4 : TeslaCamTheme.Spacing.s
-  }
-
-  private var timelineSpacing: CGFloat {
-    metrics.isCompactPhoneLandscape ? 2 : TeslaCamTheme.Spacing.s
-  }
-
   private enum TrimField: Hashable {
     case start
     case end
-  }
-}
-
-private struct IOSClipSummaryBar: View {
-  @ObservedObject var state: AppState
-  @ObservedObject var playbackUI: PlaybackUIState
-  let statusText: String
-  let detailsAction: () -> Void
-
-  var body: some View {
-    HStack(spacing: TeslaCamTheme.Spacing.s) {
-      VStack(alignment: .leading, spacing: TeslaCamTheme.Spacing.xs) {
-        Text("Clip summary".uppercased())
-          .font(TeslaCamTheme.Typography.label)
-          .foregroundStyle(TeslaCamTheme.Colors.textTertiary)
-
-        Text(primarySummary)
-          .font(TeslaCamTheme.Typography.monoSmall)
-          .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
-          .lineLimit(1)
-          .minimumScaleFactor(0.62)
-
-        Text(secondarySummary)
-          .font(TeslaCamTheme.Typography.monoSmall)
-          .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-          .lineLimit(1)
-          .minimumScaleFactor(0.62)
-      }
-
-      Spacer(minLength: 0)
-
-      Button("Details", action: detailsAction)
-        .buttonStyle(QuickActionButtonStyle())
-        .accessibilityIdentifier("clip-details")
-    }
-    .padding(.horizontal, TeslaCamTheme.Spacing.s)
-    .padding(.vertical, TeslaCamTheme.Spacing.s)
-    .frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
-    .teslaCamCard(fill: TeslaCamTheme.Colors.surface, radius: TeslaCamTheme.Metrics.controlCorner)
-  }
-
-  private var primarySummary: String {
-    let time = playbackUI.overlayText.isEmpty ? "--" : playbackUI.overlayText
-    let speed = telemetryModel?.speedText(unit: state.exportOverlayOptions.speedUnit) ?? "No speed"
-    return "\(time) • \(speed)"
-  }
-
-  private var secondarySummary: String {
-    let gps = telemetryModel?.locationText ?? "No GPS"
-    return "\(statusText) • \(gps) • \(coverageText)"
-  }
-
-  private var telemetryModel: TelemetryDisplayModel? {
-    state.privacyMode ? nil : state.telemetryModel
-  }
-
-  private var exportHUDText: String {
-    state.effectiveExportOverlayOptions.telemetryHUD ? "Engraved" : "Preview only"
-  }
-
-  private var coverageText: String {
-    "G\(state.timelineGapRanges.count) P\(state.partialSelectedSetCount) H\(state.hiddenExportCameraNames.count) \(exportHUDText)"
-  }
-}
-
-private struct IOSClipDetailsSheet: View {
-  @ObservedObject var state: AppState
-  @ObservedObject var playbackUI: PlaybackUIState
-  let statusText: String
-
-  var body: some View {
-    NavigationStack {
-      ScrollView {
-        ClipInformationPanel(state: state, playbackUI: playbackUI, statusText: statusText)
-          .padding(TeslaCamTheme.Spacing.m)
-      }
-      .background(TeslaCamTheme.Colors.background)
-      .navigationTitle("Clip Details")
-      .navigationBarTitleDisplayMode(.inline)
-    }
-    .presentationDetents([.medium, .large])
-  }
-}
-
-private struct IPadLandscapeLockScreen: View {
-  var body: some View {
-    GridPanel(role: .overlay, padding: TeslaCamTheme.Spacing.xxl, radius: TeslaCamTheme.Metrics.cardCorner) {
-      VStack(spacing: TeslaCamTheme.Spacing.m) {
-        Image(systemName: "rectangle.landscape.rotate")
-          .font(.system(size: 32, weight: .semibold))
-          .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-        Text("Rotate Device")
-          .font(TeslaCamTheme.Typography.panelTitle)
-          .foregroundStyle(TeslaCamTheme.Colors.textPrimary)
-        Text("TeslaCam is landscape-only to keep cameras, timeline, and controls visible.")
-          .font(TeslaCamTheme.Typography.bodySmall)
-          .foregroundStyle(TeslaCamTheme.Colors.textSecondary)
-          .multilineTextAlignment(.center)
-      }
-      .frame(maxWidth: 360)
-    }
   }
 }
 
@@ -789,7 +741,7 @@ private struct DemoVideoWallPlaceholder: View {
     GeometryReader { proxy in
       let size = proxy.size
       let gap = TeslaCamTheme.Spacing.xs
-      let columns = usesCompactPhonePreview && displayCameras.count <= 4 ? displayCameras.count : (displayCameras.count > 4 ? 3 : 2)
+      let columns = displayCameras.count > 4 ? 3 : 2
       let rows = max(1, Int(ceil(Double(max(displayCameras.count, 1)) / Double(columns))))
       let cellWidth = (size.width - CGFloat(columns - 1) * gap) / CGFloat(columns)
       let cellHeight = (size.height - CGFloat(rows - 1) * gap) / CGFloat(rows)
@@ -1129,10 +1081,16 @@ private struct PreviewPanelCard: View {
   @ObservedObject var playbackUI: PlaybackUIState
   let maxAvailableHeight: CGFloat
   var usesCompactPhonePreview: Bool = false
+  /// When set, the card uses exactly this height (portrait, aspect-driven) instead
+  /// of the landscape "fill the remaining space" math — avoids letterbox gaps.
+  var fixedHeight: CGFloat? = nil
+  /// When true, the card fills its container (used by the wide layout's player
+  /// column); the video letterboxes inside. Overrides `fixedHeight`/`maxAvailableHeight`.
+  var fillsContainer: Bool = false
 
   var body: some View {
     GeometryReader { proxy in
-      let height = previewHeight(for: proxy.size.width)
+      let height = fillsContainer ? proxy.size.height : (fixedHeight ?? previewHeight(for: proxy.size.width))
 
       ZStack(alignment: .topLeading) {
         RoundedRectangle(cornerRadius: TeslaCamTheme.Metrics.cardCorner, style: .continuous)
@@ -1195,8 +1153,8 @@ private struct PreviewPanelCard: View {
           .stroke(TeslaCamTheme.Colors.stroke, lineWidth: 1)
       )
     }
-    .frame(maxWidth: .infinity)
-    .frame(height: maxAvailableHeight)
+    .frame(maxWidth: .infinity, maxHeight: fillsContainer ? .infinity : nil)
+    .frame(height: fillsContainer ? nil : (fixedHeight ?? maxAvailableHeight))
   }
 
   private var overlayDate: String {
@@ -1227,9 +1185,8 @@ private struct PreviewPanelCard: View {
   }
 
   private var effectivePreviewLayoutMode: PreviewLayoutMode {
-    if usesCompactPhonePreview && state.gridPreviewCameras.count <= 4 {
-      return .horizontal
-    }
+    // Always a grid — 2×2 for four cameras, 3×2 for six. (Previously a single
+    // horizontal row on compact phones, which the portrait layout doesn't want.)
     return .grid
   }
 
@@ -1938,26 +1895,38 @@ private struct ExportOverlayCard: View {
         HStack(spacing: TeslaCamTheme.Spacing.s) {
           if job.isTerminal {
             if job.phase == .completed {
-              CommandChip(title: "Reveal", systemImage: "arrow.up.forward.app", role: .selected) {
+              Button {
                 state.exporter.revealOutput(for: job)
+              } label: {
+                Label("Reveal", systemImage: "arrow.up.forward.app")
               }
+              .buttonStyle(TeslaCamCTAButtonStyle(tint: TeslaCamTheme.Colors.overlaySurface))
               .accessibilityLabel("Reveal File")
             } else {
-              CommandChip(title: "Log", systemImage: "doc.text", role: .selected) {
+              Button {
                 state.exporter.revealLog()
+              } label: {
+                Label("Log", systemImage: "doc.text")
               }
+              .buttonStyle(TeslaCamCTAButtonStyle(tint: TeslaCamTheme.Colors.overlaySurface))
               .accessibilityLabel("Show Log")
             }
 
-            CommandChip(title: "Done", systemImage: "checkmark") {
+            Button {
               state.dismissExportStatus()
+            } label: {
+              Label("Done", systemImage: "checkmark")
             }
+            .buttonStyle(TeslaCamCTAButtonStyle())
             .accessibilityLabel("Done")
             .accessibilityIdentifier("dismiss-export-status")
           } else {
-            CommandChip(title: "Cancel", systemImage: "xmark", role: .selected) {
+            Button {
               state.cancelExport()
+            } label: {
+              Label("Cancel", systemImage: "xmark")
             }
+            .buttonStyle(TeslaCamCTAButtonStyle(tint: TeslaCamTheme.Colors.overlaySurface))
             .accessibilityLabel("Cancel Export")
           }
         }

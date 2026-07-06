@@ -2373,10 +2373,12 @@ nonisolated private enum ExportOverlayDrawing {
     attributed.draw(in: rect)
     NSGraphicsContext.restoreGraphicsState()
     #else
+    // The pixel-buffer context is already y-up (bottom-left origin) — the same
+    // space the panel fill and the macOS AppKit path use — so CoreText draws
+    // upright with NO extra flip. A translate/scale flip here throws the text to
+    // the opposite corner upside-down (the "telemetry engraved upside down" bug).
     context.saveGState()
     context.textMatrix = .identity
-    context.translateBy(x: 0, y: canvasHeight)
-    context.scaleBy(x: 1, y: -1)
     let font = CTFontCreateWithName("HelveticaNeue-Medium" as CFString, size, nil)
     let attributed = NSAttributedString(
       string: text,

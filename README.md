@@ -4,10 +4,10 @@ Teslacam ships two developer surfaces from one repo:
 
 Built by [Magrathean UK](https://magrathean.uk).
 
-- a native macOS app for browsing and exporting TeslaCam footage on Apple Silicon Macs
+- a native app for browsing and exporting TeslaCam footage on macOS, iPhone, and iPad
 - a separate cross-platform Python CLI for scripted or interactive exports on macOS, Linux, and Windows
 
-The native app uses the shipping Swift export path. The CLI keeps the portable ffmpeg-based workflow.
+The native app runs on Apple Silicon Macs, iPhone, and iPad from one codebase — the same engine behind a desktop workspace on macOS and an adaptive, portrait-first touch UI on iOS/iPadOS. It uses the shipping Swift export path. The CLI keeps the portable ffmpeg-based workflow.
 
 ## Canonical docs
 
@@ -16,7 +16,7 @@ The native app uses the shipping Swift export path. The CLI keeps the portable f
 
 ## Repo map
 
-- `TeslaCam/` - macOS app source, native export, playback, telemetry, and resources
+- `TeslaCam/` - native app source (macOS + iOS/iPadOS), native export, playback, telemetry, and resources. `Main.swift` is the macOS entry, `IPadMain.swift` the iOS/iPadOS entry; `ContentView.swift` + `PortraitComponents.swift` hold the shared and adaptive-touch UI.
 - `TeslaCamTests/` and `TeslaCamUITests/` - native test coverage
 - `teslacam_cli/` - Python CLI package
 - `tests/` - CLI unit and integration tests
@@ -30,7 +30,7 @@ The native app uses the shipping Swift export path. The CLI keeps the portable f
 - Python 3.9+
 - `ffmpeg` and `ffprobe`
 - `libx265` support for lossless or CRF 6 HEVC CLI export
-- Xcode on macOS for the native app
+- Xcode on macOS for the native app (macOS, iOS, and iPadOS 26+ deployment targets)
 
 ## Quick start
 
@@ -84,6 +84,7 @@ CLI exports default to `--mode evidence-hevc`, matching the app's Evidence HEVC 
 - The native app builds a validated export plan, runs preflight, and keeps export status observable.
 - Camera layout is a shared contract: index, preview, native export, and CLI dry runs must agree.
 - App state is split around timeline, export, playback, and UI-facing state so tests can cover logic without driving the full app.
+- The iOS/iPadOS app reuses the same engine behind a native adaptive touch UI (portrait-first, Dynamic-Island-safe); see [`docs/architecture-deepening/07-ios-ipados-app.md`](./docs/architecture-deepening/07-ios-ipados-app.md).
 
 ## Notes
 

@@ -190,10 +190,10 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
             f"_legacy/ references must not appear in shipping Swift source:\n{_format_hits(hits)}",
         )
 
-    def test_ios_target_is_universal_landscape_only(self):
-        # Justification: the iOS app shares the dense mac-style CCTV
-        # workspace on both iPhone and iPad. Portrait would require a
-        # separate layout and make the timeline/control dock unusable.
+    def test_ios_target_supports_portrait_and_landscape(self):
+        # Justification: the iOS app is a proper portrait-first phone/pad app with
+        # a dedicated vertical workspace (IOSPhoneWorkspace) plus a landscape review
+        # workspace, so portrait and both landscape orientations are all unlocked.
         text = XCODE_PROJECT_FILE.read_text(encoding="utf-8")
         orientation_lines = [
             line.strip()
@@ -202,11 +202,10 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         ]
         self.assertTrue(orientation_lines, "expected supported-orientation build settings in project file")
         orientation_text = "\n".join(orientation_lines)
-        self.assertNotIn("UIInterfaceOrientationPortrait", orientation_text)
+        self.assertIn("UIInterfaceOrientationPortrait", orientation_text)
         self.assertIn("UIInterfaceOrientationLandscapeLeft", orientation_text)
         self.assertIn("UIInterfaceOrientationLandscapeRight", orientation_text)
         self.assertIn('TARGETED_DEVICE_FAMILY = "1,2";', text)
-        self.assertIn("INFOPLIST_KEY_UIRequiresFullScreen = YES;", text)
 
     def test_ios_target_registers_folder_documents(self):
         # Justification: Files handoff and SwiftUI import both need the
@@ -245,43 +244,54 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         self.assertNotIn("IOSReviewWorkspace(", content_view)
         self.assertIn("private struct MacContentView", source)
         self.assertIn("private struct IOSContentView", source)
-        self.assertIn(".statusBarHidden(true)", source)
+        # Status bar is hidden only in landscape (compact height). In portrait it
+        # stays visible so the system reserves the Dynamic Island region and
+        # content is inset below it.
+        self.assertIn(".statusBarHidden(verticalSizeClass == .compact)", source)
+        self.assertNotIn(".statusBarHidden(true)", source)
         self.assertNotIn("private struct IPadLoadedScreen", source)
 
     def test_ios_loaded_workspace_is_native_touch_tree(self):
         # Justification: iOS needs its own editor surface with stage,
         # timeline, touch dock, and clipped metadata moved to a sheet.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
-        workspace_source = _swift_block(source, "private struct IOSReviewWorkspace")
+        workspace_source = _swift_block(source, "private struct IOSWorkspace")
         self.assertIn("PreviewPanelCard(", workspace_source)
-        self.assertIn("IOSControlDock(", workspace_source)
-        self.assertIn("IOSWorkspaceMetrics", workspace_source)
-        self.assertIn(".ignoresSafeArea(.container, edges: [.horizontal, .vertical])", workspace_source)
+        self.assertIn("scrubberSection", workspace_source)
+        self.assertIn("cameraSection", workspace_source)
+        self.assertIn("exportSection", workspace_source)
+        # It is the adaptive native surface, not the mac timeline dock.
         self.assertNotIn("TimelineExportCard(", workspace_source)
-        self.assertIn("private struct IOSControlDock", source)
-        self.assertIn("private struct IOSClipDetailsSheet", source)
-        self.assertIn("private struct IOSClipSummaryBar", source)
+        self.assertIn("private struct IOSWorkspace", source)
 
-    def test_ios_landscape_workspace_fills_landscape_width(self):
-        # Justification: iPhone landscape must not leave large side bars.
-        # The content owns cutout avoidance inside its compact layout budget.
+    def test_ios_landscape_workspace_respects_safe_area(self):
+        # Justification: iPhone/iPad landscape must keep every control clear of the
+        # Dynamic Island / notch / home indicator. The workspace stays inside the
+        # safe area (SwiftUI insets it automatically); only the scene background
+        # bleeds edge-to-edge.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
-        loaded_source = _swift_block(source, "private struct IOSReviewWorkspace")
-        self.assertIn(".ignoresSafeArea(.container, edges: [.horizontal, .vertical])", loaded_source)
-        self.assertNotIn(".ignoresSafeArea()", loaded_source)
+        ios_content = _swift_block(source, "private struct IOSContentView")
+        self.assertIn(".background(TeslaCamSceneBackground())", ios_content)
+        # The workspace gets the already-inset `proxy.size` and never ignores the
+        # safe area itself — only the scene background bleeds behind it.
+        self.assertNotIn(".ignoresSafeArea", ios_content)
 
-    def test_ios_landscape_workspace_uses_compact_height_budget(self):
-        # Justification: iPhone should not leave a large bottom void, and
-        # iPad should reserve enough space for the richer lower dock.
+    def test_ios_is_portrait_first_without_orientation_lock(self):
+        # Justification: iPhone/iPad must be a proper portrait-first app, not a
+        # landscape-only tool. The "Rotate Device" lock screen is gone; portrait
+        # routes to a dedicated vertical workspace with a pinned export CTA, and
+        # portrait is unlocked at the OS level.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
-        metrics_source = _swift_block(source, "private struct IOSWorkspaceMetrics")
-        self.assertIn("let safeAreaInsets: EdgeInsets", metrics_source)
-        self.assertIn("var outerPadding: CGFloat", metrics_source)
-        self.assertIn("workspaceSpacing", metrics_source)
-        self.assertIn("isCompactPhoneLandscape", metrics_source)
-        self.assertIn("size.height < 520 || size.width < 900", metrics_source)
-        self.assertIn("return 268", metrics_source)
-        self.assertIn("return 252", metrics_source)
+        self.assertIn("private struct IOSWorkspace", source)
+        self.assertNotIn("IPadLandscapeLockScreen", source)
+        self.assertNotIn("Rotate Device", source)
+        ios_content = _swift_block(source, "private struct IOSContentView")
+        self.assertIn("IOSWorkspace(", ios_content)
+        # The portrait workspace pins the export CTA above the home indicator.
+        self.assertIn(".safeAreaInset(edge: .bottom", source)
+        # Portrait orientation is declared at the OS level.
+        plist = (SWIFT_SHIPPING_ROOT / "TeslaCam_iPad_Info.plist").read_text(encoding="utf-8")
+        self.assertIn("UIInterfaceOrientationPortrait", plist)
 
     def test_ipad_timeline_track_has_enough_vertical_room(self):
         # Justification: the shared mac-style timeline keeps labels
@@ -293,14 +303,15 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         self.assertIn(".frame(height: 36)", timeline_source)
         self.assertIn("recordedTickFractions", timeline_source)
 
-    def test_ios_control_row_has_phone_safe_area_fallback(self):
-        # Justification: iPhone landscape needs touch-sized controls that
-        # still fit inside safe-area constrained widths.
+    def test_ios_wide_layout_uses_split_columns(self):
+        # Justification: landscape / iPad fills the width with a filling player
+        # column and a vertically-scrolling control column — NOT a horizontally
+        # scrolling control row that pushes buttons (e.g. Export) off-screen.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
-        control_source = _swift_block(source, "private struct IOSControlDock")
-        self.assertIn("ScrollView(.horizontal", control_source)
-        self.assertIn("iosControlTopRow(timeWidth: 86, exportWidth: 120)", control_source)
-        self.assertIn(".contentMargins(.horizontal, metrics.safeHorizontalInset, for: .scrollContent)", control_source)
+        workspace = _swift_block(source, "private struct IOSWorkspace")
+        self.assertIn("wideBody", workspace)
+        self.assertIn("compactBody", workspace)
+        self.assertNotIn("ScrollView(.horizontal", workspace)
 
     def test_engrave_telemetry_is_opt_in_and_defaults_off(self):
         # Justification: telemetry burn-in should remain explicit even when the
@@ -318,8 +329,8 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         view_source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
         self.assertIn('trimInputField("In"', view_source)
         self.assertIn('trimInputField("Out"', view_source)
-        self.assertIn('iosTrimInputField("In"', view_source)
-        self.assertIn('iosTrimInputField("Out"', view_source)
+        self.assertIn('trimField("In"', view_source)
+        self.assertIn('trimField("Out"', view_source)
         self.assertIn("applyTrimStartInput", view_source)
         self.assertIn("applyTrimEndInput", view_source)
         self.assertIn("selection: exportPresetBinding", view_source)
@@ -377,8 +388,9 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         # camera cuts require rendered video, the action label must not
         # still claim an original-track passthrough export.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
-        matches = re.findall(r'private var exportButtonTitle: String \{\s*"Export"', source)
+        matches = re.findall(r'private var exportButtonTitle: String', source)
         self.assertEqual(len(matches), 2)
+        self.assertIn('"Export video"', source)
         self.assertNotIn("state.exportPreset == .originalTracksMOV ? \"Export Original Tracks\"", source)
         self.assertNotIn("\"Export Original Tracks\"", source)
 
@@ -410,11 +422,8 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         content = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
         utils = (SWIFT_SHIPPING_ROOT / "Utils.swift").read_text(encoding="utf-8")
         self.assertIn("preferredTeslaCamColorScheme()", content)
-        self.assertIn("IOSWorkspaceMetrics", content)
-        self.assertIn("IOSReviewWorkspace", content)
-        self.assertIn("IOSControlDock", content)
+        self.assertIn("IOSWorkspace", content)
         self.assertIn("PreviewPanelCard", content)
-        self.assertIn("IOSClipSummaryBar", content)
         self.assertIn("DemoVideoWallPlaceholder", content)
         self.assertIn("currentPreviewNaturalSizes", content)
         self.assertIn("Color(red: 0.045, green: 0.047, blue: 0.055)", utils)
@@ -430,7 +439,7 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         # Justification: the loaded iOS workspace should be the native
         # review/export surface, not a separate Browse/Map dashboard.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
-        loaded_source = _swift_block(source, "private struct IOSReviewWorkspace")
+        loaded_source = _swift_block(source, "private struct IOSWorkspace")
         self.assertNotIn("IPadWorkspaceMode", loaded_source)
         self.assertNotIn("workspaceMode", loaded_source)
         self.assertNotIn("IPadMapPage", loaded_source)
@@ -493,17 +502,19 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         self.assertIn("usesCompactPhonePreview", wall_source)
         self.assertNotIn("LazyVGrid", wall_source)
 
-    def test_phone_four_camera_preview_uses_compact_strip(self):
-        # Justification: a 2x2 4:3 grid wastes most of the very wide
-        # iPhone landscape preview. The phone preview may use a strip,
-        # while iPad and export layout remain grid based.
+    def test_phone_four_camera_preview_uses_grid(self):
+        # Justification: the phone preview shows four cameras as a 2x2 grid (six as
+        # 3x2), never a single horizontal strip.
         source = (SWIFT_SHIPPING_ROOT / "ContentView.swift").read_text(encoding="utf-8")
         start = source.index("private struct PreviewPanelCard")
         end = source.index("private struct TimelineExportCard", start)
         preview_source = source[start:end]
-        self.assertIn("usesCompactPhonePreview && state.gridPreviewCameras.count <= 4", preview_source)
-        self.assertIn("return .horizontal", preview_source)
         self.assertIn("return .grid", preview_source)
+        self.assertNotIn("return .horizontal", preview_source)
+        # The demo wall lays out 2 columns for <=4 cameras, 3 for six — not a row.
+        wall_start = source.index("private struct DemoVideoWallPlaceholder")
+        wall_source = source[wall_start:wall_start + 3000]
+        self.assertIn("let columns = displayCameras.count > 4 ? 3 : 2", wall_source)
 
     def test_phone_demo_wall_hides_camera_titles(self):
         # Justification: iPhone landscape needs the camera picture first;

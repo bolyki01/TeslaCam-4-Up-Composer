@@ -15,7 +15,7 @@ Do not stop for them; use this file as the repo guide.
 
 ## Repo map
 
-- `TeslaCam/` - SwiftUI macOS app, native export, playback, telemetry, resources.
+- `TeslaCam/` - SwiftUI app for macOS + iOS/iPadOS (shared engine), native export, playback, telemetry, resources. Mobile UI: `docs/architecture-deepening/07-ios-ipados-app.md`.
 - `TeslaCamTests/`, `TeslaCamUITests/` - native test targets.
 - `teslacam_cli/` - dependency-light Python CLI package.
 - `tests/` - Python `unittest` suite.
@@ -51,6 +51,7 @@ Rules:
 - Use `/Users/bolyki/dev/source/build-env.sh` before native Swift builds, or point `TESLACAM_BUILD_ENV` at a compatible local override.
 - Leave `TeslaCam/Resources/LICENSES.md` and other vendor or runtime assets alone unless the task is about licensing or packaging.
 - Native export is the shipping app path. Do not reintroduce a CLI-only export assumption into the mac app.
+- The iOS/iPadOS UI binds only to existing `AppState` API (no core edits). Register new Swift files in `project.pbxproj` for BOTH the `TeslaCam` (mac) and `TeslaCam iPad` targets, or they will not compile. Keep the manual codec picker and engrave-telemetry toggle. See `docs/architecture-deepening/07-ios-ipados-app.md`.
 - `_legacy/` stays reference-only unless the task explicitly targets it.
 - `teslacam_legacy_macos.sh` is reference only.
 - Keep CLI planning pure; rendering and human output stay behind adapters.

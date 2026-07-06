@@ -100,7 +100,7 @@ enum TeslaCamTheme {
     static let surfaceElevated = Color.white.opacity(0.065)
     static let chromeBar = Color.white.opacity(0.055)
     static let stroke = Color.white.opacity(0.08)
-    static let accent = Color(red: 0.24, green: 0.51, blue: 0.97)
+    static let accent = Color(red: 0.24, green: 0.54, blue: 0.93)
     static let accentSoft = accent.opacity(0.22)
     static let textPrimary = Color.white.opacity(0.94)
     static let textSecondary = Color.white.opacity(0.72)
@@ -120,7 +120,7 @@ enum TeslaCamTheme {
     static let surfaceElevated = Color.white.opacity(0.065)
     static let chromeBar = Color.white.opacity(0.055)
     static let stroke = Color.white.opacity(0.08)
-    static let accent = Color(red: 0.24, green: 0.51, blue: 0.97)
+    static let accent = Color(red: 0.24, green: 0.54, blue: 0.93)
     static let accentSoft = accent.opacity(0.22)
     static let textPrimary = Color.white.opacity(0.94)
     static let textSecondary = Color.white.opacity(0.72)
@@ -133,6 +133,11 @@ enum TeslaCamTheme {
     static let controlKnob = Color.white.opacity(0.88)
     static let controlKnobStroke = Color.white.opacity(0.2)
     #endif
+
+    // Teslatlas-derived progress spectrum (shared across platforms).
+    static let progressBarStart = Color(red: 0.294, green: 0.549, blue: 1.0)
+    static let progressBarMid = Color(red: 0.490, green: 0.361, blue: 1.0)
+    static let progressBlue = Color(red: 0.431, green: 0.663, blue: 1.0)
   }
 
   enum Metrics {
@@ -146,9 +151,20 @@ enum TeslaCamTheme {
     /// Standard chrome strip height (toolbars, status bars).
     static let toolbarHeight: CGFloat = 52
 
+    #if os(iOS)
+    static let cardCorner: CGFloat = 14
+    static let controlCorner: CGFloat = 12
+    static let compactCorner: CGFloat = 10
+    #else
     static let cardCorner: CGFloat = 8
     static let controlCorner: CGFloat = 7
     static let compactCorner: CGFloat = 7
+    #endif
+
+    /// Full-width primary CTA height (Teslatlas parity, 48pt).
+    static let primaryButtonHeight: CGFloat = 48
+    /// Minimum comfortable touch target on iOS (Apple HIG, 44pt).
+    static let touchTarget: CGFloat = 44
 
     /// Padding inside a primary content card (e.g. TimelineExportCard, PreviewPanelCard).
     static let cardPadding: CGFloat = 20
@@ -182,6 +198,8 @@ enum TeslaCamTheme {
 
     /// Outer screen-edge padding (matches `Metrics.contentPadding`).
     static let screen: CGFloat = 24
+    /// Outer screen-edge padding on compact width (iPhone), Teslatlas parity.
+    static let screenCompact: CGFloat = 16
     /// Vertical separation between major page sections.
     static let section: CGFloat = 32
   }
@@ -192,10 +210,20 @@ enum TeslaCamTheme {
     static let overlayCardWidth: CGFloat = 580
     static let overlayContentWidth: CGFloat = 520
     static let duplicateSheetWidth: CGFloat = 460
+    /// Readable centered content column for full-screen flows (iPad / large phones).
+    static let contentMaxWidth: CGFloat = 560
   }
 
   enum Typography {
     static let heroTitle = Font.system(size: 30, weight: .bold)
+    /// Teslatlas-parity in-scroll page title (34 bold).
+    static let pageTitle = Font.system(size: 34, weight: .bold)
+    /// Card / section title (17 semibold).
+    static let cardTitle = Font.system(size: 17, weight: .semibold)
+    /// Large rounded metric value (26 semibold rounded).
+    static let metricValueRounded = Font.system(size: 26, weight: .semibold, design: .rounded)
+    /// Hero rounded metric (30 bold rounded).
+    static let heroMetricRounded = Font.system(size: 30, weight: .bold, design: .rounded)
     static let panelTitle = Font.system(size: 22, weight: .bold)
     static let panelSubtitle = Font.system(size: 15)
     static let sectionTitle = Font.system(size: 13, weight: .semibold)

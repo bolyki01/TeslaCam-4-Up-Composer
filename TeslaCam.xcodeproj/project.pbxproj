@@ -17,6 +17,7 @@
 		43856EFDACD28E283764B079 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 50C6855D2F3526330073314B /* Assets.xcassets */; };
 		4AC0833CC400B8B020F17BB1 /* PlatformFileAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B9A79DBE9E309C323846661 /* PlatformFileAccess.swift */; };
 		4FC3EC1D1A403F7C27D9DAC2 /* Utils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685482F3526330073314B /* Utils.swift */; };
+		A1B2C3D4E5F6000000000002 /* PortraitComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000001 /* PortraitComponents.swift */; };
 		50C6854A2F3526330073314B /* MetalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685432F3526330073314B /* MetalRenderer.swift */; };
 		50C6854B2F3526330073314B /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C6853E2F3526330073314B /* ContentView.swift */; };
 		50C6854C2F3526330073314B /* TelemetryParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685472F3526330073314B /* TelemetryParser.swift */; };
@@ -28,6 +29,7 @@
 		50C685522F3526330073314B /* Indexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685402F3526330073314B /* Indexer.swift */; };
 		50C685532F3526330073314B /* MetalShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 50C685442F3526330073314B /* MetalShaders.metal */; };
 		50C685542F3526330073314B /* Utils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C685482F3526330073314B /* Utils.swift */; };
+		A1B2C3D4E5F6000000000003 /* PortraitComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000001 /* PortraitComponents.swift */; };
 		50C685582F3526330073314B /* LICENSES.md in Resources */ = {isa = PBXBuildFile; fileRef = 50C685392F3526330073314B /* LICENSES.md */; };
 		50C6855A2F3526330073314B /* NativeExportController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C6855C2F3526330073314B /* NativeExportController.swift */; };
 		50C6855E2F3526330073314B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 50C6855D2F3526330073314B /* Assets.xcassets */; };
@@ -84,6 +86,7 @@
 		50C685462F3526330073314B /* PlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackController.swift; sourceTree = "<group>"; };
 		50C685472F3526330073314B /* TelemetryParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryParser.swift; sourceTree = "<group>"; };
 		50C685482F3526330073314B /* Utils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Utils.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6000000000001 /* PortraitComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortraitComponents.swift; sourceTree = "<group>"; };
 		50C6855B2F3526330073314B /* TeslaCam.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TeslaCam.entitlements; sourceTree = "<group>"; };
 		50C6855C2F3526330073314B /* NativeExportController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeExportController.swift; sourceTree = "<group>"; };
 		50C6855D2F3526330073314B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -203,6 +206,7 @@
 				50C685462F3526330073314B /* PlaybackController.swift */,
 				50C685472F3526330073314B /* TelemetryParser.swift */,
 				50C685482F3526330073314B /* Utils.swift */,
+				A1B2C3D4E5F6000000000001 /* PortraitComponents.swift */,
 				50C6855B2F3526330073314B /* TeslaCam.entitlements */,
 				9B9A79DBE9E309C323846661 /* PlatformFileAccess.swift */,
 				E7761E775BC37CD7C35A556C /* MetalPlayerView_iPad.swift */,
@@ -401,6 +405,7 @@
 				4AC0833CC400B8B020F17BB1 /* PlatformFileAccess.swift in Sources */,
 				16112D2E1E4A55F25A463C45 /* TelemetryParser.swift in Sources */,
 				4FC3EC1D1A403F7C27D9DAC2 /* Utils.swift in Sources */,
+				A1B2C3D4E5F6000000000002 /* PortraitComponents.swift in Sources */,
 				8878B92A5590887F535BD892 /* IPadMain.swift in Sources */,
 				31E19FA2404A5A723BC406D1 /* TelemetryProcessor.swift in Sources */,
 				B3749F963B09DDA60FA98763 /* SourceStore.swift in Sources */,
@@ -424,6 +429,7 @@
 				50C685522F3526330073314B /* Indexer.swift in Sources */,
 				50C685532F3526330073314B /* MetalShaders.metal in Sources */,
 				50C685542F3526330073314B /* Utils.swift in Sources */,
+				A1B2C3D4E5F6000000000003 /* PortraitComponents.swift in Sources */,
 				50C6855A2F3526330073314B /* NativeExportController.swift in Sources */,
 				CDDBB87778F9005CECFA36F5 /* PlatformFileAccess.swift in Sources */,
 				B4FFA09213F66C171AF20512 /* TelemetryProcessor.swift in Sources */,
@@ -480,7 +486,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = TeslaCam;
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -795,7 +801,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = TeslaCam;
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (

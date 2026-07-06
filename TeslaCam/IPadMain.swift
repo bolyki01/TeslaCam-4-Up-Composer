@@ -3,11 +3,19 @@ import SwiftUI
 @main
 struct TeslaCamIPadApp: App {
   @StateObject private var state = AppState()
+  @Environment(\.scenePhase) private var scenePhase
 
   var body: some Scene {
     WindowGroup {
       ContentView()
         .environmentObject(state)
+    }
+    .onChange(of: scenePhase) { _, phase in
+      // Stop the playback tick + Metal redraw when leaving the foreground so a
+      // backgrounded app isn't burning CPU/battery on a hidden video.
+      if phase != .active, state.playback.isPlaying {
+        state.togglePlay()
+      }
     }
     .commands {
       CommandMenu("Playback") {
