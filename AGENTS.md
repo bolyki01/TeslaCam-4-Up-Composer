@@ -1,5 +1,7 @@
 # AGENTS.md
 
+Current App Store train: `1.0` (`1`) for macOS and iOS/iPadOS.
+
 Read in this order:
 
 - [README](./README.md)
@@ -9,19 +11,16 @@ Read in this order:
 - `TeslaCam.xcodeproj`
 - `.github/workflows/` when CI behavior matters
 
-The previously referenced parent files `/Users/bolyki/dev/source/AGENTS.md`
-and `/Users/bolyki/dev/source/AGENT_INDEX.md` are not present in this checkout.
-Do not stop for them; use this file as the repo guide.
-
 ## Repo map
 
-- `TeslaCam/` - SwiftUI app for macOS + iOS/iPadOS (shared engine), native export, playback, telemetry, resources. Mobile UI: `docs/architecture-deepening/07-ios-ipados-app.md`.
+- `TeslaCam/` - SwiftUI app for macOS + iOS/iPadOS (shared engine), native export, playback, telemetry, and resources. Mobile UI: `docs/architecture-deepening/07-ios-ipados-app.md`.
 - `TeslaCamTests/`, `TeslaCamUITests/` - native test targets.
 - `teslacam_cli/` - dependency-light Python CLI package.
 - `tests/` - Python `unittest` suite.
 - `fixtures/domain/cases/` - shared Swift/Python domain fixtures.
 - `script/` - local build, test, fixture, and hook helpers.
 - `tools/` - local utilities.
+- `docs/releases/` - current App Store metadata and ASC handoff.
 - `_legacy/` - reference only.
 
 ## Commands
@@ -56,6 +55,7 @@ Rules:
 - `teslacam_legacy_macos.sh` is reference only.
 - Keep CLI planning pure; rendering and human output stay behind adapters.
 - Keep domain behavior aligned across `docs/domain-contract.md`, fixtures, Python, and Swift tests.
+- Keep current release/ASC facts in `docs/releases/`; do not create one-off handoff notes.
 - Do not use `--break-system-packages`; prefer a virtual environment or repo-local cache.
 - Preserve dirty worktree changes you did not make.
 

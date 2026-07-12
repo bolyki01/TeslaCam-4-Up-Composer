@@ -1,5 +1,7 @@
 # Runbook
 
+Current App Store train: `1.0` (`1`). Release copy and ASC commands live in `docs/releases/current-asc-platform-version.md`; the compact train marker is `docs/releases/v1.0-app-store.md`.
+
 ## Setup
 
 Use Python 3.9+ for the CLI. The package has no runtime Python
@@ -119,12 +121,14 @@ CI runs `TeslaCamTests` only; UI tests are local via `script/test_native.sh`.
 
 ## Release checks
 
+- Confirm `MARKETING_VERSION = 1.0` and `CURRENT_PROJECT_VERSION = 1` from the Xcode project before archive/upload work.
 - Cold launch starts on onboarding until a source folder is chosen.
 - The loaded timeline shows exact range, export preset, duplicate policy, and per-camera controls.
 - Existing-output exports choose a unique filename instead of clobbering.
 - HW4 names `left`, `right`, `left_pillar`, and `right_pillar` map to the centered 3x3 layout.
 - Native export stays the only shipping mac app path.
 - Debug builds show recent debug events for fast triage.
+- Keep macOS and iOS/iPadOS bundle identifiers, screenshots, and ASC platform operations separate as documented under `docs/releases/`.
 
 ## Done criteria for Codex tasks
 

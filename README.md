@@ -13,6 +13,12 @@ The native app runs on Apple Silicon Macs, iPhone, and iPad from one codebase â€
 
 - [Agent guide](./AGENTS.md)
 - [Runbook](./RUNBOOK.md)
+- [Domain contract](./docs/domain-contract.md)
+- [Current iOS/iPadOS architecture](./docs/architecture-deepening/07-ios-ipados-app.md)
+- [Current ASC platform metadata](./docs/releases/current-asc-platform-version.md)
+- [1.0 release marker](./docs/releases/v1.0-app-store.md)
+
+Current App Store train: `1.0` (`1`) for macOS and iOS/iPadOS. The Xcode project is the version/build source of truth.
 
 ## Repo map
 
@@ -97,7 +103,7 @@ CLI exports default to `--mode evidence-hevc`, matching the app's Evidence HEVC 
 
 Copyright Â© 2026 Magrathean UK Ltd. All rights reserved.
 
-Teslacam is proprietary software. See [`LICENSE`](./LICENSE) for the full licence text. Third-party components and their licences are listed in [`LICENSE.md`](./LICENSE.md) and `TeslaCam/Resources/LICENSES.md`. Public availability of this repository does not grant any right to copy, modify, redistribute, or use the software outside the licence terms.
+Teslacam is proprietary software. See [`LICENSE`](./LICENSE) for the full licence text. Third-party components and their licences are listed in [`license.md`](./license.md) and `TeslaCam/Resources/LICENSES.md`. Public availability of this repository does not grant any right to copy, modify, redistribute, or use the software outside the licence terms.
 
 ### User-supplied recordings and privacy
 
