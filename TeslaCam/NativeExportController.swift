@@ -1320,7 +1320,10 @@ private struct TimelineFrameLayout {
   let cameraOrder: [Camera]
   let canvasSize: CGSize
   let tileSize: CGSize
+  /// Core Graphics coordinates have their origin at the lower left.
   let boundsByCamera: [Camera: CGRect]
+  /// Metal viewports have their origin at the upper left.
+  let metalBoundsByCamera: [Camera: CGRect]
 
   static func build(
     sets: [ClipSet],
@@ -1344,8 +1347,10 @@ private struct TimelineFrameLayout {
     )
 
     var bounds: [Camera: CGRect] = [:]
+    var metalBounds: [Camera: CGRect] = [:]
     for camera in plan.renderOrder {
       guard let cell = plan.cellByCamera[camera] else { continue }
+      metalBounds[camera] = cell
       bounds[camera] = CGRect(
         x: cell.minX,
         y: plan.canvasSize.height - cell.maxY,
@@ -1358,7 +1363,8 @@ private struct TimelineFrameLayout {
       cameraOrder: plan.renderOrder,
       canvasSize: plan.canvasSize,
       tileSize: probe.tileSize(for: plan.renderOrder),
-      boundsByCamera: bounds
+      boundsByCamera: bounds,
+      metalBoundsByCamera: metalBounds
     )
   }
 }
@@ -1675,15 +1681,7 @@ nonisolated private final class SequentialMetalDecoder: @unchecked Sendable {
 /// CPU; only the small HUD text overlay stays on CoreGraphics.
 nonisolated private final class MetalExportCompositor: @unchecked Sendable {
   static var decodeModeDescription: String {
-    shouldDecodeSerially ? "serial" : "concurrent"
-  }
-
-  private static var shouldDecodeSerially: Bool {
-    #if os(iOS)
-    return true
-    #else
-    return false
-    #endif
+    "serial"
   }
 
   let device: MTLDevice
@@ -1787,25 +1785,13 @@ nonisolated private final class MetalExportCompositor: @unchecked Sendable {
       )
     }
 
-    if decoderRequests.count == 1 || Self.shouldDecodeSerially {
-      for (index, item) in decoderRequests.enumerated() {
-        guard let draw = makeDraw(index: index, item: item) else { continue }
-        draws.append(draw)
-      }
-    } else if !decoderRequests.isEmpty {
-      let drawLock = NSLock()
-      DispatchQueue.concurrentPerform(iterations: decoderRequests.count) { index in
-        let item = decoderRequests[index]
-        guard let draw = makeDraw(index: index, item: item) else { return }
-        drawLock.lock()
-        draws.append((
-          index: draw.index,
-          frame: draw.frame,
-          viewport: draw.viewport
-        ))
-        drawLock.unlock()
-      }
-      draws.sort { $0.index < $1.index }
+    // A grid frame is complete only when every requested camera has a frame.
+    // Serial reads keep VideoToolbox resource use deterministic on macOS and
+    // iOS; a failed GPU read falls back to the CPU compositor below instead
+    // of silently leaving that camera's cell black.
+    for (index, item) in decoderRequests.enumerated() {
+      guard let draw = makeDraw(index: index, item: item) else { return nil }
+      draws.append(draw)
     }
 
     let pass = MTLRenderPassDescriptor()
@@ -1959,8 +1945,22 @@ nonisolated private final class TimelineFrameComposer: @unchecked Sendable {
 
     // GPU path: composite the camera grid with Metal (no CPU pixel work), then
     // draw only the overlay (small HUD/timestamp text) with CoreGraphics.
+    let metalRequests: [FrameImageRequest]
+    if drawFocusCamera == nil {
+      metalRequests = imageRequests.map { request in
+        FrameImageRequest(
+          camera: request.camera,
+          url: request.url,
+          seconds: request.seconds,
+          rect: layout.metalBoundsByCamera[request.camera] ?? request.rect
+        )
+      }
+    } else {
+      metalRequests = imageRequests
+    }
+
     if let metalCompositor,
-       let composite = metalCompositor.composite(requests: imageRequests, canvasSize: layout.canvasSize, into: buffer) {
+       let composite = metalCompositor.composite(requests: metalRequests, canvasSize: layout.canvasSize, into: buffer) {
       return PendingFrameBuffer(buffer: buffer, presentationTime: presentationTime) { [weak self] in
         composite.complete()
         guard let self else { return }

@@ -1968,6 +1968,67 @@ struct TeslaCamTests {
     #expect(size > 0)
   }
 
+  @Test func nativeExportRendersEveryHW3GridCellInContractOrder() async throws {
+    let root = try TemporaryDirectory.make()
+    defer { try? root.remove() }
+
+    let timestamp = "2026-07-29_17-00-00"
+    let clipDate = try #require(teslaTimestampDate(timestamp))
+    let duration: Double = 1.0
+    let tileSize = CGSize(width: 320, height: 240)
+    let fills: [Camera: UInt8] = [
+      .front: 40,
+      .back: 90,
+      .left_repeater: 150,
+      .right_repeater: 210
+    ]
+    let files = Dictionary(uniqueKeysWithValues: fills.keys.map { camera in
+      (camera, root.url.appendingPathComponent("\(timestamp)-\(camera.rawValue).mov"))
+    })
+    for (camera, url) in files {
+      try await makeVideo(at: url, duration: duration, size: tileSize, fill: try #require(fills[camera]))
+    }
+
+    let outputURL = root.url.appendingPathComponent("hw3-grid.mov")
+    let request = ExportRequest(
+      sets: [
+        ClipSet(
+          timestamp: timestamp,
+          date: clipDate,
+          duration: duration,
+          files: files,
+          cameraDurations: Dictionary(uniqueKeysWithValues: fills.keys.map { ($0, duration) }),
+          naturalSizes: Dictionary(uniqueKeysWithValues: fills.keys.map { ($0, tileSize) })
+        )
+      ],
+      outputURL: outputURL,
+      useSixCam: false,
+      preset: .editFriendlyProRes,
+      enabledCameras: Set(fills.keys),
+      trimStartSeconds: 0,
+      trimEndSeconds: duration,
+      trimStartDate: clipDate,
+      trimEndDate: clipDate.addingTimeInterval(duration),
+      selectedRangeText: "hw3 grid",
+      partialClipCount: 0
+    )
+
+    let controller = NativeExportController()
+    controller.export(request: request)
+    _ = await waitForTerminalExport(controller)
+
+    #expect(controller.currentJob?.phase == .completed)
+    let samples = try await firstFrameLumaByCamera(
+      from: outputURL,
+      tileSize: tileSize
+    )
+    for camera in Camera.hw3ClassicOrder {
+      let actual = try #require(samples[camera])
+      let expected = try #require(fills[camera])
+      #expect(abs(Int(actual) - Int(expected)) < 35)
+    }
+  }
+
   @Test func nativeExportWritesOverlaySidecars() async throws {
     let root = try TemporaryDirectory.make()
     defer { try? root.remove() }
@@ -2524,13 +2585,68 @@ private func exportRequestForPlan(
   )
 }
 
-private func makeVideo(at url: URL, duration: Double, size: CGSize) async throws {
+private func firstFrameLumaByCamera(
+  from url: URL,
+  tileSize: CGSize
+) async throws -> [Camera: UInt8] {
+  let asset = AVURLAsset(url: url)
+  guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+    throw NSError(domain: "TeslaCamTests", code: 4, userInfo: [NSLocalizedDescriptionKey: "Export has no video track"])
+  }
+  let reader = try AVAssetReader(asset: asset)
+  let output = AVAssetReaderTrackOutput(
+    track: track,
+    outputSettings: [
+      kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+    ]
+  )
+  guard reader.canAdd(output) else {
+    throw NSError(domain: "TeslaCamTests", code: 5, userInfo: [NSLocalizedDescriptionKey: "Cannot read export pixels"])
+  }
+  reader.add(output)
+  guard reader.startReading(),
+        let sample = output.copyNextSampleBuffer(),
+        let pixelBuffer = CMSampleBufferGetImageBuffer(sample) else {
+    throw NSError(domain: "TeslaCamTests", code: 6, userInfo: [NSLocalizedDescriptionKey: "Cannot read first export frame"])
+  }
+
+  CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+  defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+  guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+    throw NSError(domain: "TeslaCamTests", code: 7, userInfo: [NSLocalizedDescriptionKey: "Cannot access first export frame"])
+  }
+
+  let width = CVPixelBufferGetWidth(pixelBuffer)
+  let height = CVPixelBufferGetHeight(pixelBuffer)
+  let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+  let tileWidth = Int(tileSize.width.rounded())
+  let tileHeight = Int(tileSize.height.rounded())
+  guard width == tileWidth * 2, height == tileHeight * 2 else {
+    throw NSError(domain: "TeslaCamTests", code: 8, userInfo: [NSLocalizedDescriptionKey: "Unexpected HW3 export canvas"])
+  }
+
+  let centers: [Camera: (x: Int, y: Int)] = [
+    .front: (tileWidth / 2, tileHeight / 2),
+    .back: (tileWidth + tileWidth / 2, tileHeight / 2),
+    .left_repeater: (tileWidth / 2, tileHeight + tileHeight / 2),
+    .right_repeater: (tileWidth + tileWidth / 2, tileHeight + tileHeight / 2)
+  ]
+  return Dictionary(uniqueKeysWithValues: centers.map { camera, point in
+    let offset = point.y * bytesPerRow + point.x * 4
+    let blue = Int(baseAddress.load(fromByteOffset: offset, as: UInt8.self))
+    let green = Int(baseAddress.load(fromByteOffset: offset + 1, as: UInt8.self))
+    let red = Int(baseAddress.load(fromByteOffset: offset + 2, as: UInt8.self))
+    return (camera, UInt8((red + green + blue) / 3))
+  })
+}
+
+private func makeVideo(at url: URL, duration: Double, size: CGSize, fill: UInt8? = nil) async throws {
   try await Task.detached(priority: .userInitiated) {
-    try makeVideoImpl(at: url, duration: duration, size: size)
+    try makeVideoImpl(at: url, duration: duration, size: size, fill: fill)
   }.value
 }
 
-private func makeVideoImpl(at url: URL, duration: Double, size: CGSize) throws {
+private func makeVideoImpl(at url: URL, duration: Double, size: CGSize, fill: UInt8? = nil) throws {
   let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
   let settings: [String: Any] = [
     AVVideoCodecKey: AVVideoCodecType.h264,
@@ -2581,7 +2697,7 @@ private func makeVideoImpl(at url: URL, duration: Double, size: CGSize) throws {
 
     CVPixelBufferLockBaseAddress(pixelBuffer, [])
     if let base = CVPixelBufferGetBaseAddress(pixelBuffer) {
-      memset(base, Int32(frameIndex % 255), CVPixelBufferGetDataSize(pixelBuffer))
+      memset(base, Int32(fill ?? UInt8(frameIndex % 255)), CVPixelBufferGetDataSize(pixelBuffer))
     }
     CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
 
