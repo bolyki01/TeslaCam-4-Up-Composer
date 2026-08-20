@@ -2357,26 +2357,9 @@ nonisolated private enum ExportOverlayDrawing {
     size: CGFloat,
     color: CGColor
   ) {
-    #if canImport(AppKit)
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
-    let paragraph = NSMutableParagraphStyle()
-    paragraph.lineBreakMode = .byTruncatingTail
-    let attributed = NSAttributedString(
-      string: text,
-      attributes: [
-        .font: NSFont.monospacedSystemFont(ofSize: size, weight: .semibold),
-        .foregroundColor: NSColor(cgColor: color) ?? .white,
-        .paragraphStyle: paragraph
-      ]
-    )
-    attributed.draw(in: rect)
-    NSGraphicsContext.restoreGraphicsState()
-    #else
-    // The pixel-buffer context is already y-up (bottom-left origin) — the same
-    // space the panel fill and the macOS AppKit path use — so CoreText draws
-    // upright with NO extra flip. A translate/scale flip here throws the text to
-    // the opposite corner upside-down (the "telemetry engraved upside down" bug).
+    // Export rendering runs on a background queue. CoreText is safe there;
+    // AppKit attributed-string drawing can crash while resolving font attributes.
+    // The pixel-buffer context is already y-up, so no coordinate flip is needed.
     context.saveGState()
     context.textMatrix = .identity
     let font = CTFontCreateWithName("HelveticaNeue-Medium" as CFString, size, nil)
@@ -2392,7 +2375,6 @@ nonisolated private enum ExportOverlayDrawing {
     let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: attributed.length), path, nil)
     CTFrameDraw(frame, context)
     context.restoreGState()
-    #endif
   }
 
   private static func drawSymbol(
