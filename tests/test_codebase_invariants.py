@@ -370,17 +370,17 @@ class SwiftForbiddenPatternTests(unittest.TestCase):
         self.assertNotIn('"AVVideoEncoderSpecification"', source)
         self.assertIn("#if !targetEnvironment(simulator)", source)
 
-    def test_ios_export_decodes_serially(self):
-        # Justification: iOS AVAssetReader/VideoToolbox decode can collapse on
-        # timestamp-irregular Tesla clips when four camera readers run
-        # concurrently. Keep Mac concurrent; keep all iOS exports serial.
+    def test_native_export_decodes_serially(self):
+        # Justification: AVAssetReader/VideoToolbox decode can collapse on
+        # timestamp-irregular Tesla clips when multiple camera readers run
+        # concurrently. Keep native exports deterministic on every platform.
         source = (SWIFT_SHIPPING_ROOT / "NativeExportController.swift").read_text(encoding="utf-8")
         start = source.index("nonisolated private final class MetalExportCompositor")
         end = source.index("nonisolated private final class TimelineFrameComposer", start)
         compositor_source = source[start:end]
-        self.assertIn("#if os(iOS)", compositor_source)
-        self.assertIn("private static var shouldDecodeSerially", compositor_source)
-        self.assertIn("decoderRequests.count == 1 || Self.shouldDecodeSerially", compositor_source)
+        self.assertIn('static var decodeModeDescription: String {\n    "serial"\n  }', compositor_source)
+        self.assertIn("for (index, item) in decoderRequests.enumerated()", compositor_source)
+        self.assertNotIn("withTaskGroup", compositor_source)
         self.assertIn("decode=\\(MetalExportCompositor.decodeModeDescription)", source)
 
     def test_export_action_label_uses_effective_preset(self):
