@@ -66,7 +66,9 @@ git diff --check
 `tests.test_integration` and real CLI rendering require working `ffmpeg` and
 `ffprobe`. No dedicated lint, format, or Python typecheck config is present.
 Swift compile/typecheck coverage comes from the native Xcode build/test lane.
-That lane requires `TESLACAM_BUILD_ENV` or `/Users/bolyki/dev/source/build-env.sh`.
+Set `TESLACAM_BUILD_ENV=/absolute/path/to/build-env.sh` for that lane; the local
+shell file must define the Xcode cache paths used by the scripts and must remain
+outside the repository.
 
 ## Domain parity and dry runs
 
